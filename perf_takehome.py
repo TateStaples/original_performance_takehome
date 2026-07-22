@@ -221,7 +221,8 @@ class KernelBuilder:
             and rounds >= 1
         ):
             self.build_kernel_scheduled(
-                batch_size, rounds, forest_height, tournament_levels=(1, 2, 3)
+                batch_size, rounds, forest_height,
+                tournament_levels=(1, 2, 3), alu_offload=True,
             )
         else:
             self.build_kernel_pipelined(
@@ -307,17 +308,21 @@ class KernelBuilder:
     def _v(self, base):
         return tuple(range(base, base + VLEN))
 
-    def _sched_vec(self, S, op, dest, a, b, allow_alu=False):
+    def _sched_vec(self, S, op, dest, a, b, allow_alu=False, force_alu=False):
         """
         Emit an elementwise vector op, either as one valu slot or -- when the
         valu engine is backed up and the (otherwise idle) scalar alu can
-        retire all 8 lanes strictly earlier -- as 8 scalar alu slots.
+        retire all 8 lanes no later -- as 8 scalar alu slots. `force_alu`
+        skips the comparison and always scalarizes (used to statically
+        reserve valu slots for multiply_adds, which alu can't run).
         """
         reads = self._v(a) + self._v(b)
         writes = self._v(dest)
         c0 = S.ready(reads, writes)
-        cv = S.find_free("valu", c0)
-        if allow_alu and op in _SCALARIZABLE and cv > c0:
+        cv = None
+        if not force_alu:
+            cv = S.find_free("valu", c0)
+        if op in _SCALARIZABLE and (force_alu or (allow_alu and cv > c0)):
             extra = {}
             lanes = []
             worst = -1
@@ -328,11 +333,13 @@ class KernelBuilder:
                 extra[ci] = extra.get(ci, 0) + 1
                 if ci > worst:
                     worst = ci
-            if worst < cv:
+            if force_alu or worst <= cv:
                 for i in range(VLEN):
                     S.put("alu", (op, dest + i, a + i, b + i), lanes[i],
                           (a + i, b + i), (dest + i,))
                 return worst
+        if cv is None:
+            cv = S.find_free("valu", c0)
         S.put("valu", (op, dest, a, b), cv, reads, writes)
         return cv
 
@@ -425,6 +432,9 @@ class KernelBuilder:
             return d
 
         vec = lambda op, dst, a, b: self._sched_vec(S, op, dst, a, b, alu_offload)
+        avec = lambda op, dst, a, b: self._sched_vec(
+            S, op, dst, a, b, alu_offload, force_alu=alu_offload
+        )
         madd = lambda dst, a, b, c: self._sched_madd(S, dst, a, b, c)
         vsel = lambda dst, cond, a, b: self._sched_vsel(S, dst, cond, a, b)
 
@@ -559,8 +569,8 @@ class KernelBuilder:
                 # ---- val = fused_hash(val ^ node_val) ----
                 vec("^", vl, vl, nvsrc)
                 madd(vl, vl, hv["k0"], hv["C0"])
-                vec("^", t1[s], vl, hv["C1"])
-                vec(">>", t2[s], vl, hv["sh1"])
+                avec("^", t1[s], vl, hv["C1"])
+                avec(">>", t2[s], vl, hv["sh1"])
                 vec("^", vl, t1[s], t2[s])
                 madd(t1[s], vl, hv["kp"], hv["ap"])
                 madd(t2[s], vl, hv["kq"], hv["aq"])
