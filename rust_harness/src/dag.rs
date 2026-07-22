@@ -310,21 +310,47 @@ pub fn build_problem_dag_smart(forest_height: u32, batch_size: u32, rounds: u32)
 
 /// As [`build_problem_dag_smart`], but chooses how `select_cascade` lowers its
 /// 2:1 muxes. `SelectImpl::Flow` offloads them onto the idle flow engine.
-///
-/// CROSSOVER (batch_size=256, rounds=16, forest_height=10): the cascade emits
-/// S = 5632 selects total (levels 0..3 over two epochs, 256 walkers). Routing
-/// all of them to flow puts the flow floor at (3840 wraparound + 5632)/8 =
-/// 1184 cycles, still under the reduced alu+valu floor (~1259), because the
-/// balance point x* where the two floors meet is ~6058 > S -- so flow stays
-/// non-binding and `Flow` is optimal here. If a future change grows the
-/// cascade (e.g. raising `SMART_LEVEL_THRESHOLD`) so S pushes past x*, a
-/// per-select split -- first x* to flow, the remainder algebraic -- becomes
-/// necessary.
+/// Uses the default `SMART_LEVEL_THRESHOLD`; see
+/// [`build_problem_dag_smart_tuned`] to vary how many levels are shared.
 pub fn build_problem_dag_smart_with(
     forest_height: u32,
     batch_size: u32,
     rounds: u32,
     select_impl: SelectImpl,
+) -> Dag {
+    build_problem_dag_smart_tuned(
+        forest_height,
+        batch_size,
+        rounds,
+        select_impl,
+        SMART_LEVEL_THRESHOLD,
+    )
+}
+
+/// As [`build_problem_dag_smart_with`], but with a tunable `share_threshold`:
+/// levels `0..share_threshold` (that also have fewer than `batch_size`
+/// positions) are read once contiguously and routed to each walker with a
+/// `select_cascade`; deeper levels stay per-walker `GatherLoad`. This is the
+/// gather-vs-cascade dial.
+///
+/// The trade is fundamental to this ISA: sharing level `L` replaces
+/// `batch_size` data-dependent loads (the gather floor `batch_size/LOAD`) with
+/// a per-walker cascade of `2^L - 1` lanewise selects. There is NO cheaper
+/// routing than the cascade here -- a butterfly/Beneš network would need a
+/// cross-lane shuffle, and the only cross-lane primitive in the ISA is
+/// `Broadcast` (scalar->all lanes); everything else (`Op`, `MultiplyAdd`,
+/// `VSelect`) is strictly lanewise, so the only way to move a value between
+/// lanes is a memory round-trip (store+load) -- i.e. back through the load
+/// port, which is the gather we were trying to avoid. So raising the threshold
+/// drives the *gather floor* down (fewer loads) but the *arithmetic floor* up
+/// (`O(2^L)` selects/walker), and the crossover is where they meet -- see the
+/// `frontier` binary for the measured sweep.
+pub fn build_problem_dag_smart_tuned(
+    forest_height: u32,
+    batch_size: u32,
+    rounds: u32,
+    select_impl: SelectImpl,
+    share_threshold: u32,
 ) -> Dag {
     let mut dag = Dag::new();
 
@@ -346,15 +372,14 @@ pub fn build_problem_dag_smart_with(
                 epoch_bits.clear();
             }
 
-            let node_val = if (1u64 << local_level) < batch_size as u64
-                && local_level < SMART_LEVEL_THRESHOLD
-            {
-                let arr = level_array(&mut dag, &mut level_cache, local_level);
-                select_cascade(&mut dag, &arr, &epoch_bits, select_impl)
-            } else {
-                let addr = dag.add(ResKind::Alu(AluOp::Add), vec![idx, forest_values_p]);
-                dag.add(ResKind::GatherLoad, vec![addr])
-            };
+            let node_val =
+                if (1u64 << local_level) < batch_size as u64 && local_level < share_threshold {
+                    let arr = level_array(&mut dag, &mut level_cache, local_level);
+                    select_cascade(&mut dag, &arr, &epoch_bits, select_impl)
+                } else {
+                    let addr = dag.add(ResKind::Alu(AluOp::Add), vec![idx, forest_values_p]);
+                    dag.add(ResKind::GatherLoad, vec![addr])
+                };
 
             let xor = dag.add(ResKind::Alu(AluOp::Xor), vec![val, node_val]);
             let val_new = emit_hash(&mut dag, xor);
