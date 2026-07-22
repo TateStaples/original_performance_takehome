@@ -11,5 +11,6 @@ pub mod isa;
 pub mod machine;
 pub mod problem;
 pub mod schedule;
+pub mod spill;
 pub mod stats;
 pub mod vectorized;
