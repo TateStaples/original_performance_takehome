@@ -48,7 +48,7 @@ impl std::ops::Add<u16> for Scratch {
 /// exactly, including 32-bit wraparound (every result is taken mod 2**32,
 /// matching Python's arbitrary-precision-then-truncate behavior — see
 /// `AluOp::apply`).
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum AluOp {
     Add,
     Sub,

@@ -27,7 +27,7 @@
 
 use crate::dag::{Dag, NodeId, ResKind};
 use crate::isa::{slot_limits, AluOp, VLEN};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SchedulerConfig {
@@ -210,7 +210,11 @@ pub fn schedule(dag: &Dag, config: SchedulerConfig) -> ScheduleResult {
     while done_count < n as u64 {
         result.cycles += 1;
 
-        let mut alu_groups: HashMap<AluOp, Vec<NodeId>> = HashMap::new();
+        // BTreeMap (not HashMap) so opcode iteration order is deterministic:
+        // the greedy priority ties are then broken the same way every run,
+        // making the reported cycle counts reproducible (a HashMap's
+        // randomized order made them jitter by a cycle or two run-to-run).
+        let mut alu_groups: BTreeMap<AluOp, Vec<NodeId>> = BTreeMap::new();
         let mut multiply_add_ready: Vec<NodeId> = Vec::new();
         let mut flow_ready: Vec<NodeId> = Vec::new();
         let mut contiguous_load_ready: Vec<NodeId> = Vec::new();
@@ -230,39 +234,113 @@ pub fn schedule(dag: &Dag, config: SchedulerConfig) -> ScheduleResult {
         }
 
         let mut this_cycle: Vec<NodeId> = Vec::new();
+        // Alu-kind nodes not scheduled by the *primary* passes; eligible for
+        // idle-slot overflow onto either engine below. MultiplyAdd is NOT put
+        // here -- it has no scalar fallback.
+        let mut deferred_alu: Vec<NodeId> = Vec::new();
 
-        // valu: same-opcode alu batches of VLEN, plus MultiplyAdd (partial
-        // batches allowed, no scalar fallback exists), highest-priority first.
-        let mut valu_candidates: Vec<(u32, Vec<NodeId>)> = alu_groups
+        // valu primary (unchanged selection): full-VLEN same-opcode alu
+        // batches (the batch-efficient use of a valu slot) + MultiplyAdd
+        // partials, highest-priority first, up to slot_limits::VALU. The one
+        // difference vs. before: a full-8 *alu* batch that loses the slot
+        // competition is remembered in `deferred_alu` (it has a scalar
+        // fallback) instead of being dropped for the cycle. Untaken
+        // MultiplyAdd simply waits.
+        let alu_full_batches: Vec<(u32, Vec<NodeId>)> = alu_groups
             .iter_mut()
             .flat_map(|(_, group)| drain_valu_batches(group, &height))
             .collect();
-        valu_candidates.extend(partial_valu_candidates(multiply_add_ready, &height));
-        valu_candidates.sort_unstable_by_key(|(p, _)| std::cmp::Reverse(*p));
-        let mut valu_slots_used = 0u64;
-        for (_, chunk) in valu_candidates.into_iter().take(slot_limits::VALU) {
-            valu_slots_used += 1;
-            result.valu.nodes_done += chunk.len() as u64;
-            this_cycle.extend(chunk);
-        }
-        result.valu.slot_uses += valu_slots_used;
-        if valu_slots_used > 0 {
-            result.valu.busy_cycles += 1;
+        let mut valu_candidates: Vec<(u32, bool, Vec<NodeId>)> = alu_full_batches
+            .into_iter()
+            .map(|(p, c)| (p, false, c)) // false = alu batch (has scalar fallback)
+            .collect();
+        valu_candidates.extend(
+            partial_valu_candidates(multiply_add_ready, &height)
+                .into_iter()
+                .map(|(p, c)| (p, true, c)), // true = MultiplyAdd (valu-only)
+        );
+        valu_candidates.sort_unstable_by_key(|(p, ..)| std::cmp::Reverse(*p));
+        let mut valu_slots_used = 0usize;
+        for (_, is_multiply_add, chunk) in valu_candidates {
+            if valu_slots_used < slot_limits::VALU {
+                valu_slots_used += 1;
+                result.valu.nodes_done += chunk.len() as u64;
+                this_cycle.extend(chunk);
+            } else if !is_multiply_add {
+                deferred_alu.extend(chunk);
+            }
         }
 
-        // alu: whatever's left of the alu-opcode groups (leftover batch
-        // remainders + never-batched opcodes) -- MultiplyAdd never appears
-        // here, it has no alu-engine fallback. Highest-height first, up to
-        // slot_limits::ALU.
+        // alu primary (unchanged selection): the <VLEN remainders, highest
+        // height first, up to slot_limits::ALU. Anything past that is deferred.
         let mut alu_leftover: Vec<NodeId> = alu_groups.into_values().flatten().collect();
         alu_leftover.sort_unstable_by_key(|&n| std::cmp::Reverse(height[n]));
         let alu_take = alu_leftover.len().min(slot_limits::ALU);
-        result.alu.nodes_done += alu_take as u64;
-        result.alu.slot_uses += alu_take as u64;
-        if alu_take > 0 {
+        let mut alu_slots_used = alu_take;
+        this_cycle.extend(alu_leftover.iter().copied().take(alu_take));
+        deferred_alu.extend(alu_leftover.into_iter().skip(alu_take));
+
+        // overflow: schedule still-deferred alu nodes on idle slots of
+        // whichever engine has room. Scarcity-driven by construction -- a node
+        // is here only because its *primary* engine budget was exhausted, so
+        // filling the *other* engine's leftover slots never displaces a
+        // higher-value assignment; it only uses capacity that would otherwise
+        // idle. Exactly one direction can be active per cycle (deferred is
+        // nonempty only if valu-primary OR alu-primary filled, and the
+        // complementary engine is the one with slack), so order is immaterial.
+        if !deferred_alu.is_empty() {
+            // spare valu slots: pack deferred nodes into <=VLEN same-opcode
+            // batches (helps realistic mode: alu saturates, valu has slack).
+            if valu_slots_used < slot_limits::VALU {
+                let mut by_op: BTreeMap<AluOp, Vec<NodeId>> = BTreeMap::new();
+                for &node in &deferred_alu {
+                    if let ResKind::Alu(op) = dag.nodes[node].kind {
+                        by_op.entry(op).or_default().push(node);
+                    }
+                }
+                let mut ovf: Vec<(u32, Vec<NodeId>)> = Vec::new();
+                for group in by_op.values_mut() {
+                    group.sort_unstable_by_key(|&n| std::cmp::Reverse(height[n]));
+                    for chunk in group.chunks(VLEN) {
+                        let p = chunk.iter().map(|&n| height[n]).max().unwrap();
+                        ovf.push((p, chunk.to_vec()));
+                    }
+                }
+                ovf.sort_unstable_by_key(|(p, _)| std::cmp::Reverse(*p));
+                let mut taken: std::collections::HashSet<NodeId> = std::collections::HashSet::new();
+                for (_, chunk) in ovf {
+                    if valu_slots_used >= slot_limits::VALU {
+                        break;
+                    }
+                    valu_slots_used += 1;
+                    result.valu.nodes_done += chunk.len() as u64;
+                    for &node in &chunk {
+                        taken.insert(node);
+                    }
+                    this_cycle.extend(chunk);
+                }
+                deferred_alu.retain(|n| !taken.contains(n));
+            }
+            // spare alu slots: take deferred nodes one per slot (helps relaxed
+            // / dedup mode: valu saturates, alu idles).
+            if alu_slots_used < slot_limits::ALU && !deferred_alu.is_empty() {
+                deferred_alu.sort_unstable_by_key(|&n| std::cmp::Reverse(height[n]));
+                let extra = deferred_alu.len().min(slot_limits::ALU - alu_slots_used);
+                this_cycle.extend(deferred_alu.iter().copied().take(extra));
+                alu_slots_used += extra;
+            }
+        }
+
+        result.valu.slot_uses += valu_slots_used as u64;
+        if valu_slots_used > 0 {
+            result.valu.busy_cycles += 1;
+        }
+        // one scalar alu node per slot, so nodes_done == slot_uses here.
+        result.alu.nodes_done += alu_slots_used as u64;
+        result.alu.slot_uses += alu_slots_used as u64;
+        if alu_slots_used > 0 {
             result.alu.busy_cycles += 1;
         }
-        this_cycle.extend(alu_leftover.into_iter().take(alu_take));
 
         // flow: exactly one slot/cycle, covering up to VLEN ready selects
         // (matches real vselect: one flow slot, eight lanes).
@@ -423,6 +501,89 @@ mod tests {
     }
 
     #[test]
+    fn idle_alu_absorbs_valu_batch_overflow() {
+        // 60 independent same-opcode Alu nodes ready at once. valu retires
+        // 6*8=48/cycle, alu 12/cycle -> all 60 fit in ONE cycle iff the 7th
+        // (competition-losing) 8-wide batch spills onto the idle alu slots.
+        // The pre-change scheduler dropped it -> 2 cycles.
+        let mut dag = Dag::new();
+        let root = dag.free();
+        for _ in 0..60 {
+            dag.add(ResKind::Alu(AluOp::Add), vec![root]);
+        }
+        let r = schedule(&dag, SchedulerConfig::default());
+        assert_eq!(
+            r.cycles, 1,
+            "load balancing should retire all 60 in one cycle"
+        );
+        assert_eq!(r.alu.nodes_done + r.valu.nodes_done, 60);
+    }
+
+    #[test]
+    fn idle_valu_absorbs_scalar_alu_overflow() {
+        // 15 ready Alu nodes over 3 opcodes (5 each): no full-VLEN batch forms,
+        // so the old scheduler put 12 on alu and deferred 3 to a 2nd cycle
+        // while valu sat idle. Overflow packs the 3 deferred into idle valu.
+        let mut dag = Dag::new();
+        let root = dag.free();
+        for op in [AluOp::Add, AluOp::Xor, AluOp::Mul] {
+            for _ in 0..5 {
+                dag.add(ResKind::Alu(op), vec![root]);
+            }
+        }
+        let r = schedule(&dag, SchedulerConfig::default());
+        assert_eq!(
+            r.cycles, 1,
+            "idle valu slots should absorb the alu overflow"
+        );
+        assert!(
+            r.valu.nodes_done >= 3,
+            "some alu work must have landed on valu"
+        );
+    }
+
+    #[test]
+    fn load_balancing_never_regresses_measured_baselines() {
+        let dag = build_problem_dag(10, 256, 16);
+        let realistic = schedule(
+            &dag,
+            SchedulerConfig {
+                gather_batchable: false,
+            },
+        );
+        let relaxed = schedule(
+            &dag,
+            SchedulerConfig {
+                gather_batchable: true,
+            },
+        );
+        assert!(
+            realistic.cycles <= 2082,
+            "realistic regressed: {}",
+            realistic.cycles
+        );
+        assert!(
+            relaxed.cycles <= 1608,
+            "relaxed regressed: {}",
+            relaxed.cycles
+        );
+        // total scheduled nodes must be unchanged (correctness, not just speed)
+        let non_free = dag
+            .nodes
+            .iter()
+            .filter(|n| !matches!(n.kind, ResKind::Free))
+            .count() as u64;
+        assert_eq!(
+            realistic.alu.nodes_done
+                + realistic.valu.nodes_done
+                + realistic.load().nodes_done
+                + realistic.store.nodes_done
+                + realistic.flow.nodes_done,
+            non_free
+        );
+    }
+
+    #[test]
     fn schedules_every_non_free_node_exactly_once() {
         let dag = build_problem_dag(4, 16, 4);
         let free_count = dag
@@ -568,7 +729,16 @@ mod tests {
     }
 
     #[test]
-    fn flow_selects_beat_algebraic_selects_on_smart_dag() {
+    fn flow_selects_offload_valu_but_lose_to_balanced_algebraic() {
+        // Cross-idea interaction pinned here. In ISOLATION (before the
+        // alu/valu overflow pass), routing cascade selects to the idle flow
+        // engine beat algebraic selects, because valu was the saturated bind.
+        // AFTER the overflow pass, the picture inverts: the pass spreads
+        // algebraic selects flexibly across the wide alu+valu throughput,
+        // while flow selects are pinned to the single flow slot -- which then
+        // becomes the near-bind (~93% busy). So Flow still offloads valu (its
+        // mechanism works) but no longer wins on cycles. Algebraic stays the
+        // default for exactly this reason.
         use crate::dag::{build_problem_dag_smart_with, SelectImpl};
         let cfg = SchedulerConfig {
             gather_batchable: false,
@@ -581,17 +751,24 @@ mod tests {
             &build_problem_dag_smart_with(10, 256, 16, SelectImpl::Flow),
             cfg,
         );
-        // Offloading selects onto the idle flow engine reduces the schedule.
+        // Mechanism: flow selects genuinely move batch demand off valu...
         assert!(
-            flw.cycles < alg.cycles,
-            "flow {} should beat algebraic {}",
-            flw.cycles,
-            alg.cycles
+            flw.valu.slot_uses < alg.valu.slot_uses,
+            "flow should relieve valu: flow {} vs alg {}",
+            flw.valu.slot_uses,
+            alg.valu.slot_uses
         );
-        // Flow absorbs the selects but does not become the new bottleneck.
-        assert!(flw.flow.busy_cycles < flw.cycles);
-        // valu batch demand actually dropped (selects no longer routed there).
-        assert!(flw.valu.slot_uses < alg.valu.slot_uses);
+        // ...and onto the flow engine.
+        assert!(flw.flow.slot_uses > alg.flow.slot_uses);
+        // But with the overflow pass balancing algebraic across alu+valu, the
+        // flexible algebraic placement is at least as fast as pinning work to
+        // the 1-slot flow engine.
+        assert!(
+            alg.cycles <= flw.cycles,
+            "with balancing, algebraic ({}) should be <= flow ({})",
+            alg.cycles,
+            flw.cycles
+        );
     }
 
     #[test]
