@@ -62,16 +62,30 @@ pub struct Node {
 #[derive(Clone, Debug, Default)]
 pub struct Dag {
     pub nodes: Vec<Node>,
+    /// Walker index that produced each node (parallel to `nodes`).
+    /// `u32::MAX` for nodes owned by no single walker (shared setup
+    /// constants, shared level arrays). Pure metadata; lets a
+    /// register-pressure-aware scheduler group work by walker without
+    /// re-deriving ownership from node indices.
+    pub walker_of: Vec<u32>,
+    /// Walker currently being emitted; `add` tags new nodes with it.
+    /// `u32::MAX` outside any walker loop.
+    cur_walker: u32,
 }
 
 impl Dag {
     pub fn new() -> Self {
-        Dag::default()
+        Dag {
+            nodes: Vec::new(),
+            walker_of: Vec::new(),
+            cur_walker: u32::MAX,
+        }
     }
 
     pub fn add(&mut self, kind: ResKind, deps: Vec<NodeId>) -> NodeId {
         let id = self.nodes.len();
         self.nodes.push(Node { kind, deps });
+        self.walker_of.push(self.cur_walker);
         id
     }
 
@@ -116,7 +130,8 @@ pub fn build_problem_dag(forest_height: u32, batch_size: u32, rounds: u32) -> Da
     let two = dag.free();
     let levels = forest_height + 1;
 
-    for _w in 0..batch_size {
+    for w in 0..batch_size {
+        dag.cur_walker = w;
         let mut idx = dag.free();
         let mut val = dag.add(ResKind::ContiguousLoad, vec![]);
 
@@ -154,6 +169,7 @@ pub fn build_problem_dag(forest_height: u32, batch_size: u32, rounds: u32) -> Da
         dag.add(ResKind::Store, vec![val]);
     }
 
+    dag.cur_walker = u32::MAX;
     dag
 }
 
@@ -165,6 +181,13 @@ pub fn build_problem_dag(forest_height: u32, batch_size: u32, rounds: u32) -> Da
 /// 48-lane/cycle valu throughput for idle 8-lane/cycle flow throughput. That
 /// pays whenever flow still has headroom -- see the crossover note on
 /// `build_problem_dag_smart_with`.
+///
+/// CAVEAT (measured): this only wins when valu is a hard bind. Once the
+/// scheduler's alu/valu overflow pass (see schedule.rs) is in play, it
+/// spreads *algebraic* selects flexibly across the wide alu+valu throughput,
+/// whereas `Flow` pins them to the single flow slot -- which then becomes the
+/// near-bind. So with balancing on, `Algebraic` is actually faster, and it is
+/// the default. `Flow` is kept as an option (and for the isolated analysis).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SelectImpl {
     Algebraic,
@@ -239,10 +262,16 @@ fn level_array(dag: &mut Dag, cache: &mut HashMap<u32, Vec<NodeId>>, level: u32)
     }
     let size = 1usize << level;
     // Contiguous in the tree's implicit-heap layout -- genuinely
-    // vload-eligible, no relaxation needed.
+    // vload-eligible, no relaxation needed. Tagged as shared (cur_walker =
+    // MAX) even though this runs inside a walker iteration: the level array
+    // is read once and reused across all walkers/epochs, so it belongs to no
+    // single walker's window (see SchedulerConfig::walker_window).
+    let saved = dag.cur_walker;
+    dag.cur_walker = u32::MAX;
     let arr: Vec<NodeId> = (0..size)
         .map(|_| dag.add(ResKind::ContiguousLoad, vec![]))
         .collect();
+    dag.cur_walker = saved;
     cache.insert(level, arr.clone());
     arr
 }
@@ -305,7 +334,8 @@ pub fn build_problem_dag_smart_with(
     let levels = forest_height + 1;
     let mut level_cache: HashMap<u32, Vec<NodeId>> = HashMap::new();
 
-    for _w in 0..batch_size {
+    for w in 0..batch_size {
+        dag.cur_walker = w;
         let mut idx = dag.free(); // idx = 0
         let mut val = dag.add(ResKind::ContiguousLoad, vec![]);
         let mut epoch_bits: Vec<NodeId> = Vec::new();
@@ -355,6 +385,7 @@ pub fn build_problem_dag_smart_with(
         dag.add(ResKind::Store, vec![val]);
     }
 
+    dag.cur_walker = u32::MAX;
     dag
 }
 

@@ -44,12 +44,41 @@ fn main() {
                 "realistic (gather stays scalar)",
                 SchedulerConfig {
                     gather_batchable: false,
+                    walker_window: None,
                 },
             ),
             (
                 "fully relaxed (gather can batch too)",
                 SchedulerConfig {
                     gather_batchable: true,
+                    walker_window: None,
+                },
+            ),
+            // Windowed sweep: caps how many walkers are concurrently in flight
+            // to bound peak register pressure. For the smart dag this is the
+            // difference between an unrealizable schedule (peak ~3000 words,
+            // 2x over) and a realizable one -- W=64/32 still overshoot, W=16
+            // fits with margin. Plain/relaxed already fit, so windowing them is
+            // a harmless no-op-ish check.
+            (
+                "realistic + walker_window(64)",
+                SchedulerConfig {
+                    gather_batchable: false,
+                    walker_window: Some(64),
+                },
+            ),
+            (
+                "realistic + walker_window(32)",
+                SchedulerConfig {
+                    gather_batchable: false,
+                    walker_window: Some(32),
+                },
+            ),
+            (
+                "realistic + walker_window(16)",
+                SchedulerConfig {
+                    gather_batchable: false,
+                    walker_window: Some(16),
                 },
             ),
         ] {

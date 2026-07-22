@@ -36,6 +36,15 @@ pub struct SchedulerConfig {
     /// in the real ISA). If false (the realistic default), they're strictly
     /// scalar: one `load` slot per node.
     pub gather_batchable: bool,
+    /// If `Some(w)`, schedule walkers in windows of `w`: among equally ready
+    /// work the scheduler strictly prefers lower-numbered windows, finishing
+    /// (and freeing the registers of) earlier walkers before pulling later
+    /// ones in, and spilling into the next window only to fill otherwise-idle
+    /// engine slots. Caps peak register pressure at roughly one window of
+    /// live per-walker state, at (near) zero cycle cost because no ready
+    /// engine is ever left idle. `None` (the default) = the original
+    /// height-only, fully-interleaved behavior. Requires `dag.walker_of`.
+    pub walker_window: Option<u32>,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -110,14 +119,21 @@ impl std::fmt::Display for ScheduleResult {
     }
 }
 
+// The helpers below rank candidates by a composite `key` (see `schedule`),
+// not raw height: lower key = scheduled sooner. The key packs the walker
+// window in its high bits and (hmax - height) in its low bits, so ascending
+// key = earlier-window-first, then taller-first -- and with no window it is
+// exactly descending height, identical to the pre-windowing behavior. A
+// chunk's priority is its MIN key (its most-urgent member).
+
 /// Full batches of up to VLEN ready nodes; leftovers (<VLEN) are dropped --
 /// caller is responsible for giving them a scalar fallback if one exists.
-fn drain_valu_batches(group: &mut Vec<NodeId>, height: &[u32]) -> Vec<(u32, Vec<NodeId>)> {
-    group.sort_unstable_by_key(|&n| std::cmp::Reverse(height[n]));
+fn drain_valu_batches(group: &mut Vec<NodeId>, key: &[u64]) -> Vec<(u64, Vec<NodeId>)> {
+    group.sort_unstable_by_key(|&n| key[n]);
     let mut batches = Vec::new();
     while group.len() >= VLEN {
         let chunk: Vec<NodeId> = group.drain(0..VLEN).collect();
-        let priority = chunk.iter().map(|&n| height[n]).max().unwrap();
+        let priority = chunk.iter().map(|&n| key[n]).min().unwrap();
         batches.push((priority, chunk));
     }
     batches
@@ -128,19 +144,19 @@ fn drain_valu_batches(group: &mut Vec<NodeId>, height: &[u32]) -> Vec<(u32, Vec<
 /// node. Used where a real scalar fallback exists (load/store).
 fn batch_or_scalar_candidates(
     mut ready: Vec<NodeId>,
-    height: &[u32],
+    key: &[u64],
     batchable: bool,
-) -> Vec<(u32, Vec<NodeId>)> {
-    ready.sort_unstable_by_key(|&n| std::cmp::Reverse(height[n]));
+) -> Vec<(u64, Vec<NodeId>)> {
+    ready.sort_unstable_by_key(|&n| key[n]);
     let mut out = Vec::new();
     if batchable {
         while ready.len() >= VLEN {
             let chunk: Vec<NodeId> = ready.drain(0..VLEN).collect();
-            let p = chunk.iter().map(|&n| height[n]).max().unwrap();
+            let p = chunk.iter().map(|&n| key[n]).min().unwrap();
             out.push((p, chunk));
         }
     }
-    out.extend(ready.into_iter().map(|n| (height[n], vec![n])));
+    out.extend(ready.into_iter().map(|n| (key[n], vec![n])));
     out
 }
 
@@ -148,13 +164,13 @@ fn batch_or_scalar_candidates(
 /// `batch_or_scalar_candidates`, a *partial* (1..VLEN) leftover group still
 /// forms one candidate instead of falling back to scalar, since no scalar
 /// fallback exists for `MultiplyAdd`.
-fn partial_valu_candidates(mut ready: Vec<NodeId>, height: &[u32]) -> Vec<(u32, Vec<NodeId>)> {
-    ready.sort_unstable_by_key(|&n| std::cmp::Reverse(height[n]));
+fn partial_valu_candidates(mut ready: Vec<NodeId>, key: &[u64]) -> Vec<(u64, Vec<NodeId>)> {
+    ready.sort_unstable_by_key(|&n| key[n]);
     let mut out = Vec::new();
     while !ready.is_empty() {
         let take = ready.len().min(VLEN);
         let chunk: Vec<NodeId> = ready.drain(0..take).collect();
-        let p = chunk.iter().map(|&n| height[n]).max().unwrap();
+        let p = chunk.iter().map(|&n| key[n]).min().unwrap();
         out.push((p, chunk));
     }
     out
@@ -180,6 +196,30 @@ pub fn schedule(dag: &Dag, config: SchedulerConfig) -> ScheduleResult {
         let h = dependents[i].iter().map(|&d| height[d]).max().unwrap_or(0) + 1;
         height[i] = h;
     }
+
+    // Composite priority key: primary = walker window (ascending, earlier
+    // windows first), secondary = height (descending). Packed into one u64 so
+    // a single ascending sort orders both -- lower key = scheduled sooner.
+    // With walker_window == None every window is 0 and the key is exactly
+    // (hmax - height), i.e. plain descending height, so the schedule is
+    // byte-identical to the pre-windowing behavior.
+    let hmax = height.iter().copied().max().unwrap_or(0);
+    let group_of = |nd: NodeId| -> u32 {
+        match config.walker_window {
+            Some(w) if w > 0 => {
+                let wi = dag.walker_of[nd];
+                if wi == u32::MAX {
+                    0
+                } else {
+                    wi / w
+                }
+            }
+            _ => 0,
+        }
+    };
+    let key: Vec<u64> = (0..n)
+        .map(|nd| ((group_of(nd) as u64) << 32) | ((hmax - height[nd]) as u64))
+        .collect();
 
     let mut scheduled = vec![false; n];
     let mut done_count: u64 = 0;
@@ -246,20 +286,20 @@ pub fn schedule(dag: &Dag, config: SchedulerConfig) -> ScheduleResult {
         // competition is remembered in `deferred_alu` (it has a scalar
         // fallback) instead of being dropped for the cycle. Untaken
         // MultiplyAdd simply waits.
-        let alu_full_batches: Vec<(u32, Vec<NodeId>)> = alu_groups
+        let alu_full_batches: Vec<(u64, Vec<NodeId>)> = alu_groups
             .iter_mut()
-            .flat_map(|(_, group)| drain_valu_batches(group, &height))
+            .flat_map(|(_, group)| drain_valu_batches(group, &key))
             .collect();
-        let mut valu_candidates: Vec<(u32, bool, Vec<NodeId>)> = alu_full_batches
+        let mut valu_candidates: Vec<(u64, bool, Vec<NodeId>)> = alu_full_batches
             .into_iter()
             .map(|(p, c)| (p, false, c)) // false = alu batch (has scalar fallback)
             .collect();
         valu_candidates.extend(
-            partial_valu_candidates(multiply_add_ready, &height)
+            partial_valu_candidates(multiply_add_ready, &key)
                 .into_iter()
                 .map(|(p, c)| (p, true, c)), // true = MultiplyAdd (valu-only)
         );
-        valu_candidates.sort_unstable_by_key(|(p, ..)| std::cmp::Reverse(*p));
+        valu_candidates.sort_unstable_by_key(|(p, ..)| *p);
         let mut valu_slots_used = 0usize;
         for (_, is_multiply_add, chunk) in valu_candidates {
             if valu_slots_used < slot_limits::VALU {
@@ -274,7 +314,7 @@ pub fn schedule(dag: &Dag, config: SchedulerConfig) -> ScheduleResult {
         // alu primary (unchanged selection): the <VLEN remainders, highest
         // height first, up to slot_limits::ALU. Anything past that is deferred.
         let mut alu_leftover: Vec<NodeId> = alu_groups.into_values().flatten().collect();
-        alu_leftover.sort_unstable_by_key(|&n| std::cmp::Reverse(height[n]));
+        alu_leftover.sort_unstable_by_key(|&n| key[n]);
         let alu_take = alu_leftover.len().min(slot_limits::ALU);
         let mut alu_slots_used = alu_take;
         this_cycle.extend(alu_leftover.iter().copied().take(alu_take));
@@ -298,15 +338,15 @@ pub fn schedule(dag: &Dag, config: SchedulerConfig) -> ScheduleResult {
                         by_op.entry(op).or_default().push(node);
                     }
                 }
-                let mut ovf: Vec<(u32, Vec<NodeId>)> = Vec::new();
+                let mut ovf: Vec<(u64, Vec<NodeId>)> = Vec::new();
                 for group in by_op.values_mut() {
-                    group.sort_unstable_by_key(|&n| std::cmp::Reverse(height[n]));
+                    group.sort_unstable_by_key(|&n| key[n]);
                     for chunk in group.chunks(VLEN) {
-                        let p = chunk.iter().map(|&n| height[n]).max().unwrap();
+                        let p = chunk.iter().map(|&n| key[n]).min().unwrap();
                         ovf.push((p, chunk.to_vec()));
                     }
                 }
-                ovf.sort_unstable_by_key(|(p, _)| std::cmp::Reverse(*p));
+                ovf.sort_unstable_by_key(|(p, _)| *p);
                 let mut taken: std::collections::HashSet<NodeId> = std::collections::HashSet::new();
                 for (_, chunk) in ovf {
                     if valu_slots_used >= slot_limits::VALU {
@@ -324,7 +364,7 @@ pub fn schedule(dag: &Dag, config: SchedulerConfig) -> ScheduleResult {
             // spare alu slots: take deferred nodes one per slot (helps relaxed
             // / dedup mode: valu saturates, alu idles).
             if alu_slots_used < slot_limits::ALU && !deferred_alu.is_empty() {
-                deferred_alu.sort_unstable_by_key(|&n| std::cmp::Reverse(height[n]));
+                deferred_alu.sort_unstable_by_key(|&n| key[n]);
                 let extra = deferred_alu.len().min(slot_limits::ALU - alu_slots_used);
                 this_cycle.extend(deferred_alu.iter().copied().take(extra));
                 alu_slots_used += extra;
@@ -344,7 +384,7 @@ pub fn schedule(dag: &Dag, config: SchedulerConfig) -> ScheduleResult {
 
         // flow: exactly one slot/cycle, covering up to VLEN ready selects
         // (matches real vselect: one flow slot, eight lanes).
-        flow_ready.sort_unstable_by_key(|&n| std::cmp::Reverse(height[n]));
+        flow_ready.sort_unstable_by_key(|&n| key[n]);
         let flow_take = flow_ready.len().min(VLEN);
         if flow_take > 0 {
             result.flow.nodes_done += flow_take as u64;
@@ -357,17 +397,17 @@ pub fn schedule(dag: &Dag, config: SchedulerConfig) -> ScheduleResult {
         // in real memory) and GatherLoad (batchable only if relaxed) share
         // the same slot_limits::LOAD budget; tagged so stats can attribute
         // slot uses back to whichever kind actually won the slot.
-        let mut load_candidates: Vec<(u32, bool, Vec<NodeId>)> =
-            batch_or_scalar_candidates(contiguous_load_ready, &height, true)
+        let mut load_candidates: Vec<(u64, bool, Vec<NodeId>)> =
+            batch_or_scalar_candidates(contiguous_load_ready, &key, true)
                 .into_iter()
                 .map(|(p, c)| (p, true, c))
                 .collect();
         load_candidates.extend(
-            batch_or_scalar_candidates(gather_load_ready, &height, config.gather_batchable)
+            batch_or_scalar_candidates(gather_load_ready, &key, config.gather_batchable)
                 .into_iter()
                 .map(|(p, c)| (p, false, c)),
         );
-        load_candidates.sort_unstable_by_key(|(p, ..)| std::cmp::Reverse(*p));
+        load_candidates.sort_unstable_by_key(|(p, ..)| *p);
         let (mut contiguous_busy, mut gather_busy) = (false, false);
         for (_, is_contiguous, chunk) in load_candidates.into_iter().take(slot_limits::LOAD) {
             let totals = if is_contiguous {
@@ -389,10 +429,10 @@ pub fn schedule(dag: &Dag, config: SchedulerConfig) -> ScheduleResult {
 
         // store: always batchable -- every store in this problem writes to
         // a fixed, per-walker-contiguous address (see dag.rs).
-        let store_candidates = batch_or_scalar_candidates(store_ready, &height, true);
+        let store_candidates = batch_or_scalar_candidates(store_ready, &key, true);
         let mut store_slots_used = 0u64;
         let mut sorted_store = store_candidates;
-        sorted_store.sort_unstable_by_key(|(p, _)| std::cmp::Reverse(*p));
+        sorted_store.sort_unstable_by_key(|(p, _)| *p);
         for (_, chunk) in sorted_store.into_iter().take(slot_limits::STORE) {
             store_slots_used += 1;
             result.store.nodes_done += chunk.len() as u64;
@@ -549,12 +589,14 @@ mod tests {
             &dag,
             SchedulerConfig {
                 gather_batchable: false,
+                walker_window: None,
             },
         );
         let relaxed = schedule(
             &dag,
             SchedulerConfig {
                 gather_batchable: true,
+                walker_window: None,
             },
         );
         assert!(
@@ -623,6 +665,7 @@ mod tests {
             &dag,
             SchedulerConfig {
                 gather_batchable: false,
+                walker_window: None,
             },
         );
         assert!(
@@ -638,6 +681,7 @@ mod tests {
             &dag,
             SchedulerConfig {
                 gather_batchable: true,
+                walker_window: None,
             },
         );
         // Should be able to exceed the scalar rate at least once, given
@@ -658,12 +702,14 @@ mod tests {
             &dag,
             SchedulerConfig {
                 gather_batchable: false,
+                walker_window: None,
             },
         );
         let relaxed = schedule(
             &dag,
             SchedulerConfig {
                 gather_batchable: true,
+                walker_window: None,
             },
         );
         assert!(relaxed.cycles <= realistic.cycles);
@@ -680,6 +726,7 @@ mod tests {
             &dag,
             SchedulerConfig {
                 gather_batchable: false,
+                walker_window: None,
             },
         );
         assert!(
@@ -712,12 +759,14 @@ mod tests {
             &plain,
             SchedulerConfig {
                 gather_batchable: false,
+                walker_window: None,
             },
         );
         let smart_result = schedule(
             &smart,
             SchedulerConfig {
                 gather_batchable: false,
+                walker_window: None,
             },
         );
         assert!(
@@ -742,6 +791,7 @@ mod tests {
         use crate::dag::{build_problem_dag_smart_with, SelectImpl};
         let cfg = SchedulerConfig {
             gather_batchable: false,
+            walker_window: None,
         };
         let alg = schedule(
             &build_problem_dag_smart_with(10, 256, 16, SelectImpl::Algebraic),
@@ -790,12 +840,14 @@ mod tests {
             &plain,
             SchedulerConfig {
                 gather_batchable: false,
+                walker_window: None,
             },
         );
         let smart_result = schedule(
             &smart,
             SchedulerConfig {
                 gather_batchable: false,
+                walker_window: None,
             },
         );
         let (plain_peak, _) = peak_register_pressure(&plain, &plain_result);
@@ -811,6 +863,76 @@ mod tests {
              if this is now true, the register-pressure caveat on its cycle-count win no longer applies",
             crate::isa::SCRATCH_SIZE
         );
+    }
+
+    #[test]
+    fn smart_dag_windowed_fits_scratch_and_preserves_the_win() {
+        // The un-windowed smart schedule beats the plain dag on cycles but is
+        // NOT realizable (peak register pressure > SCRATCH_SIZE). Windowing
+        // walkers caps concurrent per-walker liveness, bringing peak under
+        // budget while keeping (most of) the cycle win.
+        let smart = build_problem_dag_smart(10, 256, 16);
+        let unwindowed = schedule(
+            &smart,
+            SchedulerConfig {
+                gather_batchable: false,
+                walker_window: None,
+            },
+        );
+        // W=16 is the empirical sweet spot: the largest small window whose
+        // peak fits SCRATCH_SIZE with margin (W=32 still overshoots at ~1569;
+        // W=16 lands ~1368). See the sweep in bin/lower_bound.rs.
+        let windowed = schedule(
+            &smart,
+            SchedulerConfig {
+                gather_batchable: false,
+                walker_window: Some(16),
+            },
+        );
+        let (unw_peak, _) = peak_register_pressure(&smart, &unwindowed);
+        let (win_peak, _) = peak_register_pressure(&smart, &windowed);
+        assert!(
+            unw_peak > crate::isa::SCRATCH_SIZE as u64,
+            "un-windowed smart peak ({unw_peak}) should exceed SCRATCH_SIZE -- \
+             windowing is what makes it fit"
+        );
+        assert!(
+            win_peak <= crate::isa::SCRATCH_SIZE as u64,
+            "windowed(16) smart peak ({win_peak}) should fit SCRATCH_SIZE ({})",
+            crate::isa::SCRATCH_SIZE
+        );
+        let plain = build_problem_dag(10, 256, 16);
+        let plain_res = schedule(
+            &plain,
+            SchedulerConfig {
+                gather_batchable: false,
+                walker_window: None,
+            },
+        );
+        assert!(
+            windowed.cycles <= plain_res.cycles,
+            "windowed smart ({}) should still beat the plain realizable baseline ({})",
+            windowed.cycles,
+            plain_res.cycles
+        );
+    }
+
+    #[test]
+    fn walker_window_none_is_a_no_op() {
+        // The composite-key packing must reduce to plain descending-height
+        // when no window is set, so every pre-windowing schedule is preserved
+        // bit-for-bit (same cycles AND same per-node cycle assignment).
+        let dag = build_problem_dag(10, 256, 16);
+        let default = schedule(&dag, SchedulerConfig::default());
+        let explicit_none = schedule(
+            &dag,
+            SchedulerConfig {
+                gather_batchable: false,
+                walker_window: None,
+            },
+        );
+        assert_eq!(default.cycles, explicit_none.cycles);
+        assert_eq!(default.node_cycle, explicit_none.node_cycle);
     }
 
     #[test]
