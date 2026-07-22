@@ -1,0 +1,8 @@
+[
+  {
+    "step": "baseline",
+    "label": "Naive scalar baseline\n(shipped)",
+    "cycles": 147734,
+    "note": "KernelBuilder.build_kernel as shipped: one scalar op per bundle, no valu, no packing."
+  }
+]
