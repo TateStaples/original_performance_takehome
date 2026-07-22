@@ -19,6 +19,10 @@ path = "src/bin/simulate.rs"
 name = "stats"
 path = "src/bin/stats.rs"
 
+[[bin]]
+name = "lower_bound"
+path = "src/bin/lower_bound.rs"
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

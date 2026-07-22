@@ -5,9 +5,11 @@
 
 pub mod bridge;
 pub mod builder;
+pub mod dag;
 pub mod fixtures;
 pub mod isa;
 pub mod machine;
 pub mod problem;
+pub mod schedule;
 pub mod stats;
 pub mod vectorized;
