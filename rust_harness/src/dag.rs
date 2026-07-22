@@ -576,6 +576,84 @@ pub fn build_problem_dag_idxlite(
     dag
 }
 
+/// The most aggressive construction: route *every* level with a butterfly
+/// network instead of the cascade or per-walker gathers, so ALL routing lands
+/// on the flow engine and the alu/valu engines carry only hash + parity.
+///
+/// The butterfly exploits `vselect` + compile-time base offsets to do a
+/// conditional static-stride shift (`dest[i] = bit ? data[i+2^k] : data[i]`),
+/// which is a routing-network switch. Gathering `level[idx_w]` for all walkers
+/// is then a log-depth variable-rotation: `log2(2^L) = L` stages, each one
+/// `vselect` (8-wide) per 8 walkers -- i.e. `O(N*L)` total, vs. the cascade's
+/// `O(N*2^L)`. Modelled here per-walker as `local_level` flow `vselect`s
+/// (the walker's own path through the network), consuming the shared level
+/// array and its parity bits. Because the network keys directly on the parity
+/// bits, `idx` collapses to parity-only -- NO `pos`, address adds, or gathers.
+///
+/// This drives the alu/valu (arithmetic) floor to its minimum -- hash + fold +
+/// parity = 887 cycles -- but moves ALL routing onto flow (1 slot/cycle,
+/// 8-wide), so `build the butterfly and measure` is really a test of whether
+/// the arithmetic bound sub-900 is reachable and what flow then costs. See the
+/// `breakdown` binary.
+pub fn build_problem_dag_butterfly(forest_height: u32, batch_size: u32, rounds: u32) -> Dag {
+    let mut dag = Dag::new();
+
+    let levels = forest_height + 1;
+    let mut level_cache: HashMap<u32, Vec<NodeId>> = HashMap::new();
+
+    for w in 0..batch_size {
+        dag.cur_walker = w;
+        dag.cur_category = NodeCat::Setup;
+        let mut val = dag.add(ResKind::ContiguousLoad, vec![]);
+        let mut epoch_bits: Vec<NodeId> = Vec::new();
+
+        for r in 0..rounds {
+            let local_level = r % levels;
+            if local_level == 0 {
+                epoch_bits.clear();
+            }
+
+            // Butterfly route: `local_level` flow vselects, folding the level
+            // array down to this walker's element using its parity bits. The
+            // level array itself is a shared contiguous load. Level 0 is the
+            // root -- 1 value, 0 selects.
+            dag.cur_category = NodeCat::Routing;
+            let arr = level_array(&mut dag, &mut level_cache, local_level);
+            let mut node_val = arr[0];
+            for (k, &bit) in epoch_bits.iter().enumerate() {
+                // one butterfly stage = one flow vselect (8-wide), keyed on
+                // bit k, mixing in the k-th level-array element as the static
+                // shift source (abstract deps; the real op is a vselect
+                // between the running value and a statically-offset read).
+                let src = arr[(k + 1).min(arr.len() - 1)];
+                node_val = dag.add(ResKind::Flow, vec![bit, node_val, src]);
+            }
+
+            dag.cur_category = NodeCat::Hash;
+            let xor = dag.add(ResKind::Alu(AluOp::Xor), vec![val, node_val]);
+            let val_new = emit_hash(&mut dag, xor);
+
+            // idx residue: parity bit ONLY -- the butterfly consumes bits
+            // directly, so there is no position integer, address, or gather.
+            dag.cur_category = NodeCat::Idx;
+            let parity = dag.add(ResKind::Alu(AluOp::And), vec![val_new]); // val & 1
+            epoch_bits.push(parity);
+            val = val_new;
+        }
+
+        dag.cur_category = NodeCat::Store;
+        // final idx would be assembled once from the last epoch's bits; model
+        // it as a single store dependency on the last parity bit.
+        let last_bit = *epoch_bits.last().unwrap();
+        dag.add(ResKind::Store, vec![last_bit]);
+        dag.add(ResKind::Store, vec![val]);
+    }
+
+    dag.cur_walker = u32::MAX;
+    dag.cur_category = NodeCat::Setup;
+    dag
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -598,6 +676,52 @@ mod tests {
         let per_walker = 1 + 1 + per_round * rounds as usize + 2; // idx free + val load + rounds + 2 stores
         let expected = 3 + batch_size as usize * per_walker;
         assert_eq!(dag.nodes.len(), expected);
+    }
+
+    #[test]
+    fn butterfly_hits_sub_900_arithmetic_bound() {
+        // The culmination: with the cross-stage hash fusion + parity-only idx
+        // + all routing on flow (butterfly), the alu/valu engines carry ONLY
+        // hash + fold + parity, so their throughput floor drops below 900.
+        let dag = build_problem_dag_butterfly(10, 256, 16);
+        let alu_valu = dag
+            .nodes
+            .iter()
+            .filter(|n| matches!(n.kind, ResKind::Alu(_) | ResKind::MultiplyAdd))
+            .count() as u64;
+        // 60 element-ops/cycle across alu (12) + valu (6*8).
+        let arith_floor = alu_valu.div_ceil(60);
+        assert!(
+            arith_floor < 900,
+            "arithmetic (alu/valu) floor should be sub-900, got {arith_floor} ({alu_valu} ops)"
+        );
+        // Idx is parity-only: no MultiplyAdd (pos accumulator) tagged Idx.
+        let idx_madd = dag
+            .nodes
+            .iter()
+            .enumerate()
+            .filter(|(i, n)| {
+                dag.category[*i] == NodeCat::Idx && matches!(n.kind, ResKind::MultiplyAdd)
+            })
+            .count();
+        assert_eq!(
+            idx_madd, 0,
+            "butterfly idx should be parity-only, no pos madd"
+        );
+        // Routing carries zero alu/valu work -- it's all on flow.
+        let routing_arith = dag
+            .nodes
+            .iter()
+            .enumerate()
+            .filter(|(i, n)| {
+                dag.category[*i] == NodeCat::Routing
+                    && matches!(n.kind, ResKind::Alu(_) | ResKind::MultiplyAdd)
+            })
+            .count();
+        assert_eq!(
+            routing_arith, 0,
+            "butterfly routing must be entirely off alu/valu"
+        );
     }
 
     #[test]

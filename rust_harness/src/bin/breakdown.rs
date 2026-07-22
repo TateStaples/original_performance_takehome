@@ -11,8 +11,8 @@
 //! Usage: cargo run --release --bin breakdown -- <forest_height> <batch_size> <rounds> [threshold] [algebraic|flow]
 
 use perf_harness::dag::{
-    build_problem_dag, build_problem_dag_idxlite, build_problem_dag_smart_tuned, Dag, NodeCat,
-    ResKind, SelectImpl,
+    build_problem_dag, build_problem_dag_butterfly, build_problem_dag_idxlite,
+    build_problem_dag_smart_tuned, Dag, NodeCat, ResKind, SelectImpl,
 };
 use perf_harness::schedule::{peak_register_pressure, schedule, SchedulerConfig};
 use std::env;
@@ -157,6 +157,10 @@ fn main() {
     report(
         &format!("idxlite (threshold={threshold}, {select:?}) -- idx recurrence elided"),
         &build_problem_dag_idxlite(fh, bs, r, select, threshold),
+    );
+    report(
+        "butterfly -- all routing on flow, alu/valu = hash+parity only",
+        &build_problem_dag_butterfly(fh, bs, r),
     );
 
     // idxlite reshapes liveness, so re-tune the walker window for realizability.
