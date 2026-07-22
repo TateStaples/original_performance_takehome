@@ -527,6 +527,84 @@ pub fn peak_register_pressure(dag: &Dag, result: &ScheduleResult) -> (u64, u32) 
     (peak as u64, peak_cycle)
 }
 
+/// Concrete scratch-address assignment for a schedule, via **linear-scan
+/// register allocation** with reuse: each value takes the lowest free slot at
+/// its birth cycle and returns it once its last reader has fired. Returns
+/// `(words_used, addr_per_node)`.
+///
+/// This is the pass the DAG/scheduler deliberately deferred -- it turns the
+/// `peak_register_pressure` *lower bound* into a concrete, checkable address
+/// map. Because live ranges are intervals, linear-scan first-fit is optimal
+/// (its slot count equals the max clique = the peak), so `words_used` should
+/// equal `peak_register_pressure`; the value here is the actual assignment and
+/// the guarantee that a real allocator achieves the peak -- i.e. any schedule
+/// whose peak fits `SCRATCH_SIZE` is genuinely allocatable in that many words.
+///
+/// `Store` nodes produce no readable value and get `None`. CAVEAT: this models
+/// *scalar* slots. The ISA additionally requires a `valu`/`vselect`/`vload`
+/// op's 8 lanes to sit in VLEN-contiguous scratch; enforcing that is a harder
+/// vector-register-allocation problem this does not model (the per-walker DAG
+/// doesn't expose which 8 nodes share a vector slot). The hand-written kernel
+/// in `vectorized.rs` shows a real contiguous allocation is achievable for the
+/// graded workload; here we bound the scalar-slot requirement.
+pub fn allocate_registers(dag: &Dag, result: &ScheduleResult) -> (u64, Vec<Option<u32>>) {
+    use std::cmp::Reverse;
+    use std::collections::BinaryHeap;
+
+    let n = dag.nodes.len();
+    let mut dependents: Vec<Vec<NodeId>> = vec![Vec::new(); n];
+    for (i, node) in dag.nodes.iter().enumerate() {
+        for &d in &node.deps {
+            dependents[d].push(i);
+        }
+    }
+
+    // (birth, death, node) for every value-producing node, sorted by birth.
+    let mut intervals: Vec<(u32, u32, NodeId)> = Vec::with_capacity(n);
+    for (i, deps) in dependents.iter().enumerate() {
+        if matches!(dag.nodes[i].kind, ResKind::Store) {
+            continue;
+        }
+        let birth = result.node_cycle[i];
+        let death = deps
+            .iter()
+            .map(|&d| result.node_cycle[d])
+            .max()
+            .unwrap_or(birth);
+        intervals.push((birth, death, i));
+    }
+    intervals.sort_unstable_by_key(|&(b, _, _)| b);
+
+    let mut free: BinaryHeap<Reverse<u32>> = BinaryHeap::new(); // freed slots (min)
+    let mut active: BinaryHeap<Reverse<(u32, u32)>> = BinaryHeap::new(); // (death, slot)
+    let mut next_slot: u32 = 0;
+    let mut addr: Vec<Option<u32>> = vec![None; n];
+
+    for &(birth, death, node) in &intervals {
+        // Return slots of values that died strictly before this birth.
+        while let Some(&Reverse((d, slot))) = active.peek() {
+            if d < birth {
+                free.push(Reverse(slot));
+                active.pop();
+            } else {
+                break;
+            }
+        }
+        let slot = match free.pop() {
+            Some(Reverse(s)) => s,
+            None => {
+                let s = next_slot;
+                next_slot += 1;
+                s
+            }
+        };
+        addr[node] = Some(slot);
+        active.push(Reverse((death, slot)));
+    }
+
+    (next_slot as u64, addr)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1004,5 +1082,78 @@ mod tests {
         let result = schedule(&dag, SchedulerConfig::default());
         let (peak, _) = peak_register_pressure(&dag, &result);
         assert!(peak >= 1);
+    }
+
+    #[test]
+    fn linear_scan_allocation_equals_peak_and_fits() {
+        // The allocator turns the peak lower bound into a concrete address
+        // map. On interval live-ranges linear-scan first-fit is optimal, so it
+        // must use exactly `peak` words -- and the plain dag's realizable
+        // schedule then provably fits SCRATCH_SIZE with real addresses.
+        let dag = build_problem_dag(10, 256, 16);
+        let result = schedule(
+            &dag,
+            SchedulerConfig {
+                gather_batchable: false,
+                walker_window: None,
+            },
+        );
+        let (peak, _) = peak_register_pressure(&dag, &result);
+        let (words, addr) = allocate_registers(&dag, &result);
+        assert_eq!(
+            words, peak,
+            "linear-scan words {words} must equal peak {peak}"
+        );
+        assert!(
+            words <= crate::isa::SCRATCH_SIZE as u64,
+            "plain dag should allocate within SCRATCH_SIZE, needs {words}"
+        );
+        // Store nodes produce no value -> no address.
+        for (i, node) in dag.nodes.iter().enumerate() {
+            if matches!(node.kind, ResKind::Store) {
+                assert!(addr[i].is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn linear_scan_allocation_is_conflict_free() {
+        // Directly verify no two simultaneously-live values share a slot
+        // (O(n^2), so on a small dag).
+        let dag = build_problem_dag(4, 16, 4);
+        let result = schedule(&dag, SchedulerConfig::default());
+        let (_, addr) = allocate_registers(&dag, &result);
+
+        let n = dag.nodes.len();
+        let mut dependents: Vec<Vec<NodeId>> = vec![Vec::new(); n];
+        for (i, node) in dag.nodes.iter().enumerate() {
+            for &d in &node.deps {
+                dependents[d].push(i);
+            }
+        }
+        let mut ivals: Vec<(u32, u32, u32)> = Vec::new(); // (birth, death, slot)
+        for (i, deps) in dependents.iter().enumerate() {
+            if let Some(a) = addr[i] {
+                let b = result.node_cycle[i];
+                let d = deps
+                    .iter()
+                    .map(|&x| result.node_cycle[x])
+                    .max()
+                    .unwrap_or(b);
+                ivals.push((b, d, a));
+            }
+        }
+        for i in 0..ivals.len() {
+            for j in (i + 1)..ivals.len() {
+                let (b1, d1, a1) = ivals[i];
+                let (b2, d2, a2) = ivals[j];
+                if a1 == a2 {
+                    assert!(
+                        d1 < b2 || d2 < b1,
+                        "slot {a1} reused by overlapping live ranges [{b1},{d1}] and [{b2},{d2}]"
+                    );
+                }
+            }
+        }
     }
 }
