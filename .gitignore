@@ -2,3 +2,6 @@ trace.json
 **/*.pyc
 .hypothesis
 .DS_Store
+
+# Transient agent worktrees (Claude Code isolation checkouts)
+.claude/worktrees/
