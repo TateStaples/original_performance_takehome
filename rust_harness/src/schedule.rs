@@ -605,6 +605,147 @@ pub fn allocate_registers(dag: &Dag, result: &ScheduleResult) -> (u64, Vec<Optio
     (next_slot as u64, addr)
 }
 
+/// Spill traffic needed to run `result`'s schedule within `capacity` scratch
+/// words, via an optimal (Belady) eviction policy: when the resident set is
+/// full, evict the value whose *next use is furthest in the future*. An
+/// evicted value with remaining uses is saved once (a `store`) and reloaded
+/// (a `load`) before each use that finds it non-resident.
+///
+/// This is the alternative to capping concurrency: rather than idle the
+/// compute engines to bound pressure, keep the aggressive (low-arithmetic)
+/// schedule and pay for the overflow in load/store traffic on the otherwise
+/// idle memory engines. Returns the added op counts; the caller re-costs the
+/// load/store engines with them. If `peak <= capacity`, returns all-zero.
+///
+/// This counts the *traffic* for the given schedule; it does not re-insert the
+/// ops and re-schedule (the reloads would add dependencies), so the realizable
+/// estimate built from it -- `max(orig_cycles, load+reloads floor, store+stores
+/// floor)` -- is a lower bound on the spilled schedule's true length.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct SpillStats {
+    pub stored_values: u64,
+    pub reloads: u64,
+}
+
+pub fn simulate_spilling(dag: &Dag, result: &ScheduleResult, capacity: usize) -> SpillStats {
+    use std::collections::BinaryHeap;
+
+    let n = dag.nodes.len();
+    // uses[v] = ascending distinct cycles at which value v is read.
+    let mut uses: Vec<Vec<u32>> = vec![Vec::new(); n];
+    for (i, node) in dag.nodes.iter().enumerate() {
+        let c = result.node_cycle[i];
+        for &d in &node.deps {
+            uses[d].push(c);
+        }
+    }
+    for u in uses.iter_mut() {
+        u.sort_unstable();
+        u.dedup();
+    }
+
+    let max_cycle = result.cycles as usize;
+    let mut born_at: Vec<Vec<NodeId>> = vec![Vec::new(); max_cycle + 2];
+    let mut used_at: Vec<Vec<NodeId>> = vec![Vec::new(); max_cycle + 2];
+    for i in 0..n {
+        if matches!(dag.nodes[i].kind, ResKind::Store) {
+            continue;
+        }
+        born_at[result.node_cycle[i] as usize].push(i);
+        for &uc in &uses[i] {
+            used_at[uc as usize].push(i);
+        }
+    }
+
+    let mut use_ptr = vec![0usize; n]; // index of next unconsumed use in uses[v]
+    let mut resident = vec![false; n];
+    let mut stored = vec![false; n];
+    let mut resident_count = 0usize;
+    // max-heap of (next_use, node); lazily validated (stale entries discarded).
+    let mut heap: BinaryHeap<(u32, NodeId)> = BinaryHeap::new();
+    let next_use = |v: NodeId, use_ptr: &[usize]| -> u32 {
+        uses[v].get(use_ptr[v]).copied().unwrap_or(u32::MAX)
+    };
+
+    let mut stats = SpillStats::default();
+
+    for c in 0..=max_cycle {
+        // Uses this cycle: each read value must be resident.
+        let used_now = std::mem::take(&mut used_at[c]);
+        for &v in &used_now {
+            // advance past this cycle's uses (there may be several this cycle).
+            while use_ptr[v] < uses[v].len() && uses[v][use_ptr[v]] <= c as u32 {
+                use_ptr[v] += 1;
+            }
+            if !resident[v] {
+                stats.reloads += 1;
+                evict_until(
+                    capacity - 1,
+                    &mut resident_count,
+                    &mut resident,
+                    &mut stored,
+                    &mut stats,
+                    &mut heap,
+                    &use_ptr,
+                    &uses,
+                );
+                resident[v] = true;
+                resident_count += 1;
+            }
+            heap.push((next_use(v, &use_ptr), v)); // refreshed next-use
+        }
+        // Productions this cycle: value enters residents.
+        for &v in &born_at[c] {
+            evict_until(
+                capacity - 1,
+                &mut resident_count,
+                &mut resident,
+                &mut stored,
+                &mut stats,
+                &mut heap,
+                &use_ptr,
+                &uses,
+            );
+            resident[v] = true;
+            resident_count += 1;
+            heap.push((next_use(v, &use_ptr), v));
+        }
+    }
+
+    stats
+}
+
+/// Evict Belady victims until `resident_count <= target`. Victim = resident
+/// value with the furthest next-use (heap top, lazily validated). A victim
+/// with remaining uses is stored once.
+#[allow(clippy::too_many_arguments)]
+fn evict_until(
+    target: usize,
+    resident_count: &mut usize,
+    resident: &mut [bool],
+    stored: &mut [bool],
+    stats: &mut SpillStats,
+    heap: &mut std::collections::BinaryHeap<(u32, NodeId)>,
+    use_ptr: &[usize],
+    uses: &[Vec<u32>],
+) {
+    let cur_next_use = |v: NodeId| uses[v].get(use_ptr[v]).copied().unwrap_or(u32::MAX);
+    while *resident_count > target {
+        let Some((nu, v)) = heap.pop() else { break };
+        // Discard stale entries: not resident, or a newer next-use was pushed.
+        if !resident[v] || nu != cur_next_use(v) {
+            continue;
+        }
+        resident[v] = false;
+        *resident_count -= 1;
+        // If it still has future uses, it must be saved (once) to be reloaded.
+        if nu != u32::MAX && !stored[v] {
+            stored[v] = true;
+            stats.stored_values += 1;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1114,6 +1255,89 @@ mod tests {
                 assert!(addr[i].is_none());
             }
         }
+    }
+
+    #[test]
+    fn spilling_is_zero_when_it_fits_and_positive_when_tight() {
+        let dag = build_problem_dag(10, 256, 16);
+        let r = schedule(
+            &dag,
+            SchedulerConfig {
+                gather_batchable: false,
+                walker_window: None,
+            },
+        );
+        let (peak, _) = peak_register_pressure(&dag, &r);
+        assert!(peak <= crate::isa::SCRATCH_SIZE as u64);
+        // Fits SCRATCH_SIZE -> Belady needs no spill traffic at all.
+        let fits = simulate_spilling(&dag, &r, crate::isa::SCRATCH_SIZE);
+        assert_eq!(
+            fits.stored_values + fits.reloads,
+            0,
+            "no spills expected when peak fits capacity"
+        );
+        // A tight capacity forces both stores and reloads.
+        let tight = simulate_spilling(&dag, &r, 64);
+        assert!(
+            tight.reloads > 0 && tight.stored_values > 0,
+            "tiny capacity must force spills, got {tight:?}"
+        );
+    }
+
+    #[test]
+    fn spilling_the_low_cycle_hybrid_fits_the_idle_memory_bandwidth() {
+        use crate::dag::build_problem_dag_hybrid;
+        use crate::isa::{slot_limits, SCRATCH_SIZE};
+        // The lowest-cycle hybrid config (butterfly<=L5, window16 ~= 1065 cyc)
+        // is register-OVER: peak ~2305 words, 1.5x SCRATCH_SIZE. The earlier
+        // conclusion was that this made ~1065 unrealizable and the true floor
+        // was the ~1356 no-spill *windowed* schedule. But scratch (the 1536
+        // register words) and mem (reached via the load/store engines) are
+        // separate tiers, so the overflow can be *spilled* to mem -- and the
+        // load & store engines are idle enough here (load ~60% busy) to
+        // absorb every reload/store WITHOUT lengthening the schedule: the
+        // post-spill memory-throughput floors stay at or below the original
+        // cycle count. Register pressure is therefore not a hard wall for
+        // this config; the ~1065 arithmetic-balanced target is realizable
+        // (throughput-wise), well under the ~1356 no-spill floor.
+        let dag = build_problem_dag_hybrid(10, 256, 16, 5);
+        let r = schedule(
+            &dag,
+            SchedulerConfig {
+                gather_batchable: false,
+                walker_window: Some(16),
+            },
+        );
+        let (peak, _) = peak_register_pressure(&dag, &r);
+        assert!(
+            peak > SCRATCH_SIZE as u64,
+            "config must be register-OVER for the spill question to be meaningful (peak {peak})"
+        );
+        let s = simulate_spilling(&dag, &r, SCRATCH_SIZE);
+        assert!(
+            s.reloads > 0 && s.stored_values > 0,
+            "overflow must actually spill, got {s:?}"
+        );
+        // Adding the spill traffic to the existing engine slot-uses, do the
+        // memory engines still keep up at the original cycle count?
+        let load_floor = (r.load().slot_uses + s.reloads).div_ceil(slot_limits::LOAD as u64);
+        let store_floor = (r.store.slot_uses + s.stored_values).div_ceil(slot_limits::STORE as u64);
+        assert!(
+            load_floor <= r.cycles,
+            "spill reloads must fit idle load bandwidth: load_floor {load_floor} > {} cyc",
+            r.cycles
+        );
+        assert!(
+            store_floor <= r.cycles,
+            "spill stores must fit idle store bandwidth: store_floor {store_floor} > {} cyc",
+            r.cycles
+        );
+        // And the whole thing stays under the no-spill windowed floor.
+        assert!(
+            r.cycles < 1356,
+            "spilled hybrid should beat the ~1356 no-spill floor, got {} cyc",
+            r.cycles
+        );
     }
 
     #[test]
