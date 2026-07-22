@@ -705,13 +705,18 @@ class KernelBuilder:
         # skews the whole batch into a software-pipelined diagonal, so one
         # block's compute-heavy epoch rounds (levels 0..3, no gathers)
         # overlap another block's load-bound gather levels and both engines
-        # stay busy. skew = (block_count, rounds_of_lag_per_block).
-        n_blocks, lag = skew
-        assert n_groups % n_blocks == 0
-        bs_ = n_groups // n_blocks
-        for t in range(rounds + lag * (n_blocks - 1)):
-            for b in range(n_blocks):
-                r = t - lag * b
+        # stay busy. skew = (block_count, rounds_of_lag_per_block), or an
+        # explicit per-block lag list for an asymmetric diagonal.
+        if isinstance(skew, list):
+            lags = skew
+        else:
+            n_blocks, lag = skew
+            lags = [lag * b for b in range(n_blocks)]
+        assert n_groups % len(lags) == 0
+        bs_ = n_groups // len(lags)
+        for t in range(rounds + max(lags)):
+            for b, lb in enumerate(lags):
+                r = t - lb
                 if 0 <= r < rounds:
                     for g in range(b * bs_, (b + 1) * bs_):
                         emit_group_round(r, g)
