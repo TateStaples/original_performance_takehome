@@ -37,3 +37,7 @@ path = "src/bin/frontier.rs"
 [[bin]]
 name = "breakdown"
 path = "src/bin/breakdown.rs"
+
+[[bin]]
+name = "hybrid"
+path = "src/bin/hybrid.rs"

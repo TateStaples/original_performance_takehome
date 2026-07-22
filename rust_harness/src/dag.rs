@@ -654,6 +654,92 @@ pub fn build_problem_dag_butterfly(forest_height: u32, batch_size: u32, rounds: 
     dag
 }
 
+/// Hybrid router that balances routing across BOTH the flow engine
+/// (butterfly, cheap for shallow levels -- `L` selects/walker) and the load
+/// engine (gather, cheap for deep levels -- 2 scalar loads/cycle on the
+/// otherwise-idle load port). Levels `<= butterfly_max_level` route via the
+/// butterfly (flow); deeper levels gather (load), which requires the `pos`
+/// accumulator + address add on alu/valu.
+///
+/// The point: neither extreme is realizable near the 887 hash floor --
+/// all-butterfly floods the 1-slot flow engine (~2080), all-gather pins
+/// alu/valu at ~986 via `pos`/addresses. Splitting at the crossover keeps
+/// flow, load, AND alu/valu each near the hash floor. Sweep
+/// `butterfly_max_level` (see the `breakdown` binary) to find it. Hash uses
+/// the cross-stage fusion; idx is parity + a `pos` accumulator maintained only
+/// while some deeper level still gathers.
+pub fn build_problem_dag_hybrid(
+    forest_height: u32,
+    batch_size: u32,
+    rounds: u32,
+    butterfly_max_level: u32,
+) -> Dag {
+    let mut dag = Dag::new();
+
+    let levels = forest_height + 1;
+    let has_gathers = butterfly_max_level < forest_height;
+    let mut level_cache: HashMap<u32, Vec<NodeId>> = HashMap::new();
+
+    for w in 0..batch_size {
+        dag.cur_walker = w;
+        dag.cur_category = NodeCat::Setup;
+        let mut val = dag.add(ResKind::ContiguousLoad, vec![]);
+        let mut pos = dag.free();
+        let mut epoch_bits: Vec<NodeId> = Vec::new();
+
+        for r in 0..rounds {
+            let local_level = r % levels;
+            if local_level == 0 {
+                epoch_bits.clear();
+                dag.cur_category = NodeCat::Setup;
+                pos = dag.free();
+            }
+
+            dag.cur_category = NodeCat::Routing;
+            let node_val = if local_level <= butterfly_max_level {
+                // Butterfly on flow: `local_level` vselects folding the shared
+                // level array by the walker's parity bits.
+                let arr = level_array(&mut dag, &mut level_cache, local_level);
+                let mut nv = arr[0];
+                for (k, &bit) in epoch_bits.iter().enumerate() {
+                    let src = arr[(k + 1).min(arr.len() - 1)];
+                    nv = dag.add(ResKind::Flow, vec![bit, nv, src]);
+                }
+                nv
+            } else {
+                // Gather on load: addr = pos + compile-time base.
+                let addr_base = dag.free();
+                let addr = dag.add(ResKind::Alu(AluOp::Add), vec![pos, addr_base]);
+                dag.add(ResKind::GatherLoad, vec![addr])
+            };
+
+            dag.cur_category = NodeCat::Hash;
+            let xor = dag.add(ResKind::Alu(AluOp::Xor), vec![val, node_val]);
+            let val_new = emit_hash(&mut dag, xor);
+
+            dag.cur_category = NodeCat::Idx;
+            let parity = dag.add(ResKind::Alu(AluOp::And), vec![val_new]);
+            epoch_bits.push(parity);
+            // Maintain `pos` only while some deeper level still gathers (its
+            // address needs the accumulated position). If everything is
+            // butterflied, pos is never read -- skip it.
+            if has_gathers && local_level != forest_height {
+                pos = dag.add(ResKind::MultiplyAdd, vec![pos, parity]);
+            }
+            val = val_new;
+        }
+
+        dag.cur_category = NodeCat::Store;
+        let last = *epoch_bits.last().unwrap();
+        dag.add(ResKind::Store, vec![if has_gathers { pos } else { last }]);
+        dag.add(ResKind::Store, vec![val]);
+    }
+
+    dag.cur_walker = u32::MAX;
+    dag.cur_category = NodeCat::Setup;
+    dag
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -676,6 +762,30 @@ mod tests {
         let per_walker = 1 + 1 + per_round * rounds as usize + 2; // idx free + val load + rounds + 2 stores
         let expected = 3 + batch_size as usize * per_walker;
         assert_eq!(dag.nodes.len(), expected);
+    }
+
+    #[test]
+    fn hybrid_routes_across_both_flow_and_load() {
+        // The hybrid genuinely splits routing: shallow levels butterfly (flow),
+        // deep levels gather (load). A mid crossover must therefore emit BOTH
+        // Flow routing nodes and GatherLoad nodes -- unlike the pure extremes
+        // (all-butterfly = no gathers; all-gather = no butterfly flow).
+        let dag = build_problem_dag_hybrid(10, 256, 16, 5);
+        let (mut flow, mut gather) = (0usize, 0usize);
+        for (i, node) in dag.nodes.iter().enumerate() {
+            if dag.category[i] == NodeCat::Routing {
+                match node.kind {
+                    ResKind::Flow => flow += 1,
+                    ResKind::GatherLoad => gather += 1,
+                    _ => {}
+                }
+            }
+            for &d in &node.deps {
+                assert!(d < i, "node {i} deps on {d}, not earlier");
+            }
+        }
+        assert!(flow > 0, "hybrid should butterfly shallow levels on flow");
+        assert!(gather > 0, "hybrid should gather deep levels on load");
     }
 
     #[test]
