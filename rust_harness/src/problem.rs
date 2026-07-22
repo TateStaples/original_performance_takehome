@@ -475,9 +475,13 @@ mod tests {
     }
 
     /// Non-affine stages 1/3/5 cannot be computed in <=2 ISA ops (binary alu
-    /// ops or a fused multiply_add). Combined with the exhibited 3-op form,
-    /// each is exactly 3 ops, so the hash is 3*1 (multiply_add) + 3*3 = 12 ops
-    /// and cannot drop lower via algebraic fusion.
+    /// ops or a fused multiply_add) *in isolation*. Combined with the exhibited
+    /// 3-op form, each is exactly 3 ops when considered alone. NOTE: this is a
+    /// *per-stage* (local) bound. It does NOT imply the whole 6-stage hash is
+    /// 12 ops minimum -- `cross_stage_fusion_is_bit_exact` shows stage2+stage3
+    /// fuse to 3 ops across the boundary (11 mixing ops total), because stage3
+    /// fed an affine input becomes two affine branches. This test still
+    /// correctly bounds each stage on its own.
     #[test]
     fn nonaffine_stages_need_at_least_three_ops() {
         let mut probes: Vec<u32> = vec![
@@ -507,7 +511,72 @@ mod tests {
             assert!(
                 !two_op_program_exists(idx, &probes),
                 "unexpected <=2-op program for non-affine stage {idx}; \
-                 the 12-op minimality claim must be revisited"
+                 the per-stage 3-op bound must be revisited"
+            );
+        }
+    }
+
+    /// Cross-stage fusion: stage2 is affine (`b = 33a + C2`) and stage3 is
+    /// `(b + C3) ^ (b << 9)` -- both of stage3's branches are integer-affine
+    /// in `b`, hence in `a`, so the pair collapses to two multiply_adds of `a`
+    /// plus one xor (3 ops), beating the 4 ops (1 madd + 3) they cost apart.
+    /// This is what `dag.rs::emit_hash` emits; verified bit-exact here so the
+    /// 11-mixing-op hash (arithmetic floor ~819) rests on a checked identity,
+    /// not an assertion.
+    #[test]
+    fn cross_stage_fusion_is_bit_exact() {
+        // Derived constants (see the algebra above).
+        let c2 = HASH_STAGES[2].1;
+        let c3 = HASH_STAGES[3].1;
+        let k_p = 1u32.wrapping_add(1 << 5); // 1 + 2^5 = 33 (stage2's multiplier)
+        let k_q = k_p.wrapping_mul(1 << 9); // 33 * 2^9 (stage3's <<9 folded in)
+        let a_p = c2.wrapping_add(c3); // C2 + C3
+        let a_q = c2.wrapping_shl(9); // C2 << 9  (mod 2^32)
+
+        // Recompute myhash with stage2+stage3 replaced by the fused form.
+        let cross_fused = |mut a: u32| -> u32 {
+            // stage0 (affine): a*(1+2^12) + C0
+            a = a
+                .wrapping_mul(1u32.wrapping_add(1 << 12))
+                .wrapping_add(HASH_STAGES[0].1);
+            // stage1 (xor-shift), as-is
+            let (o1, v1, o2, o3, v3) = HASH_STAGES[1];
+            a = o2.apply(o1.apply(a, v1), o3.apply(a, v3));
+            // stage2 + stage3 fused: p = 33a + (C2+C3), q = 33*512*a + C2<<9
+            let p = a.wrapping_mul(k_p).wrapping_add(a_p);
+            let q = a.wrapping_mul(k_q).wrapping_add(a_q);
+            a = p ^ q;
+            // stage4 (affine): a*(1+2^3) + C4
+            a = a
+                .wrapping_mul(1u32.wrapping_add(1 << 3))
+                .wrapping_add(HASH_STAGES[4].1);
+            // stage5 (xor-shift), as-is
+            let (o1, v1, o2, o3, v3) = HASH_STAGES[5];
+            o2.apply(o1.apply(a, v1), o3.apply(a, v3))
+        };
+
+        let mut samples: Vec<u32> = vec![
+            0,
+            1,
+            2,
+            255,
+            1 << 31,
+            0xFFFF_FFFF,
+            c2,
+            c3,
+            0xDEAD_BEEF,
+            0xCAFE_BABE,
+        ];
+        let mut x = 0x1234_5678u32;
+        for _ in 0..500_000 {
+            x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            samples.push(x);
+        }
+        for &a in &samples {
+            assert_eq!(
+                cross_fused(a),
+                myhash(a),
+                "cross-stage fusion diverged at {a:#010x}"
             );
         }
     }

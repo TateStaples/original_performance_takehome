@@ -133,9 +133,41 @@ fn as_multiply_add(op1: AluOp, op2: AluOp, op3: AluOp) -> bool {
     op1 == AluOp::Add && op2 == AluOp::Add && op3 == AluOp::Shl
 }
 
+/// A stage `a = (a + v1) ^ (a << s)` -- BOTH branches integer-affine in `a`
+/// (`a + v1` and `a << s = a * 2^s`), combined by xor. When such a stage is
+/// fed by an *affine* stage (so its input is itself affine in an earlier
+/// value `a0`), the pair composes to two multiply_adds of `a0` plus one xor,
+/// beating the (1 madd + 3 ops) the two stages cost separately (see
+/// `emit_hash`). This is the cross-stage reduction the per-stage minimality
+/// proof (problem.rs) does not see.
+fn as_affine_xor_shift(op1: AluOp, op2: AluOp, op3: AluOp) -> bool {
+    op1 == AluOp::Add && op2 == AluOp::Xor && op3 == AluOp::Shl
+}
+
 fn emit_hash(dag: &mut Dag, start: NodeId) -> NodeId {
     let mut a = start;
-    for &(op1, _val1, op2, op3, _val3) in HASH_STAGES.iter() {
+    let mut i = 0;
+    while i < HASH_STAGES.len() {
+        let (op1, _v1, op2, op3, _v3) = HASH_STAGES[i];
+        // Cross-stage fusion: an affine stage immediately followed by an
+        // `(a+v)^(a<<s)` stage. Both of the next stage's branches are affine
+        // in the affine stage's output, hence affine in *this* stage's input
+        // `a`, so each branch collapses to one multiply_add of `a`:
+        //   p = a*(K1*Knext) + ...      q = a*(K1*2^s) + ...      out = p ^ q
+        // i.e. 2 madd + 1 xor for the *pair*, vs. 1 madd (this stage) + 3 ops
+        // (next stage) = 4 done separately. Verified bit-exact in problem.rs
+        // (`cross_stage_fusion_is_bit_exact`). Only stage2->stage3 matches
+        // here; it drops the hash from 13 to 12 ops/eval.
+        if as_multiply_add(op1, op2, op3) && i + 1 < HASH_STAGES.len() {
+            let (n1, _nv1, n2, n3, _nv3) = HASH_STAGES[i + 1];
+            if as_affine_xor_shift(n1, n2, n3) {
+                let p = dag.add(ResKind::MultiplyAdd, vec![a]);
+                let q = dag.add(ResKind::MultiplyAdd, vec![a]);
+                a = dag.add(ResKind::Alu(n2), vec![p, q]); // n2 == Xor
+                i += 2;
+                continue;
+            }
+        }
         if as_multiply_add(op1, op2, op3) {
             a = dag.add(ResKind::MultiplyAdd, vec![a]);
         } else {
@@ -143,6 +175,7 @@ fn emit_hash(dag: &mut Dag, start: NodeId) -> NodeId {
             let tmp2 = dag.add(ResKind::Alu(op3), vec![a]);
             a = dag.add(ResKind::Alu(op2), vec![tmp1, tmp2]);
         }
+        i += 1;
     }
     a
 }
@@ -520,6 +553,12 @@ pub fn build_problem_dag_idxlite(
             dag.cur_category = NodeCat::Idx;
             let parity = dag.add(ResKind::Alu(AluOp::And), vec![val_new]); // val & 1
             epoch_bits.push(parity);
+            // `pos` (the within-epoch position) is needed to form gather
+            // addresses. Deep levels (2^L >= batch_size) ALWAYS gather, so it
+            // must be accumulated every round except the deepest (the next
+            // epoch resets it). Only a full-butterfly route of *every* level
+            // -- eliminating all gathers -- would remove `pos` entirely and
+            // leave the parity bit as the whole idx residue (~85 cyc).
             if local_level != forest_height {
                 // pos = 2*pos + parity, one fused multiply_add on valu.
                 pos = dag.add(ResKind::MultiplyAdd, vec![pos, parity]);
@@ -543,9 +582,10 @@ mod tests {
 
     #[test]
     fn node_count_matches_hand_count() {
-        // Per round: addr, node_val, xor = 3. Hash: 3 stages collapse to 1
-        // MultiplyAdd node each (as_multiply_add), 3 stay as 3 nodes each =
-        // 3*1 + 3*3 = 12. Tail: parity, offset, doubled, idx_new, cmp,
+        // Per round: addr, node_val, xor = 3. Hash: stages 0/4 are 1
+        // MultiplyAdd each (2); stages 1/5 are 3 nodes each (6); stage2+stage3
+        // fuse to 2 MultiplyAdd + 1 xor (3). Total 11 (see emit_hash's
+        // cross-stage fusion). Tail: parity, offset, doubled, idx_new, cmp,
         // idx_final = 6. Plus, per walker: 1 free `idx=0` node, 1 initial
         // val load, and 2 final stores. Plus 3 free setup nodes shared
         // across the whole dag.
@@ -554,7 +594,7 @@ mod tests {
         // forest_height=10 => levels=11 > rounds, so no round wraps and the
         // per-round shape (incl. the cmp+select tail) is unchanged.
         let dag = build_problem_dag(10, batch_size, rounds);
-        let per_round = 3 + 12 + 6;
+        let per_round = 3 + 11 + 6;
         let per_walker = 1 + 1 + per_round * rounds as usize + 2; // idx free + val load + rounds + 2 stores
         let expected = 3 + batch_size as usize * per_walker;
         assert_eq!(dag.nodes.len(), expected);
@@ -608,7 +648,7 @@ mod tests {
         // No node in walker 0's subgraph should be reachable from walker 1's,
         // or vice versa -- batch_size shouldn't affect the critical path.
         let dag = build_problem_dag(10, 2, 2);
-        let per_walker = 1 + 1 + (3 + 12 + 6) * 2 + 2;
+        let per_walker = 1 + 1 + (3 + 11 + 6) * 2 + 2;
         let walker0_range = 3..3 + per_walker;
         let walker1_start = 3 + per_walker;
         for node in &dag.nodes[walker1_start..] {
@@ -622,9 +662,13 @@ mod tests {
     }
 
     #[test]
-    fn multiply_add_reduces_half_the_hash_stages() {
-        // Stages 0,2,4 (op1=op2=Add,op3=Shl) collapse to 1 MultiplyAdd node;
-        // stages 1,3,5 stay as 3 nodes (tmp1,tmp2,combine) each.
+    fn emit_hash_uses_eleven_nodes_via_cross_stage_fusion() {
+        // Stages 0 and 4 (op1=op2=Add,op3=Shl) are 1 MultiplyAdd each = 2.
+        // Stages 1 and 5 (xor-shift) are 3 nodes each = 6. Stage2+stage3 fuse
+        // to 2 MultiplyAdd + 1 xor = 3 (see emit_hash). Total 11 nodes, of
+        // which 4 are MultiplyAdd (s0, the two fused p/q, s4). This beats the
+        // per-stage minimum of 12 -- the cross-stage fusion the per-stage
+        // proof in problem.rs does not see.
         let mut dag = Dag::new();
         let start = dag.free();
         let result = emit_hash(&mut dag, start);
@@ -634,11 +678,12 @@ mod tests {
             .iter()
             .filter(|n| matches!(n.kind, ResKind::MultiplyAdd))
             .count();
-        assert_eq!(multiply_adds, 3);
+        assert_eq!(multiply_adds, 4, "s0 + fused p,q + s4");
         let total_hash_nodes = dag.nodes.len() - 1; // minus the `start` free node
-        let reduced_stage_nodes = 3; // 3 stages x 1 node each
-        let full_stage_nodes = 3 * 3; // 3 stages x 3 nodes each
-        assert_eq!(total_hash_nodes, reduced_stage_nodes + full_stage_nodes);
+        assert_eq!(
+            total_hash_nodes, 11,
+            "2 (s0,s4 madd) + 6 (s1,s5) + 3 (s2+s3 fused)"
+        );
     }
 
     #[test]
@@ -675,7 +720,7 @@ mod tests {
 
         // Each wrap round replaces cmp+select (2 nodes) with one Free node,
         // i.e. -1 node per wrap round vs the no-fold count.
-        let per_round = 3 + 12 + 6; // addr,node_val,xor + hash(12) + tail(6)
+        let per_round = 3 + 11 + 6; // addr,node_val,xor + hash(11) + tail(6)
         let per_walker = 1 + 1 + per_round * rounds as usize - wrap_rounds_per_walker + 2;
         let expected = 3 + batch_size as usize * per_walker;
         assert_eq!(dag.nodes.len(), expected);
