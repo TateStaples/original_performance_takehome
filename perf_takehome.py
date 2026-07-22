@@ -362,6 +362,7 @@ class KernelBuilder:
         forest_height: int,
         tournament_levels=(),
         alu_offload: bool = False,
+        l4_gmin=(14, 32),
         debug_compares: bool = True,
     ):
         """
@@ -417,6 +418,33 @@ class KernelBuilder:
         def level(r):
             return r % period
 
+        # Rounds at level maxT+1 partially served by the two-stage "pair"
+        # tournament (see below): the level-4 candidate set is the pair of
+        # children of the level-3 winner. Only groups >= the epoch's
+        # l4_gmin threshold are served; earlier groups still gather, so the
+        # load engine's pipeline into the following gather levels starts on
+        # time while the later groups' tournaments run in its shadow (the
+        # tournament depends on the previous round's parity, so unlike a
+        # gather it cannot be prefetched a full round ahead).
+        L4 = maxT + 1
+        n_groups_ = batch_size // VLEN
+
+        def l4_served(r, g):
+            if maxT != 3 or L4 >= forest_height or level(r) != L4:
+                return False
+            ep = r // period
+            gmin = l4_gmin[ep] if ep < len(l4_gmin) else n_groups_
+            return g >= gmin
+
+        l4_any = any(
+            l4_served(r, g) for r in range(rounds) for g in (0, n_groups_ - 1)
+        )
+
+        def served(r, g):
+            # node_val comes from scratch (no gather) on these rounds
+            lv_ = level(r)
+            return lv_ == 0 or lv_ in T_set or l4_served(r, g)
+
         S = ListScheduler()
 
         def const(val, name=None):
@@ -466,17 +494,23 @@ class KernelBuilder:
         hv = {k: bvec(const(hc[k]), k) for k in
               ("k0", "C0", "C1", "sh1", "kp", "ap", "kq", "aq", "k4", "C4", "C5", "sh5")}
 
-        # gaddr reconstruction constant for the first gather level after the
-        # tournament levels: fp + 2^(maxT+1) - 1  (== fp + 1 when maxT == 0).
-        rec_s = self.alloc_scratch("rec_s")
-        S.emit("flow", ("add_imm", rec_s, fp, 2 ** (maxT + 1) - 1), (fp,), (rec_s,))
-        fpK_vec = bvec(rec_s, "fpK_vec")
+        # gaddr reconstruction constants: leaving a served round r for a
+        # gather round at level Ln needs  fp + 2^Ln - 1  as a vector.
+        rec_needed = sorted({
+            level(r + 1) for r in range(rounds - 1) for g in range(n_groups_)
+            if served(r, g) and not served(r + 1, g) and level(r + 1) != 0
+        })
+        rec_vecs = {}
+        for Ln in rec_needed:
+            rs = self.alloc_scratch()
+            S.emit("flow", ("add_imm", rs, fp, 2 ** Ln - 1), (fp,), (rs,))
+            rec_vecs[Ln] = bvec(rs, f"rec{Ln}")
 
-        # --- tournament level values: load tree[1 .. 2^(maxT+1)-2],
-        # broadcast each pair's even element and its (odd-even) diff ---
+        # --- tournament level values: load tree[1..], broadcast each
+        # pair's even element and its (odd-even) diff ---
         lvl = {}
         if maxT:
-            n_lv = 2 ** (maxT + 1) - 2
+            n_lv = 2 ** ((L4 if l4_any else maxT) + 1) - 2
             lv = self.alloc_scratch("lv", ((n_lv + VLEN - 1) // VLEN) * VLEN)
             la = self.alloc_scratch("lv_addr")
             for blk in range(0, n_lv, VLEN):
@@ -494,6 +528,21 @@ class KernelBuilder:
                     evens.append(bvec(s0))
                     diffs.append(bvec(d))
                 lvl[L] = (evens, diffs)
+        if l4_any:
+            # Level maxT+1 candidates, indexed by the level-maxT position t:
+            # E[t] / D[t] = even child of the level-maxT winner / its
+            # (odd - even) sibling diff.
+            base = 2 ** L4 - 1
+            E_vecs, D_vecs = [], []
+            for t in range(2 ** maxT):
+                s0 = lv + (base + 2 * t - 1)
+                s1 = s0 + 1
+                d = self.alloc_scratch()
+                S.emit("alu", ("-", d, s1, s0), (s0, s1), (d,))
+                E_vecs.append(bvec(s0))
+                D_vecs.append(bvec(d))
+            four_vec = bvec(const(4), "four_vec")
+            eight_vec = bvec(const(8), "eight_vec")
 
         # --- persistent state ---
         # state_vecs[g] carries p (position accumulator) during tournament
@@ -557,6 +606,37 @@ class KernelBuilder:
                         vsel(t1[s], condB[j], tmM[j], t1[s])  # q0 = b1 ? m1 : m0
                         vsel(nv, condB[j], nv, tm[j])         # q1 = b1 ? m3 : m2
                         vsel(nv, condA[j], nv, t1[s])         # b0 ? q1 : q0
+                elif l4_served(r, g):
+                    # Two-stage level-(maxT+1) select: with t = p>>1 the
+                    # level-maxT position and b3 = p&1 the newest parity,
+                    # node_val = E[t] + b3*D[t]. Combine first (8 madds),
+                    # then fold the 8 W[t] candidates by the bits of t,
+                    # rotating through 6 live vectors -- no extra pools.
+                    nvsrc = nv
+                    vec("&", condA[j], st, one_vec)                 # b3
+                    madd(t1[s], condA[j], D_vecs[0], E_vecs[0])     # W0
+                    madd(tm[j], condA[j], D_vecs[1], E_vecs[1])     # W1
+                    madd(tmM[j], condA[j], D_vecs[2], E_vecs[2])    # W2
+                    madd(nv, condA[j], D_vecs[3], E_vecs[3])        # W3
+                    vec("&", condB[j], st, two_vec)
+                    vec(">>", condB[j], condB[j], one_vec)          # bit0 of t
+                    vec("-", tm[j], tm[j], t1[s])                   # W1-W0
+                    madd(t1[s], condB[j], tm[j], t1[s])             # U0
+                    vec("-", nv, nv, tmM[j])                        # W3-W2
+                    madd(tmM[j], condB[j], nv, tmM[j])              # U1
+                    madd(tm[j], condA[j], D_vecs[4], E_vecs[4])     # W4
+                    madd(nv, condA[j], D_vecs[5], E_vecs[5])        # W5
+                    vec("-", nv, nv, tm[j])                         # W5-W4
+                    madd(tm[j], condB[j], nv, tm[j])                # U2
+                    madd(nv, condA[j], D_vecs[6], E_vecs[6])        # W6
+                    madd(condA[j], condA[j], D_vecs[7], E_vecs[7])  # W7 (b3 dead)
+                    vec("-", condA[j], condA[j], nv)                # W7-W6
+                    madd(nv, condB[j], condA[j], nv)                # U3 (bit0 dead)
+                    vec("&", condB[j], st, four_vec)                # bit1 of t mask
+                    vsel(t1[s], condB[j], tmM[j], t1[s])            # q0
+                    vsel(nv, condB[j], nv, tm[j])                   # q1
+                    vec("&", condB[j], st, eight_vec)               # bit2 of t mask
+                    vsel(nv, condB[j], nv, t1[s])                   # winner
                 else:
                     nvsrc = nv  # gathered during round r-1
 
@@ -596,7 +676,7 @@ class KernelBuilder:
                 Ln = level(r + 1)
                 if Ln == 0:
                     continue  # everyone wraps to the root; state re-seeded there
-                if Ln in T_set:
+                if served(r + 1, g):
                     if L == 0:
                         vec("&", st, vl, one_vec)          # p := b
                     else:
@@ -604,12 +684,12 @@ class KernelBuilder:
                         madd(st, st, two_vec, t1[s])       # p := 2p + b
                 else:
                     vec("&", t1[s], vl, one_vec)
-                    if L == maxT:
+                    if served(r, g):
                         # leave accumulator mode: gaddr = 2p + b + fp + 2^Ln - 1
-                        if maxT == 0:
-                            vec("+", st, fpK_vec, t1[s])
+                        if L == 0:
+                            vec("+", st, rec_vecs[Ln], t1[s])
                         else:
-                            madd(st, st, two_vec, fpK_vec)
+                            madd(st, st, two_vec, rec_vecs[Ln])
                             vec("+", st, st, t1[s])
                     else:
                         madd(st, st, two_vec, omf_vec)     # 2*gaddr + 1 - fp
