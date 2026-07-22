@@ -10,7 +10,7 @@
 //!
 //! Usage: cargo run --release --bin lower_bound -- <forest_height> <batch_size> <rounds>
 
-use perf_harness::dag::{build_problem_dag, build_problem_dag_smart, Dag};
+use perf_harness::dag::{build_problem_dag, build_problem_dag_smart_with, Dag, SelectImpl};
 use perf_harness::isa::SCRATCH_SIZE;
 use perf_harness::schedule::{peak_register_pressure, schedule, SchedulerConfig};
 use std::env;
@@ -22,14 +22,18 @@ fn main() {
     let batch_size: u32 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(256);
     let rounds: u32 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(16);
 
-    let dags: [(&str, Dag); 2] = [
+    let dags: [(&str, Dag); 3] = [
         (
             "plain (literal per-walker gather)",
             build_problem_dag(forest_height, batch_size, rounds),
         ),
         (
-            "smart (shared-root bounded fan-out)",
-            build_problem_dag_smart(forest_height, batch_size, rounds),
+            "smart (algebraic selects)",
+            build_problem_dag_smart_with(forest_height, batch_size, rounds, SelectImpl::Algebraic),
+        ),
+        (
+            "smart (flow vselects)",
+            build_problem_dag_smart_with(forest_height, batch_size, rounds, SelectImpl::Flow),
         ),
     ];
 

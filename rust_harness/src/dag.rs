@@ -157,6 +157,20 @@ pub fn build_problem_dag(forest_height: u32, batch_size: u32, rounds: u32) -> Da
     dag
 }
 
+/// How a 2:1 select in the smart-DAG cascade is lowered. `Algebraic` = 3
+/// alu/valu ops (see `algebraic_select`); `Flow` = one real 8-wide `vselect`
+/// (`ResKind::Flow`, 1 flow slot/cycle x VLEN lanes). Flow is the UNDER-used
+/// engine in smart realistic mode (only the idx-wraparound selects run on it,
+/// ~24-31% busy), while valu is the bind (~99%), so `Flow` trades saturated
+/// 48-lane/cycle valu throughput for idle 8-lane/cycle flow throughput. That
+/// pays whenever flow still has headroom -- see the crossover note on
+/// `build_problem_dag_smart_with`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SelectImpl {
+    Algebraic,
+    Flow,
+}
+
 /// `select(cond, b, a)` computed arithmetically instead of via the `flow`
 /// engine: `a + cond*(b-a)`, valid since `cond` is always exactly 0 or 1.
 /// 3 `alu`/`valu`-kind ops instead of 1 `flow`-kind op -- worse op-for-op,
@@ -170,6 +184,19 @@ fn algebraic_select(dag: &mut Dag, cond: NodeId, a: NodeId, b: NodeId) -> NodeId
     dag.add(ResKind::Alu(AluOp::Add), vec![a, scaled])
 }
 
+/// `select(cond, a, b)` via the flow engine's real 8-wide mux: 1
+/// `ResKind::Flow` node instead of `algebraic_select`'s 3. Deps are
+/// `[cond, a, b]`; the scheduler already models Flow as 1 slot/cycle x VLEN
+/// lanes (see schedule.rs), so no scheduler change is needed. NOTE for any
+/// future lowering to `isa::FlowSlot::VSelect` (`dest = a if cond!=0 else b`):
+/// `algebraic_select(dag, cond, a, b)` computes `a + cond*(b-a) = (cond? b : a)`,
+/// so a faithful VSelect must swap operands (`VSelect{cond, a: b, b: a}`). The
+/// abstract DAG only tracks deps + ResKind, so operand order here does not
+/// affect the scheduler's cycle count.
+fn flow_select(dag: &mut Dag, cond: NodeId, a: NodeId, b: NodeId) -> NodeId {
+    dag.add(ResKind::Flow, vec![cond, a, b])
+}
+
 /// Extract `arr[index]`, where `index`'s bits are `bits` (one walker's own
 /// parity-bit history), via a per-walker reduction cascade: pairwise-select
 /// down from `arr.len()` candidates to 1, `bits.len() = log2(arr.len())`
@@ -180,7 +207,12 @@ fn algebraic_select(dag: &mut Dag, cond: NodeId, a: NodeId, b: NodeId) -> NodeId
 /// once) could in principle do this in `O(N log N)` *total* instead of
 /// `O(N)` *per walker*, but that's real hardware-design complexity this
 /// pass doesn't attempt -- see the module docs.
-fn select_cascade(dag: &mut Dag, arr: &[NodeId], bits: &[NodeId]) -> NodeId {
+fn select_cascade(
+    dag: &mut Dag,
+    arr: &[NodeId],
+    bits: &[NodeId],
+    select_impl: SelectImpl,
+) -> NodeId {
     if bits.is_empty() {
         assert_eq!(arr.len(), 1);
         return arr[0];
@@ -189,7 +221,11 @@ fn select_cascade(dag: &mut Dag, arr: &[NodeId], bits: &[NodeId]) -> NodeId {
     for &bit in bits {
         let mut next = Vec::with_capacity(cur.len() / 2);
         for pair in cur.chunks(2) {
-            next.push(algebraic_select(dag, bit, pair[0], pair[1]));
+            let sel = match select_impl {
+                SelectImpl::Algebraic => algebraic_select(dag, bit, pair[0], pair[1]),
+                SelectImpl::Flow => flow_select(dag, bit, pair[0], pair[1]),
+            };
+            next.push(sel);
         }
         cur = next;
     }
@@ -240,6 +276,27 @@ const SMART_LEVEL_THRESHOLD: u32 = 4;
 /// unconditionally true for every walker (see the comment at the call
 /// site) -- both apply regardless of gather strategy.
 pub fn build_problem_dag_smart(forest_height: u32, batch_size: u32, rounds: u32) -> Dag {
+    build_problem_dag_smart_with(forest_height, batch_size, rounds, SelectImpl::Algebraic)
+}
+
+/// As [`build_problem_dag_smart`], but chooses how `select_cascade` lowers its
+/// 2:1 muxes. `SelectImpl::Flow` offloads them onto the idle flow engine.
+///
+/// CROSSOVER (batch_size=256, rounds=16, forest_height=10): the cascade emits
+/// S = 5632 selects total (levels 0..3 over two epochs, 256 walkers). Routing
+/// all of them to flow puts the flow floor at (3840 wraparound + 5632)/8 =
+/// 1184 cycles, still under the reduced alu+valu floor (~1259), because the
+/// balance point x* where the two floors meet is ~6058 > S -- so flow stays
+/// non-binding and `Flow` is optimal here. If a future change grows the
+/// cascade (e.g. raising `SMART_LEVEL_THRESHOLD`) so S pushes past x*, a
+/// per-select split -- first x* to flow, the remainder algebraic -- becomes
+/// necessary.
+pub fn build_problem_dag_smart_with(
+    forest_height: u32,
+    batch_size: u32,
+    rounds: u32,
+    select_impl: SelectImpl,
+) -> Dag {
     let mut dag = Dag::new();
 
     let forest_values_p = dag.free();
@@ -263,7 +320,7 @@ pub fn build_problem_dag_smart(forest_height: u32, batch_size: u32, rounds: u32)
                 && local_level < SMART_LEVEL_THRESHOLD
             {
                 let arr = level_array(&mut dag, &mut level_cache, local_level);
-                select_cascade(&mut dag, &arr, &epoch_bits)
+                select_cascade(&mut dag, &arr, &epoch_bits, select_impl)
             } else {
                 let addr = dag.add(ResKind::Alu(AluOp::Add), vec![idx, forest_values_p]);
                 dag.add(ResKind::GatherLoad, vec![addr])
@@ -413,6 +470,22 @@ mod tests {
         let per_walker = 1 + 1 + per_round * rounds as usize - wrap_rounds_per_walker + 2;
         let expected = 3 + batch_size as usize * per_walker;
         assert_eq!(dag.nodes.len(), expected);
+    }
+
+    #[test]
+    fn flow_select_impl_moves_cascade_selects_off_alu_onto_flow() {
+        let alg = build_problem_dag_smart_with(10, 256, 16, SelectImpl::Algebraic);
+        let flw = build_problem_dag_smart_with(10, 256, 16, SelectImpl::Flow);
+        let flow_count = |d: &Dag| {
+            d.nodes
+                .iter()
+                .filter(|n| matches!(n.kind, ResKind::Flow))
+                .count()
+        };
+        // 2 epochs x (0+1+3+7)=11 selects/walker x 256 walkers = 5632 selects.
+        assert_eq!(flow_count(&flw) - flow_count(&alg), 5632);
+        // Each algebraic select was 3 nodes; each flow select is 1 => 2 fewer each.
+        assert_eq!(alg.nodes.len() - flw.nodes.len(), 2 * 5632);
     }
 
     #[test]

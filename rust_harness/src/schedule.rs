@@ -568,6 +568,33 @@ mod tests {
     }
 
     #[test]
+    fn flow_selects_beat_algebraic_selects_on_smart_dag() {
+        use crate::dag::{build_problem_dag_smart_with, SelectImpl};
+        let cfg = SchedulerConfig {
+            gather_batchable: false,
+        };
+        let alg = schedule(
+            &build_problem_dag_smart_with(10, 256, 16, SelectImpl::Algebraic),
+            cfg,
+        );
+        let flw = schedule(
+            &build_problem_dag_smart_with(10, 256, 16, SelectImpl::Flow),
+            cfg,
+        );
+        // Offloading selects onto the idle flow engine reduces the schedule.
+        assert!(
+            flw.cycles < alg.cycles,
+            "flow {} should beat algebraic {}",
+            flw.cycles,
+            alg.cycles
+        );
+        // Flow absorbs the selects but does not become the new bottleneck.
+        assert!(flw.flow.busy_cycles < flw.cycles);
+        // valu batch demand actually dropped (selects no longer routed there).
+        assert!(flw.valu.slot_uses < alg.valu.slot_uses);
+    }
+
+    #[test]
     fn plain_dag_peak_register_pressure_fits_but_smart_dag_does_not() {
         // The scheduler's cycle count is entirely register-oblivious (see
         // peak_register_pressure's docs), so it's worth actually measuring
