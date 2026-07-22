@@ -362,8 +362,9 @@ class KernelBuilder:
         forest_height: int,
         tournament_levels=(),
         alu_offload: bool = False,
-        l4_gmin=(14, 32),
-        pool_sizes=(16, 4),
+        l4_gmin=(22, 28),
+        pool_sizes=(17, 4),
+        skew=(4, 3),
         debug_compares: bool = True,
     ):
         """
@@ -571,9 +572,9 @@ class KernelBuilder:
                    (a,), self._v(val_vecs[g]), mem_read=True)
 
         # --- rounds ---
-        for r in range(rounds):
-            L = level(r)
-            for g in range(n_groups):
+        def emit_group_round(r, g):
+            if True:  # keep the original indentation of the body below
+                L = level(r)
                 s = g % TP
                 j = g % CP
                 st = state_vecs[g]
@@ -673,10 +674,10 @@ class KernelBuilder:
 
                 # ---- position/state update & gather prefetch for r+1 ----
                 if r == rounds - 1:
-                    continue
+                    return
                 Ln = level(r + 1)
                 if Ln == 0:
-                    continue  # everyone wraps to the root; state re-seeded there
+                    return  # everyone wraps to the root; state re-seeded there
                 if served(r + 1, g):
                     if L == 0:
                         vec("&", st, vl, one_vec)          # p := b
@@ -698,6 +699,22 @@ class KernelBuilder:
                     for lane in range(VLEN):
                         S.emit("load", ("load", nv + lane, st + lane),
                                (st + lane,), (nv + lane,), mem_read=True)
+
+        # Groups are fully independent, so they need not march in lockstep:
+        # emitting the later blocks a few ROUNDS behind the earlier ones
+        # skews the whole batch into a software-pipelined diagonal, so one
+        # block's compute-heavy epoch rounds (levels 0..3, no gathers)
+        # overlap another block's load-bound gather levels and both engines
+        # stay busy. skew = (block_count, rounds_of_lag_per_block).
+        n_blocks, lag = skew
+        assert n_groups % n_blocks == 0
+        bs_ = n_groups // n_blocks
+        for t in range(rounds + lag * (n_blocks - 1)):
+            for b in range(n_blocks):
+                r = t - lag * b
+                if 0 <= r < rounds:
+                    for g in range(b * bs_, (b + 1) * bs_):
+                        emit_group_round(r, g)
 
         # --- store final values; second pause after everything ---
         last = 0
