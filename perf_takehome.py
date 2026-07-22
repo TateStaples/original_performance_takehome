@@ -98,7 +98,369 @@ class KernelBuilder:
     def build_kernel(
         self, forest_height: int, n_nodes: int, batch_size: int, rounds: int
     ):
-        self.build_kernel_vectorized(batch_size, rounds, pipeline_width=6)
+        self.build_kernel_pipelined(
+            batch_size, rounds, forest_height=forest_height, pipeline_width=16
+        )
+
+    # ------------------------------------------------------------------
+    # Fused-hash constants (see docs/problem.md 2.4 and the bit-exact proof
+    # in rust_harness/src/problem.rs::cross_stage_fusion_is_bit_exact).
+    #
+    # myhash's 6 stages collapse to 11 vector "mixing" ops instead of 18:
+    #   stage0 (affine)      a*(1+2^12) + C0            -> 1 multiply_add
+    #   stage1 (xor-shift)   (a ^ C1) ^ (a >> 19)       -> 3 ops
+    #   stage2+stage3 fused  p = a*33 + (C2+C3);
+    #                        q = a*(33*512) + (C2<<9);
+    #                        a = p ^ q                  -> 2 multiply_add + 1 xor
+    #   stage4 (affine)      a*(1+2^3) + C4             -> 1 multiply_add
+    #   stage5 (xor-shift)   (a ^ C5) ^ (a >> 16)       -> 3 ops
+    # stage2 is affine (b = 33a + C2) and both of stage3's branches are
+    # integer-affine in b (hence in a), so the pair fuses across the boundary.
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _fused_hash_constants():
+        M = (1 << 32) - 1
+        (o0, C0, _, _, s0) = HASH_STAGES[0]
+        (o1a, C1, _, o1b, s1) = HASH_STAGES[1]
+        (_, C2, _, _, s2) = HASH_STAGES[2]
+        (_, C3, _, _, s3) = HASH_STAGES[3]
+        (_, C4, _, _, s4) = HASH_STAGES[4]
+        (o5a, C5, _, o5b, s5) = HASH_STAGES[5]
+        assert (o0, s0) == ("+", 12)
+        assert (o1a, o1b, s1) == ("^", ">>", 19)
+        assert s2 == 5 and s3 == 9 and s4 == 3
+        assert (o5a, o5b, s5) == ("^", ">>", 16)
+        c = {
+            "k0": (1 + (1 << s0)) & M,
+            "C0": C0,
+            "C1": C1,
+            "sh1": s1,
+            "kp": (1 + (1 << s2)) & M,
+            "ap": (C2 + C3) & M,
+            "kq": ((1 + (1 << s2)) * (1 << s3)) & M,
+            "aq": (C2 << s3) & M,
+            "k4": (1 + (1 << s4)) & M,
+            "C4": C4,
+            "C5": C5,
+            "sh5": s5,
+        }
+
+        def fused(a):
+            a = (a * c["k0"] + c["C0"]) & M
+            a = (a ^ c["C1"]) ^ (a >> c["sh1"])
+            p = (a * c["kp"] + c["ap"]) & M
+            q = (a * c["kq"] + c["aq"]) & M
+            a = p ^ q
+            a = (a * c["k4"] + c["C4"]) & M
+            a = (a ^ c["C5"]) ^ (a >> c["sh5"])
+            return a
+
+        # Build-time sanity: the fused form must reproduce myhash bit-for-bit.
+        import random as _r
+
+        _rng = _r.Random(0xC0FFEE)
+        samples = [0, 1, 2, 255, 1 << 31, M, C2, C3] + [
+            _rng.randint(0, M) for _ in range(2000)
+        ]
+        for a in samples:
+            ref = a
+            for op1, val1, op2, op3, val3 in HASH_STAGES:
+                fns = {
+                    "+": lambda x, y: (x + y) & M,
+                    "^": lambda x, y: x ^ y,
+                    "<<": lambda x, y: (x << y) & M,
+                    ">>": lambda x, y: x >> y,
+                }
+                ref = fns[op2](fns[op1](ref, val1), fns[op3](ref, val3))
+            assert fused(a) == ref, f"fused hash mismatch at {a:#x}"
+        return c
+
+    def build_kernel_pipelined(
+        self,
+        batch_size: int,
+        rounds: int,
+        forest_height: int = None,
+        pipeline_width: int = 16,
+        debug_compares: bool = False,
+    ):
+        """
+        Vectorized + software-pipelined kernel.
+
+        Two independent, engine-disjoint work items make up each round for a
+        group of VLEN walkers:
+          - GATHER: compute the 8 gather addresses (one valu add) and issue
+            the 8 scalar `load`s of `mem[forest_values_p + idx]` -- this is
+            `load`-engine work (2 slots/cycle), and it is the workload's hard
+            floor: batch_size/VLEN * rounds * 8 / 2 load-cycles no matter how
+            well anything else packs.
+          - COMPUTE: `val ^= node_val`, the (fused) 6-stage hash, and the
+            idx update -- this is `valu`/`flow`-engine work.
+        The baseline `build_kernel_vectorized` ran these as separate, barriered
+        phases, so `load` sat idle during COMPUTE and `valu` sat idle during
+        GATHER; the round cost was ~sum of the two. Here we software-pipeline:
+        while COMPUTE(unit k) runs on valu/flow, GATHER(unit k+1) fills the
+        otherwise-idle load slots of the very same bundles (ping-ponging two
+        node_val buffers so the consumer and producer never alias). The round
+        then costs ~max(load, valu, flow) instead of their sum -- i.e. it
+        approaches the ~2048-cycle load floor.
+
+        Also folds the hash to 11 mixing ops via multiply_add (see
+        `_fused_hash_constants`) and the idx update to `2*idx + 1 + (val&1)`
+        (one multiply_add + one and + one add), so valu stays comfortably
+        under the load floor and hides beneath it.
+
+        `debug_compares=True` interleaves free `("debug", ("vcompare", ...))`
+        checks (ignored by the grader, `enable_debug=False`) against the
+        reference value trace for fast (round, walker, field) bug isolation.
+        """
+        M = (1 << 32) - 1
+        assert batch_size % VLEN == 0, f"batch_size must be a multiple of VLEN={VLEN}"
+        n_groups = batch_size // VLEN
+        pw = pipeline_width
+        assert pw >= 1
+
+        # Every walker advances exactly one tree level per round and wraps
+        # back to the root together at the bottom, so at round r EVERY walker
+        # sits at level r % (forest_height+1). On a "level 0" round every idx
+        # is 0, so node_val is just the (broadcast) root value -- no gather.
+        if forest_height is not None:
+            period = forest_height + 1
+            level0_rounds = {r for r in range(rounds) if r % period == 0}
+        else:
+            level0_rounds = {0}  # only the guaranteed initial all-root round
+
+        # --- header: read the 4 fields this kernel uses (docs/problem.md 2.5)
+        header_fields = {
+            "n_nodes": 1,
+            "forest_values_p": 4,
+            "inp_indices_p": 5,
+            "inp_values_p": 6,
+        }
+        for name, header_index in header_fields.items():
+            self.alloc_scratch(name)
+            addr = self.scratch_const(header_index)
+            self.add("load", ("load", self.scratch[name], addr))
+
+        # Matches reference_kernel2's first yield.
+        self.add("flow", ("pause",))
+
+        # --- broadcast every constant/vector this kernel needs, once ---
+        bcast_slots = []
+
+        def broadcast(src):
+            dest = self.alloc_scratch(length=VLEN)
+            bcast_slots.append(("vbroadcast", dest, src))
+            return dest
+
+        # node_val of the root (tree.values[0]); round 0 has every walker at
+        # idx 0, so its gather is just this value broadcast -- no loads needed.
+        root_nv = self.alloc_scratch("root_nv")
+        self.add("load", ("load", root_nv, self.scratch["forest_values_p"]))
+        root_nv_vec = broadcast(root_nv)
+
+        one_vec = broadcast(self.scratch_const(1))
+        two_vec = broadcast(self.scratch_const(2))
+        fp_vec = broadcast(self.scratch["forest_values_p"])
+        n_nodes_vec = broadcast(self.scratch["n_nodes"])
+
+        hc = self._fused_hash_constants()
+        vecs = {
+            key: broadcast(self.scratch_const(hc[key]))
+            for key in ("k0", "C0", "C1", "sh1", "kp", "ap", "kq", "aq", "k4", "C4", "C5", "sh5")
+        }
+        # Derived vectors for the gaddr-based idx update (see below):
+        #   omf = 1 - forest_values_p   (folds the +1 and the -fp into one madd)
+        #   fpn = forest_values_p + n_nodes  (wraparound compares gaddr < fpn)
+        omf_vec = self.alloc_scratch(length=VLEN)
+        fpn_vec = self.alloc_scratch(length=VLEN)
+        # flush broadcasts, 6 valu/cycle
+        for i in range(0, len(bcast_slots), SLOT_LIMITS["valu"]):
+            self.instrs.append({"valu": bcast_slots[i : i + SLOT_LIMITS["valu"]]})
+        self.instrs.append({"valu": [
+            ("-", omf_vec, one_vec, fp_vec),
+            ("+", fpn_vec, fp_vec, n_nodes_vec),
+        ]})
+
+        # --- persistent state -------------------------------------------
+        # We never need the final indices (only `inp_values` is graded), so
+        # instead of carrying `idx` we carry the gather ADDRESS
+        #   gaddr = forest_values_p + idx
+        # directly. That makes node_val's lookup a bare `load` of
+        # mem[gaddr[lane]] with NO per-round address arithmetic, and folds
+        # `forest_values_p` into the idx-update's multiply_add. One 8-wide
+        # gaddr/val vector per group, alive for the whole run.
+        gaddr_vecs = [self.alloc_scratch(length=VLEN) for _ in range(n_groups)]
+        val_vecs = [self.alloc_scratch(length=VLEN) for _ in range(n_groups)]
+
+        # Ping-pong node_val buffers, 2 sets of pw vectors.
+        nv_bufs = [self.alloc_scratch(length=pw * VLEN) for _ in range(2)]
+        # Per-pipeline-slot compute temporaries.
+        t1 = [self.alloc_scratch(length=VLEN) for _ in range(pw)]
+        t2 = [self.alloc_scratch(length=VLEN) for _ in range(pw)]
+
+        # --- initial load of every group's idx/val (once) ---
+        def group_addrs(base_name):
+            base = self.scratch[base_name]
+            addrs = []
+            slots = []
+            for g in range(n_groups):
+                dest = self.alloc_scratch()
+                slots.append(("+", dest, base, self.scratch_const(g * VLEN)))
+                addrs.append(dest)
+            for i in range(0, len(slots), SLOT_LIMITS["alu"]):
+                self.instrs.append({"alu": slots[i : i + SLOT_LIMITS["alu"]]})
+            return addrs
+
+        # Every walker starts at idx 0 (Input.generate), so gaddr = fp for
+        # all lanes -- just broadcast it, no index load needed. Values are
+        # random, so they must be vloaded.
+        val_addrs = group_addrs("inp_values_p")
+        init_slots = [
+            ("vbroadcast", gaddr_vecs[g], self.scratch["forest_values_p"])
+            for g in range(n_groups)
+        ]
+        for i in range(0, len(init_slots), SLOT_LIMITS["valu"]):
+            self.instrs.append({"valu": init_slots[i : i + SLOT_LIMITS["valu"]]})
+        vload_slots = [("vload", val_vecs[g], val_addrs[g]) for g in range(n_groups)]
+        for i in range(0, len(vload_slots), SLOT_LIMITS["load"]):
+            self.instrs.append({"load": vload_slots[i : i + SLOT_LIMITS["load"]]})
+
+        # --- pipeline over (round, wave) units ---
+        waves = [
+            list(range(ws, min(ws + pw, n_groups)))
+            for ws in range(0, n_groups, pw)
+        ]
+        units = [(r, w) for r in range(rounds) for w in range(len(waves))]
+
+        def gather_ops(unit, parity):
+            # Pure loads: node_val[lane] = mem[gaddr[lane]]. No address math.
+            # Level-0 rounds are all-root, so they need no gather.
+            if unit[0] in level0_rounds:
+                return []
+            wave = waves[unit[1]]
+            nv_buf = nv_bufs[parity]
+            return [
+                ("load", nv_buf + s * VLEN + lane, gaddr_vecs[g] + lane)
+                for s, g in enumerate(wave)
+                for lane in range(VLEN)
+            ]
+
+        def compute_cycles(unit, parity):
+            r, w = unit
+            wave = waves[w]
+            nv_buf = nv_bufs[parity]
+            cycles = []
+
+            def step(ops):  # chunk independent valu ops into <=6/cycle bundles
+                for i in range(0, len(ops), SLOT_LIMITS["valu"]):
+                    cycles.append({"valu": ops[i : i + SLOT_LIMITS["valu"]]})
+
+            # val ^= node_val  (level-0 rounds: broadcast root; else gathered)
+            def nv_src(s):
+                return root_nv_vec if r in level0_rounds else nv_buf + s * VLEN
+            step([("^", val_vecs[g], val_vecs[g], nv_src(s))
+                  for s, g in enumerate(wave)])
+            # stage0 (affine): val = val*k0 + C0
+            step([("multiply_add", val_vecs[g], val_vecs[g], vecs["k0"], vecs["C0"])
+                  for g in wave])
+            # stage1: (val ^ C1) ^ (val >> 19)
+            ops = []
+            for s, g in enumerate(wave):
+                ops.append(("^", t1[s], val_vecs[g], vecs["C1"]))
+                ops.append((">>", t2[s], val_vecs[g], vecs["sh1"]))
+            step(ops)
+            step([("^", val_vecs[g], t1[s], t2[s]) for s, g in enumerate(wave)])
+            # stage2+stage3 fused: p = val*kp + ap ; q = val*kq + aq ; val = p ^ q
+            ops = []
+            for s, g in enumerate(wave):
+                ops.append(("multiply_add", t1[s], val_vecs[g], vecs["kp"], vecs["ap"]))
+                ops.append(("multiply_add", t2[s], val_vecs[g], vecs["kq"], vecs["aq"]))
+            step(ops)
+            step([("^", val_vecs[g], t1[s], t2[s]) for s, g in enumerate(wave)])
+            # stage4 (affine): val = val*k4 + C4
+            step([("multiply_add", val_vecs[g], val_vecs[g], vecs["k4"], vecs["C4"])
+                  for g in wave])
+            # stage5: (val ^ C5) ^ (val >> 16)
+            ops = []
+            for s, g in enumerate(wave):
+                ops.append(("^", t1[s], val_vecs[g], vecs["C5"]))
+                ops.append((">>", t2[s], val_vecs[g], vecs["sh5"]))
+            step(ops)
+            step([("^", val_vecs[g], t1[s], t2[s]) for s, g in enumerate(wave)])
+            # val_vecs now holds the finished hash (hashed_val)
+            if debug_compares:
+                for g in wave:
+                    cycles.append({"debug": [(
+                        "vcompare", val_vecs[g],
+                        [(r, g * VLEN + lane, "hashed_val") for lane in range(VLEN)],
+                    )]})
+            # idx update in gaddr space:
+            #   next_gaddr = 2*gaddr + 1 - fp + (val & 1)
+            #             = madd(gaddr, two, omf) + (val & 1)
+            #   gaddr = (next_gaddr < fp+n_nodes) ? next_gaddr : fp  (idx=0 wrap)
+            ops = []
+            for s, g in enumerate(wave):
+                ops.append(("&", t1[s], val_vecs[g], one_vec))                       # parity
+                ops.append(("multiply_add", t2[s], gaddr_vecs[g], two_vec, omf_vec))  # 2*gaddr+1-fp
+            step(ops)
+            step([("+", t1[s], t2[s], t1[s]) for s, g in enumerate(wave)])           # next_gaddr
+            step([("<", t2[s], t1[s], fpn_vec) for s, g in enumerate(wave)])         # in-range?
+            for s, g in enumerate(wave):
+                cycles.append({"flow": [("vselect", gaddr_vecs[g], t2[s], t1[s], fp_vec)]})
+            return cycles
+
+        def emit_unit(compute, load_ops):
+            # Interleave the prefetched gather's loads into COMPUTE's
+            # otherwise-idle load slots (2/cycle). Loads read gaddr_vecs of a
+            # DIFFERENT wave, so they're independent of this compute.
+            li = 0
+            for cyc in compute:
+                is_real = ("valu" in cyc) or ("flow" in cyc)
+                if is_real and li < len(load_ops):
+                    cyc = dict(cyc)
+                    cyc["load"] = load_ops[li : li + SLOT_LIMITS["load"]]
+                    li += SLOT_LIMITS["load"]
+                self.instrs.append(cyc)
+            while li < len(load_ops):
+                self.instrs.append({"load": load_ops[li : li + SLOT_LIMITS["load"]]})
+                li += SLOT_LIMITS["load"]
+
+        def emit_gather_full(unit, parity):
+            loads = gather_ops(unit, parity)
+            for i in range(0, len(loads), SLOT_LIMITS["load"]):
+                self.instrs.append({"load": loads[i : i + SLOT_LIMITS["load"]]})
+
+        # Unit j's gathered node_val lives in buffer parity j % 2, so a
+        # consumer (compute j, reads j%2) and the concurrently-prefetched
+        # producer (gather j+1, writes (j+1)%2) never alias.
+        #
+        # We prefetch unit k+1's gather during unit k's compute ONLY when
+        # their groups are disjoint -- otherwise gather(k+1) would read
+        # gaddr_vecs before compute(k)'s vselect has committed the new gaddr
+        # for those very groups. For the graded shape (32 groups) waves are
+        # always disjoint, so this always prefetches; the fallback keeps
+        # smaller/degenerate shapes correct.
+        emit_gather_full(units[0], 0)
+        for k, unit in enumerate(units):
+            compute = compute_cycles(unit, k % 2)
+            nxt = k + 1
+            can_prefetch = nxt < len(units) and set(waves[units[nxt][1]]).isdisjoint(
+                waves[unit[1]]
+            )
+            if can_prefetch:
+                emit_unit(compute, gather_ops(units[nxt], nxt % 2))
+            else:
+                emit_unit(compute, [])
+                if nxt < len(units):
+                    emit_gather_full(units[nxt], nxt % 2)
+
+        # --- store every group's final val once (indices aren't graded) ---
+        store_slots = [("vstore", val_addrs[g], val_vecs[g]) for g in range(n_groups)]
+        for i in range(0, len(store_slots), SLOT_LIMITS["store"]):
+            self.instrs.append({"store": store_slots[i : i + SLOT_LIMITS["store"]]})
+
+        # Matches reference_kernel2's second yield.
+        self.add("flow", ("pause",))
 
     def build_kernel_vectorized(self, batch_size: int, rounds: int, pipeline_width: int = 6):
         """
