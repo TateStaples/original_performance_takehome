@@ -220,7 +220,9 @@ class KernelBuilder:
             and batch_size % VLEN == 0
             and rounds >= 1
         ):
-            self.build_kernel_scheduled(batch_size, rounds, forest_height)
+            self.build_kernel_scheduled(
+                batch_size, rounds, forest_height, tournament_levels=(1,)
+            )
         else:
             self.build_kernel_pipelined(
                 batch_size, rounds, forest_height=forest_height, pipeline_width=16
