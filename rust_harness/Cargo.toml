@@ -15,6 +15,10 @@ path = "src/bin/gen_kernel.rs"
 name = "simulate"
 path = "src/bin/simulate.rs"
 
+[[bin]]
+name = "stats"
+path = "src/bin/stats.rs"
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

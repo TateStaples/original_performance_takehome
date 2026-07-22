@@ -129,11 +129,21 @@ pub struct AluSlot {
 #[derive(Copy, Clone, Debug, Serialize, Deserialize)]
 pub enum ValuSlot {
     /// Lanewise `alu` op over 8 contiguous elements.
-    Op { op: AluOp, dest: Scratch, a1: Scratch, a2: Scratch },
+    Op {
+        op: AluOp,
+        dest: Scratch,
+        a1: Scratch,
+        a2: Scratch,
+    },
     /// Splat a scalar into all 8 lanes.
     Broadcast { dest: Scratch, src: Scratch },
     /// Fused multiply-add, lanewise: `dest[i] = a[i]*b[i] + c[i]`.
-    MultiplyAdd { dest: Scratch, a: Scratch, b: Scratch, c: Scratch },
+    MultiplyAdd {
+        dest: Scratch,
+        a: Scratch,
+        b: Scratch,
+        c: Scratch,
+    },
 }
 
 /// One `load` engine slot.
@@ -143,7 +153,11 @@ pub enum LoadSlot {
     Load { dest: Scratch, addr: Scratch },
     /// `dest+offset = mem[scratch[addr+offset]]` — for treating a vector
     /// dest/addr pair as one block while indexing lanes individually.
-    LoadOffset { dest: Scratch, addr: Scratch, offset: u16 },
+    LoadOffset {
+        dest: Scratch,
+        addr: Scratch,
+        offset: u16,
+    },
     /// `dest[0..VLEN] = mem[scratch[addr] .. +VLEN]` (`addr` is scalar).
     VLoad { dest: Scratch, addr: Scratch },
     /// `dest = val` — the only way to get a literal into scratch.
@@ -164,22 +178,50 @@ pub enum StoreSlot {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum FlowSlot {
     /// `dest = a if cond != 0 else b` — branchless scalar mux.
-    Select { dest: Scratch, cond: Scratch, a: Scratch, b: Scratch },
+    Select {
+        dest: Scratch,
+        cond: Scratch,
+        a: Scratch,
+        b: Scratch,
+    },
     /// Same, 8-wide lanewise.
-    VSelect { dest: Scratch, cond: Scratch, a: Scratch, b: Scratch },
+    VSelect {
+        dest: Scratch,
+        cond: Scratch,
+        a: Scratch,
+        b: Scratch,
+    },
     /// `dest = a + imm` — add a literal without a separate `const` load.
-    AddImm { dest: Scratch, a: Scratch, imm: u32 },
+    AddImm {
+        dest: Scratch,
+        a: Scratch,
+        imm: u32,
+    },
     Halt,
     /// Pause this core (used to sync with a reference kernel's `yield`
     /// points for step-by-step debugging).
     Pause,
-    TraceWrite { val: Scratch },
-    Jump { addr: usize },
+    TraceWrite {
+        val: Scratch,
+    },
+    Jump {
+        addr: usize,
+    },
     /// Computed jump: `pc = scratch[addr]`.
-    JumpIndirect { addr: Scratch },
-    CondJump { cond: Scratch, addr: usize },
-    CondJumpRel { cond: Scratch, offset: isize },
-    CoreId { dest: Scratch },
+    JumpIndirect {
+        addr: Scratch,
+    },
+    CondJump {
+        cond: Scratch,
+        addr: usize,
+    },
+    CondJumpRel {
+        cond: Scratch,
+        offset: isize,
+    },
+    CoreId {
+        dest: Scratch,
+    },
 }
 
 /// One `debug` engine slot. Free (never advances the cycle counter) and
@@ -219,7 +261,11 @@ pub struct CapacityError {
 
 impl std::fmt::Display for CapacityError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} engine is full (limit {} slots/cycle)", self.engine, self.limit)
+        write!(
+            f,
+            "{} engine is full (limit {} slots/cycle)",
+            self.engine, self.limit
+        )
     }
 }
 impl std::error::Error for CapacityError {}
@@ -251,7 +297,10 @@ impl Bundle {
         macro_rules! check {
             ($field:expr, $name:expr, $limit:expr) => {
                 if $field.len() > $limit {
-                    return Err(CapacityError { engine: $name, limit: $limit });
+                    return Err(CapacityError {
+                        engine: $name,
+                        limit: $limit,
+                    });
                 }
             };
         }
@@ -266,42 +315,60 @@ impl Bundle {
 
     pub fn push_alu(&mut self, slot: AluSlot) -> Result<(), CapacityError> {
         if self.alu.len() >= slot_limits::ALU {
-            return Err(CapacityError { engine: "alu", limit: slot_limits::ALU });
+            return Err(CapacityError {
+                engine: "alu",
+                limit: slot_limits::ALU,
+            });
         }
         self.alu.push(slot);
         Ok(())
     }
     pub fn push_valu(&mut self, slot: ValuSlot) -> Result<(), CapacityError> {
         if self.valu.len() >= slot_limits::VALU {
-            return Err(CapacityError { engine: "valu", limit: slot_limits::VALU });
+            return Err(CapacityError {
+                engine: "valu",
+                limit: slot_limits::VALU,
+            });
         }
         self.valu.push(slot);
         Ok(())
     }
     pub fn push_load(&mut self, slot: LoadSlot) -> Result<(), CapacityError> {
         if self.load.len() >= slot_limits::LOAD {
-            return Err(CapacityError { engine: "load", limit: slot_limits::LOAD });
+            return Err(CapacityError {
+                engine: "load",
+                limit: slot_limits::LOAD,
+            });
         }
         self.load.push(slot);
         Ok(())
     }
     pub fn push_store(&mut self, slot: StoreSlot) -> Result<(), CapacityError> {
         if self.store.len() >= slot_limits::STORE {
-            return Err(CapacityError { engine: "store", limit: slot_limits::STORE });
+            return Err(CapacityError {
+                engine: "store",
+                limit: slot_limits::STORE,
+            });
         }
         self.store.push(slot);
         Ok(())
     }
     pub fn push_flow(&mut self, slot: FlowSlot) -> Result<(), CapacityError> {
         if self.flow.len() >= slot_limits::FLOW {
-            return Err(CapacityError { engine: "flow", limit: slot_limits::FLOW });
+            return Err(CapacityError {
+                engine: "flow",
+                limit: slot_limits::FLOW,
+            });
         }
         self.flow.push(slot);
         Ok(())
     }
     pub fn push_debug(&mut self, slot: DebugSlot) -> Result<(), CapacityError> {
         if self.debug.len() >= slot_limits::DEBUG {
-            return Err(CapacityError { engine: "debug", limit: slot_limits::DEBUG });
+            return Err(CapacityError {
+                engine: "debug",
+                limit: slot_limits::DEBUG,
+            });
         }
         self.debug.push(slot);
         Ok(())

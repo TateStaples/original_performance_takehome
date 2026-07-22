@@ -3,7 +3,10 @@
 //! cross-validated (see `tests/matches_python_baseline.rs`) starting point
 //! to optimize from using the typed API instead of hand-written tuples.
 
-use crate::isa::{AluOp, AluSlot, Bundle, CapacityError, DebugSlot, FlowSlot, LoadSlot, Program, Scratch, StoreSlot};
+use crate::isa::{
+    AluOp, AluSlot, Bundle, CapacityError, DebugSlot, FlowSlot, LoadSlot, Program, Scratch,
+    StoreSlot,
+};
 use crate::problem::HASH_STAGES;
 use std::collections::HashMap;
 
@@ -67,19 +70,34 @@ impl Builder {
     // --- single-slot-per-bundle helpers (mirrors KernelBuilder.add/build) ---
 
     pub fn push_alu_single(&mut self, slot: AluSlot) {
-        self.program.push(Bundle { alu: vec![slot], ..Default::default() });
+        self.program.push(Bundle {
+            alu: vec![slot],
+            ..Default::default()
+        });
     }
     pub fn push_load_single(&mut self, slot: LoadSlot) {
-        self.program.push(Bundle { load: vec![slot], ..Default::default() });
+        self.program.push(Bundle {
+            load: vec![slot],
+            ..Default::default()
+        });
     }
     pub fn push_store_single(&mut self, slot: StoreSlot) {
-        self.program.push(Bundle { store: vec![slot], ..Default::default() });
+        self.program.push(Bundle {
+            store: vec![slot],
+            ..Default::default()
+        });
     }
     pub fn push_flow_single(&mut self, slot: FlowSlot) {
-        self.program.push(Bundle { flow: vec![slot], ..Default::default() });
+        self.program.push(Bundle {
+            flow: vec![slot],
+            ..Default::default()
+        });
     }
     pub fn push_debug_single(&mut self, slot: DebugSlot) {
-        self.program.push(Bundle { debug: vec![slot], ..Default::default() });
+        self.program.push(Bundle {
+            debug: vec![slot],
+            ..Default::default()
+        });
     }
 
     /// Push a hand-packed bundle (multiple slots, possibly across several
@@ -102,13 +120,35 @@ impl Default for Builder {
 /// Port of `KernelBuilder.build_hash`: emits the 6 `myhash` stages as
 /// scalar `alu` ops (plus matching `debug::Compare`s), each stage being
 /// `val = (val OP1 val1) OP2 (val OP3 val3)`.
-pub fn build_hash(b: &mut Builder, val_addr: Scratch, tmp1: Scratch, tmp2: Scratch, round: u32, i: u32) {
+pub fn build_hash(
+    b: &mut Builder,
+    val_addr: Scratch,
+    tmp1: Scratch,
+    tmp2: Scratch,
+    round: u32,
+    i: u32,
+) {
     for (hi, &(op1, val1, op2, op3, val3)) in HASH_STAGES.iter().enumerate() {
         let c1 = b.scratch_const(val1);
         let c3 = b.scratch_const(val3);
-        b.push_alu_single(AluSlot { op: op1, dest: tmp1, a1: val_addr, a2: c1 });
-        b.push_alu_single(AluSlot { op: op3, dest: tmp2, a1: val_addr, a2: c3 });
-        b.push_alu_single(AluSlot { op: op2, dest: val_addr, a1: tmp1, a2: tmp2 });
+        b.push_alu_single(AluSlot {
+            op: op1,
+            dest: tmp1,
+            a1: val_addr,
+            a2: c1,
+        });
+        b.push_alu_single(AluSlot {
+            op: op3,
+            dest: tmp2,
+            a1: val_addr,
+            a2: c3,
+        });
+        b.push_alu_single(AluSlot {
+            op: op2,
+            dest: val_addr,
+            a1: tmp1,
+            a2: tmp2,
+        });
         b.push_debug_single(DebugSlot::Compare {
             loc: val_addr,
             key: format!("{round}|{i}|hash_stage|{hi}"),
@@ -126,7 +166,12 @@ pub fn build_hash(b: &mut Builder, val_addr: Scratch, tmp1: Scratch, tmp2: Scrat
 /// This is meant to be forked, not called directly forever: it's the
 /// cross-validated (see the `matches_python_baseline` integration test)
 /// starting point to optimize from with the typed API in this module.
-pub fn build_kernel_naive(_forest_height: u32, _n_nodes: u32, batch_size: u32, rounds: u32) -> Program {
+pub fn build_kernel_naive(
+    _forest_height: u32,
+    _n_nodes: u32,
+    batch_size: u32,
+    rounds: u32,
+) -> Program {
     let mut b = Builder::new();
 
     let tmp1 = b.alloc_named("tmp1", 1);
@@ -149,8 +194,14 @@ pub fn build_kernel_naive(_forest_height: u32, _n_nodes: u32, batch_size: u32, r
         b.alloc_named(name, 1);
     }
     for (i, name) in init_vars.iter().enumerate() {
-        b.push_load_single(LoadSlot::Const { dest: tmp1, val: i as u32 });
-        b.push_load_single(LoadSlot::Load { dest: b.named(name), addr: tmp1 });
+        b.push_load_single(LoadSlot::Const {
+            dest: tmp1,
+            val: i as u32,
+        });
+        b.push_load_single(LoadSlot::Load {
+            dest: b.named(name),
+            addr: tmp1,
+        });
     }
 
     let zero_const = b.scratch_const(0);
@@ -160,7 +211,9 @@ pub fn build_kernel_naive(_forest_height: u32, _n_nodes: u32, batch_size: u32, r
     // Matches reference_kernel2's first `yield` (right after the header is
     // conceptually available) — see docs/problem.md §4.
     b.push_flow_single(FlowSlot::Pause);
-    b.push_debug_single(DebugSlot::Comment { text: "Starting loop".into() });
+    b.push_debug_single(DebugSlot::Comment {
+        text: "Starting loop".into(),
+    });
 
     let tmp_idx = b.alloc_named("tmp_idx", 1);
     let tmp_val = b.alloc_named("tmp_val", 1);
@@ -177,45 +230,143 @@ pub fn build_kernel_naive(_forest_height: u32, _n_nodes: u32, batch_size: u32, r
             let i_const = b.scratch_const(i);
 
             // idx = mem[inp_indices_p + i]
-            b.push_alu_single(AluSlot { op: AluOp::Add, dest: tmp_addr, a1: inp_indices_p, a2: i_const });
-            b.push_load_single(LoadSlot::Load { dest: tmp_idx, addr: tmp_addr });
-            b.push_debug_single(DebugSlot::Compare { loc: tmp_idx, key: format!("{round}|{i}|idx") });
+            b.push_alu_single(AluSlot {
+                op: AluOp::Add,
+                dest: tmp_addr,
+                a1: inp_indices_p,
+                a2: i_const,
+            });
+            b.push_load_single(LoadSlot::Load {
+                dest: tmp_idx,
+                addr: tmp_addr,
+            });
+            b.push_debug_single(DebugSlot::Compare {
+                loc: tmp_idx,
+                key: format!("{round}|{i}|idx"),
+            });
 
             // val = mem[inp_values_p + i]
-            b.push_alu_single(AluSlot { op: AluOp::Add, dest: tmp_addr, a1: inp_values_p, a2: i_const });
-            b.push_load_single(LoadSlot::Load { dest: tmp_val, addr: tmp_addr });
-            b.push_debug_single(DebugSlot::Compare { loc: tmp_val, key: format!("{round}|{i}|val") });
+            b.push_alu_single(AluSlot {
+                op: AluOp::Add,
+                dest: tmp_addr,
+                a1: inp_values_p,
+                a2: i_const,
+            });
+            b.push_load_single(LoadSlot::Load {
+                dest: tmp_val,
+                addr: tmp_addr,
+            });
+            b.push_debug_single(DebugSlot::Compare {
+                loc: tmp_val,
+                key: format!("{round}|{i}|val"),
+            });
 
             // node_val = mem[forest_values_p + idx]
-            b.push_alu_single(AluSlot { op: AluOp::Add, dest: tmp_addr, a1: forest_values_p, a2: tmp_idx });
-            b.push_load_single(LoadSlot::Load { dest: tmp_node_val, addr: tmp_addr });
-            b.push_debug_single(DebugSlot::Compare { loc: tmp_node_val, key: format!("{round}|{i}|node_val") });
+            b.push_alu_single(AluSlot {
+                op: AluOp::Add,
+                dest: tmp_addr,
+                a1: forest_values_p,
+                a2: tmp_idx,
+            });
+            b.push_load_single(LoadSlot::Load {
+                dest: tmp_node_val,
+                addr: tmp_addr,
+            });
+            b.push_debug_single(DebugSlot::Compare {
+                loc: tmp_node_val,
+                key: format!("{round}|{i}|node_val"),
+            });
 
             // val = myhash(val ^ node_val)
-            b.push_alu_single(AluSlot { op: AluOp::Xor, dest: tmp_val, a1: tmp_val, a2: tmp_node_val });
+            b.push_alu_single(AluSlot {
+                op: AluOp::Xor,
+                dest: tmp_val,
+                a1: tmp_val,
+                a2: tmp_node_val,
+            });
             build_hash(&mut b, tmp_val, tmp1, tmp2, round, i);
-            b.push_debug_single(DebugSlot::Compare { loc: tmp_val, key: format!("{round}|{i}|hashed_val") });
+            b.push_debug_single(DebugSlot::Compare {
+                loc: tmp_val,
+                key: format!("{round}|{i}|hashed_val"),
+            });
 
             // idx = 2*idx + (1 if val % 2 == 0 else 2)
-            b.push_alu_single(AluSlot { op: AluOp::Mod, dest: tmp1, a1: tmp_val, a2: two_const });
-            b.push_alu_single(AluSlot { op: AluOp::Eq, dest: tmp1, a1: tmp1, a2: zero_const });
-            b.push_flow_single(FlowSlot::Select { dest: tmp3, cond: tmp1, a: one_const, b: two_const });
-            b.push_alu_single(AluSlot { op: AluOp::Mul, dest: tmp_idx, a1: tmp_idx, a2: two_const });
-            b.push_alu_single(AluSlot { op: AluOp::Add, dest: tmp_idx, a1: tmp_idx, a2: tmp3 });
-            b.push_debug_single(DebugSlot::Compare { loc: tmp_idx, key: format!("{round}|{i}|next_idx") });
+            b.push_alu_single(AluSlot {
+                op: AluOp::Mod,
+                dest: tmp1,
+                a1: tmp_val,
+                a2: two_const,
+            });
+            b.push_alu_single(AluSlot {
+                op: AluOp::Eq,
+                dest: tmp1,
+                a1: tmp1,
+                a2: zero_const,
+            });
+            b.push_flow_single(FlowSlot::Select {
+                dest: tmp3,
+                cond: tmp1,
+                a: one_const,
+                b: two_const,
+            });
+            b.push_alu_single(AluSlot {
+                op: AluOp::Mul,
+                dest: tmp_idx,
+                a1: tmp_idx,
+                a2: two_const,
+            });
+            b.push_alu_single(AluSlot {
+                op: AluOp::Add,
+                dest: tmp_idx,
+                a1: tmp_idx,
+                a2: tmp3,
+            });
+            b.push_debug_single(DebugSlot::Compare {
+                loc: tmp_idx,
+                key: format!("{round}|{i}|next_idx"),
+            });
 
             // idx = 0 if idx >= n_nodes else idx
-            b.push_alu_single(AluSlot { op: AluOp::Lt, dest: tmp1, a1: tmp_idx, a2: n_nodes_rt });
-            b.push_flow_single(FlowSlot::Select { dest: tmp_idx, cond: tmp1, a: tmp_idx, b: zero_const });
-            b.push_debug_single(DebugSlot::Compare { loc: tmp_idx, key: format!("{round}|{i}|wrapped_idx") });
+            b.push_alu_single(AluSlot {
+                op: AluOp::Lt,
+                dest: tmp1,
+                a1: tmp_idx,
+                a2: n_nodes_rt,
+            });
+            b.push_flow_single(FlowSlot::Select {
+                dest: tmp_idx,
+                cond: tmp1,
+                a: tmp_idx,
+                b: zero_const,
+            });
+            b.push_debug_single(DebugSlot::Compare {
+                loc: tmp_idx,
+                key: format!("{round}|{i}|wrapped_idx"),
+            });
 
             // mem[inp_indices_p + i] = idx
-            b.push_alu_single(AluSlot { op: AluOp::Add, dest: tmp_addr, a1: inp_indices_p, a2: i_const });
-            b.push_store_single(StoreSlot::Store { addr: tmp_addr, src: tmp_idx });
+            b.push_alu_single(AluSlot {
+                op: AluOp::Add,
+                dest: tmp_addr,
+                a1: inp_indices_p,
+                a2: i_const,
+            });
+            b.push_store_single(StoreSlot::Store {
+                addr: tmp_addr,
+                src: tmp_idx,
+            });
 
             // mem[inp_values_p + i] = val
-            b.push_alu_single(AluSlot { op: AluOp::Add, dest: tmp_addr, a1: inp_values_p, a2: i_const });
-            b.push_store_single(StoreSlot::Store { addr: tmp_addr, src: tmp_val });
+            b.push_alu_single(AluSlot {
+                op: AluOp::Add,
+                dest: tmp_addr,
+                a1: inp_values_p,
+                a2: i_const,
+            });
+            b.push_store_single(StoreSlot::Store {
+                addr: tmp_addr,
+                src: tmp_val,
+            });
         }
     }
 

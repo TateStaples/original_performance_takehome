@@ -50,7 +50,9 @@ fn valu_slot_json(s: &ValuSlot) -> Value {
 fn load_slot_json(s: &LoadSlot) -> Value {
     match s {
         LoadSlot::Load { dest, addr } => json!(["load", dest.0, addr.0]),
-        LoadSlot::LoadOffset { dest, addr, offset } => json!(["load_offset", dest.0, addr.0, offset]),
+        LoadSlot::LoadOffset { dest, addr, offset } => {
+            json!(["load_offset", dest.0, addr.0, offset])
+        }
         LoadSlot::VLoad { dest, addr } => json!(["vload", dest.0, addr.0]),
         LoadSlot::Const { dest, val } => json!(["const", dest.0, val]),
     }
@@ -82,19 +84,34 @@ fn flow_slot_json(s: &FlowSlot) -> Value {
 pub fn bundle_to_python_json(b: &Bundle) -> Value {
     let mut map = Map::new();
     if !b.alu.is_empty() {
-        map.insert("alu".into(), Value::Array(b.alu.iter().map(alu_slot_json).collect()));
+        map.insert(
+            "alu".into(),
+            Value::Array(b.alu.iter().map(alu_slot_json).collect()),
+        );
     }
     if !b.valu.is_empty() {
-        map.insert("valu".into(), Value::Array(b.valu.iter().map(valu_slot_json).collect()));
+        map.insert(
+            "valu".into(),
+            Value::Array(b.valu.iter().map(valu_slot_json).collect()),
+        );
     }
     if !b.load.is_empty() {
-        map.insert("load".into(), Value::Array(b.load.iter().map(load_slot_json).collect()));
+        map.insert(
+            "load".into(),
+            Value::Array(b.load.iter().map(load_slot_json).collect()),
+        );
     }
     if !b.store.is_empty() {
-        map.insert("store".into(), Value::Array(b.store.iter().map(store_slot_json).collect()));
+        map.insert(
+            "store".into(),
+            Value::Array(b.store.iter().map(store_slot_json).collect()),
+        );
     }
     if !b.flow.is_empty() {
-        map.insert("flow".into(), Value::Array(b.flow.iter().map(flow_slot_json).collect()));
+        map.insert(
+            "flow".into(),
+            Value::Array(b.flow.iter().map(flow_slot_json).collect()),
+        );
     }
     Value::Object(map)
 }

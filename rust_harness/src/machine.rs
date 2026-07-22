@@ -8,7 +8,9 @@
 //! property of this version of the take-home (see `docs/problem.md`), so
 //! there's no value in carrying Python's now-vestigial multi-core loop.
 
-use crate::isa::{AluSlot, Bundle, DebugSlot, FlowSlot, LoadSlot, Program, StoreSlot, ValuSlot, VLEN};
+use crate::isa::{
+    AluSlot, Bundle, DebugSlot, FlowSlot, LoadSlot, Program, StoreSlot, ValuSlot, VLEN,
+};
 use std::collections::HashMap;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]

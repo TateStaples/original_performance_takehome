@@ -9,3 +9,5 @@ pub mod fixtures;
 pub mod isa;
 pub mod machine;
 pub mod problem;
+pub mod stats;
+pub mod vectorized;
