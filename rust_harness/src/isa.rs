@@ -77,7 +77,13 @@ impl AluOp {
         match self {
             AluOp::Add => wrap(a as i64 + b as i64),
             AluOp::Sub => wrap(a as i64 - b as i64),
-            AluOp::Mul => wrap(a as i64 * b as i64),
+            // u32*u32 can reach ~2^64, which overflows the i64 `wrap` helper
+            // (panics in debug). Python's arbitrary-precision `(a*b) % 2**32`
+            // never does; `wrapping_mul` keeps the low 32 bits and is
+            // bit-identical to that. The real hash only ever multiplies by
+            // small constants, but the minimality search in problem.rs probes
+            // large*large, so this must be overflow-safe.
+            AluOp::Mul => a.wrapping_mul(b),
             AluOp::FloorDiv => {
                 assert!(b != 0, "alu FloorDiv by zero (a={a}, b={b})");
                 a / b

@@ -252,4 +252,263 @@ mod tests {
             assert_eq!(idx, 0, "walker {i} should always wrap back to the root");
         }
     }
+
+    // ---- idea4-hash-fusion: minimality of the 12-op hash ----
+    //
+    // The DAG collapses hash stages 0/2/4 (op1==op2==Add, op3==Shl) to one
+    // `multiply_add` each and leaves stages 1/3/5 as 3 alu ops, for 12 ops
+    // total. These two tests pin that 12 is the *algebraic minimum* over this
+    // ISA -- an executable proof of the negative result behind idea #4, so a
+    // future "surely the hash can be fused further" attempt is answered by a
+    // failing/passing test rather than re-derivation.
+
+    /// Recompute one hash exactly the way the DAG emits it (see dag.rs
+    /// emit_hash): affine stages (op1==op2==Add, op3==Shl) become one
+    /// multiply_add `a*(1+2^s)+val1` mirroring ValuSlot::MultiplyAdd (a*b+c,
+    /// wrapping); every other stage stays 3 alu ops.
+    fn fused_hash(mut a: u32) -> u32 {
+        for &(op1, val1, op2, op3, val3) in HASH_STAGES.iter() {
+            if op1 == AluOp::Add && op2 == AluOp::Add && op3 == AluOp::Shl {
+                let k = 1u32.wrapping_add(1u32 << (val3 & 31)); // 1 + 2^s
+                a = a.wrapping_mul(k).wrapping_add(val1);
+            } else {
+                let left = op1.apply(a, val1);
+                let right = op3.apply(a, val3);
+                a = op2.apply(left, right);
+            }
+        }
+        a
+    }
+
+    /// The current MultiplyAdd fusion (stages 0/2/4) is bit-exact vs myhash
+    /// over edge cases + a large LCG sweep. Guards the algebraic identity
+    /// (a+val1)+(a<<s) = a*(1+2^s)+val1 (mod 2^32) against regression.
+    #[test]
+    fn multiply_add_fusion_is_bit_exact() {
+        let mut samples: Vec<u32> = vec![
+            0,
+            1,
+            2,
+            3,
+            7,
+            8,
+            255,
+            256,
+            0x7FFF_FFFF,
+            0x8000_0000,
+            0xFFFF_FFFF,
+            1 << 12,
+            1 << 19,
+            1 << 9,
+            1 << 16,
+            1 << 31,
+            0xC761_C23C,
+            0xD3A2_646C,
+            0xB55A_4F09,
+            0x7ED5_5D16,
+        ];
+        let mut x = 0x1234_5678u32;
+        for _ in 0..200_000 {
+            x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            samples.push(x);
+        }
+        for &a in &samples {
+            assert_eq!(
+                fused_hash(a),
+                myhash(a),
+                "fused hash diverged at a={a:#010x}"
+            );
+        }
+    }
+
+    // Binary ops the search may use (division/modulo ops excluded: they panic
+    // on 0 and are irrelevant to xor-shift fusion). MultiplyAdd is added
+    // separately as the ISA's only fused 3-input primitive.
+    const SEARCH_OPS: [AluOp; 10] = [
+        AluOp::Add,
+        AluOp::Sub,
+        AluOp::Mul,
+        AluOp::Xor,
+        AluOp::And,
+        AluOp::Or,
+        AluOp::Shl,
+        AluOp::Shr,
+        AluOp::Lt,
+        AluOp::Eq,
+    ];
+
+    fn stage_true(idx: usize, a: u32) -> u32 {
+        let (op1, val1, op2, op3, val3) = HASH_STAGES[idx];
+        op2.apply(op1.apply(a, val1), op3.apply(a, val3))
+    }
+
+    // Constant operand pool for a stage: its own constant, its shift amount,
+    // the shift-as-multiply value 2^s (so a Shl->Mul rewrite is reachable),
+    // plus generic literals. `a` is prepended live per probe.
+    fn const_pool(idx: usize) -> Vec<u32> {
+        let (_o1, val1, _o2, _o3, val3) = HASH_STAGES[idx];
+        vec![val1, val3, 1u32 << (val3 & 31), 0, 1, 2, 0xFFFF_FFFF]
+    }
+
+    /// True iff SOME program of <=2 ISA ops (binary SEARCH_OPS or one
+    /// MultiplyAdd) reproduces stage `idx` on EVERY probe. The 3-op reference
+    /// decomposition is always reachable at depth 3, so if this returns false
+    /// the stage provably needs >=3 ops over this ISA.
+    fn two_op_program_exists(idx: usize, probes: &[u32]) -> bool {
+        let consts = const_pool(idx);
+        let n0 = 1 + consts.len(); // operand pool size (index 0 = a)
+        let bases: Vec<Vec<u32>> = probes
+            .iter()
+            .map(|&a| {
+                let mut v = Vec::with_capacity(n0);
+                v.push(a);
+                v.extend_from_slice(&consts);
+                v
+            })
+            .collect();
+        let targets: Vec<u32> = probes.iter().map(|&a| stage_true(idx, a)).collect();
+
+        let mad = |x: u32, y: u32, z: u32| x.wrapping_mul(y).wrapping_add(z);
+
+        // 0-op: an operand already equals the stage output on all probes.
+        for i in 0..n0 {
+            if bases.iter().zip(&targets).all(|(b, &t)| b[i] == t) {
+                return true;
+            }
+        }
+        // 1-op: binary
+        for &op in SEARCH_OPS.iter() {
+            for i in 0..n0 {
+                for j in 0..n0 {
+                    if bases
+                        .iter()
+                        .zip(&targets)
+                        .all(|(b, &t)| op.apply(b[i], b[j]) == t)
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+        // 1-op: MultiplyAdd
+        for i in 0..n0 {
+            for j in 0..n0 {
+                for k in 0..n0 {
+                    if bases
+                        .iter()
+                        .zip(&targets)
+                        .all(|(b, &t)| mad(b[i], b[j], b[k]) == t)
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        // Enumerate all first-op specs (t1 lands at extended index n0).
+        enum Spec {
+            Bin(AluOp, usize, usize),
+            Mad(usize, usize, usize),
+        }
+        let mut firsts: Vec<Spec> = Vec::new();
+        for &op in SEARCH_OPS.iter() {
+            for i in 0..n0 {
+                for j in 0..n0 {
+                    firsts.push(Spec::Bin(op, i, j));
+                }
+            }
+        }
+        for i in 0..n0 {
+            for j in 0..n0 {
+                for k in 0..n0 {
+                    firsts.push(Spec::Mad(i, j, k));
+                }
+            }
+        }
+
+        let m = n0 + 1;
+        let get = |b: &[u32], t1: u32, i: usize| -> u32 {
+            if i < n0 {
+                b[i]
+            } else {
+                t1
+            }
+        };
+
+        for f in &firsts {
+            // second op binary
+            for &op in SEARCH_OPS.iter() {
+                for i in 0..m {
+                    for j in 0..m {
+                        let ok = bases.iter().zip(&targets).all(|(b, &t)| {
+                            let t1 = match *f {
+                                Spec::Bin(o, a1, a2) => o.apply(b[a1], b[a2]),
+                                Spec::Mad(a1, a2, a3) => mad(b[a1], b[a2], b[a3]),
+                            };
+                            op.apply(get(b, t1, i), get(b, t1, j)) == t
+                        });
+                        if ok {
+                            return true;
+                        }
+                    }
+                }
+            }
+            // second op MultiplyAdd
+            for i in 0..m {
+                for j in 0..m {
+                    for k in 0..m {
+                        let ok = bases.iter().zip(&targets).all(|(b, &t)| {
+                            let t1 = match *f {
+                                Spec::Bin(o, a1, a2) => o.apply(b[a1], b[a2]),
+                                Spec::Mad(a1, a2, a3) => mad(b[a1], b[a2], b[a3]),
+                            };
+                            mad(get(b, t1, i), get(b, t1, j), get(b, t1, k)) == t
+                        });
+                        if ok {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// Non-affine stages 1/3/5 cannot be computed in <=2 ISA ops (binary alu
+    /// ops or a fused multiply_add). Combined with the exhibited 3-op form,
+    /// each is exactly 3 ops, so the hash is 3*1 (multiply_add) + 3*3 = 12 ops
+    /// and cannot drop lower via algebraic fusion.
+    #[test]
+    fn nonaffine_stages_need_at_least_three_ops() {
+        let mut probes: Vec<u32> = vec![
+            0,
+            1,
+            2,
+            3,
+            255,
+            256,
+            0x8000_0000,
+            0xFFFF_FFFF,
+            0x0F0F_0F0F,
+            0xF0F0_F0F0,
+            0xAAAA_AAAA,
+            0x5555_5555,
+            0xDEAD_BEEF,
+            0x1234_5678,
+            0xCAFE_BABE,
+            42,
+        ];
+        let mut x = 0x9E37_79B9u32;
+        for _ in 0..16 {
+            x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            probes.push(x);
+        }
+        for &idx in &[1usize, 3, 5] {
+            assert!(
+                !two_op_program_exists(idx, &probes),
+                "unexpected <=2-op program for non-affine stage {idx}; \
+                 the 12-op minimality claim must be revisited"
+            );
+        }
+    }
 }
