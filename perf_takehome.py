@@ -98,7 +98,7 @@ class KernelBuilder:
     def build_kernel(
         self, forest_height: int, n_nodes: int, batch_size: int, rounds: int
     ):
-        self.build_kernel_vectorized(batch_size, rounds, pipeline_width=1)
+        self.build_kernel_vectorized(batch_size, rounds, pipeline_width=6)
 
     def build_kernel_vectorized(self, batch_size: int, rounds: int, pipeline_width: int = 6):
         """
@@ -137,13 +137,15 @@ class KernelBuilder:
         n_groups = batch_size // VLEN
 
         # Only the 4 header fields this kernel actually reads (see
-        # docs/problem.md §2.5 for the fixed 7-word header layout).
+        # docs/problem.md §2.5 for the fixed 7-word header layout). Routed
+        # through scratch_const (memoized) rather than a raw "const" load,
+        # since header index 1 (n_nodes) coincides with the "one" constant
+        # broadcast below and can share its load.
         header_fields = {"n_nodes": 1, "forest_values_p": 4, "inp_indices_p": 5, "inp_values_p": 6}
-        addr_tmp_scalar = self.alloc_scratch("header_addr_tmp")
         for name, header_index in header_fields.items():
             self.alloc_scratch(name)
-            self.add("load", ("const", addr_tmp_scalar, header_index))
-            self.add("load", ("load", self.scratch[name], addr_tmp_scalar))
+            addr = self.scratch_const(header_index)
+            self.add("load", ("load", self.scratch[name], addr))
 
         # Matches reference_kernel2's first yield.
         self.add("flow", ("pause",))

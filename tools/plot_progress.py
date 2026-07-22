@@ -139,6 +139,10 @@ def main():
 
     if args.record:
         step, label, note = args.record
+        # Shells vary on whether a quoted "\n" in an argument stays literal
+        # backslash-n or becomes a real newline; normalize so the label
+        # always renders as a line break in the chart either way.
+        label = label.replace("\\n", "\n")
         cycles = measure_cycles()
         entries.append({"step": step, "label": label, "cycles": cycles, "note": note})
         save_log(entries)
