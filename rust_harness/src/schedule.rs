@@ -29,6 +29,37 @@ use crate::dag::{Dag, NodeId, ResKind};
 use crate::isa::{slot_limits, AluOp, VLEN};
 use std::collections::BTreeMap;
 
+/// Optional per-node placement controls layered on top of the default
+/// height/window priority. Empty vectors (the [`Default`]) reproduce the
+/// original scheduler byte-for-byte -- this is what plain [`schedule`] passes.
+///
+/// The spiller (see `crate::spill`) uses these two knobs to place spill
+/// traffic precisely, which is the whole difficulty of turning a spill
+/// *count* into a spill *schedule*:
+///
+/// * `priority_class` -- a coarse tier that dominates the height/window key:
+///   `0` = urgent (wins every slot it is ready for), `1` = normal, `2` = lazy
+///   (only ever fills slots nothing else wants). Spill-stores go in tier 0 so
+///   they fire the instant their value exists (freeing its scratch word ASAP);
+///   reloads go in tier 2 so a real gather never loses a load slot to a spill
+///   reload. An empty vector means "tier 0 for everything", identical to the
+///   pre-override key.
+/// * `release_cycle` -- an earliest-cycle floor: a node is withheld from the
+///   ready pool until the scheduler reaches `release_cycle[node]`, even if its
+///   dependencies are satisfied and slots are idle. This is the ALAP lever
+///   reloads need: with idle load bandwidth a lazy-tier reload would still be
+///   scheduled the moment it became ready (re-inflating pressure), so we pin
+///   it to `use_cycle - 1` and it lands just-in-time instead. `0` = no floor.
+#[derive(Clone, Debug, Default)]
+pub struct ScheduleOverrides {
+    /// Priority tier per node (see struct docs). Values outside `0..=2` are
+    /// accepted and simply sort in the obvious order; empty = all-zero.
+    pub priority_class: Vec<u8>,
+    /// Earliest cycle each node may be scheduled (see struct docs). `0` = none;
+    /// empty = no floors at all.
+    pub release_cycle: Vec<u32>,
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SchedulerConfig {
     /// If true, `GatherLoad` nodes can batch VLEN-at-a-time like
@@ -177,6 +208,16 @@ fn partial_valu_candidates(mut ready: Vec<NodeId>, key: &[u64]) -> Vec<(u64, Vec
 }
 
 pub fn schedule(dag: &Dag, config: SchedulerConfig) -> ScheduleResult {
+    schedule_with(dag, config, &ScheduleOverrides::default())
+}
+
+/// [`schedule`] with per-node placement overrides (see [`ScheduleOverrides`]).
+/// With the default (empty) overrides this is byte-identical to `schedule`.
+pub fn schedule_with(
+    dag: &Dag,
+    config: SchedulerConfig,
+    overrides: &ScheduleOverrides,
+) -> ScheduleResult {
     let n = dag.nodes.len();
 
     let mut dependents: Vec<Vec<NodeId>> = vec![Vec::new(); n];
@@ -217,9 +258,25 @@ pub fn schedule(dag: &Dag, config: SchedulerConfig) -> ScheduleResult {
             _ => 0,
         }
     };
+    // Priority tier (see ScheduleOverrides) occupies the top byte, above the
+    // walker window and height, so it dominates both. An empty override vector
+    // yields tier 0 everywhere, leaving the key exactly `(group << 32) |
+    // (hmax - height)` -- the pre-override packing, bit-for-bit. Groups here
+    // are tiny (walker/window <= a few hundred), so they never spill past bit
+    // 55 into the tier byte.
+    let tier_of =
+        |nd: NodeId| -> u64 { overrides.priority_class.get(nd).copied().unwrap_or(0) as u64 };
     let key: Vec<u64> = (0..n)
-        .map(|nd| ((group_of(nd) as u64) << 32) | ((hmax - height[nd]) as u64))
+        .map(|nd| {
+            (tier_of(nd) << 56) | ((group_of(nd) as u64) << 32) | ((hmax - height[nd]) as u64)
+        })
         .collect();
+
+    // Earliest-cycle floor per node (see ScheduleOverrides::release_cycle).
+    let rel_of = |nd: NodeId| -> u32 { overrides.release_cycle.get(nd).copied().unwrap_or(0) };
+    // Nodes whose deps are satisfied but whose release cycle hasn't arrived,
+    // keyed by (and drained at) that release cycle.
+    let mut held: BTreeMap<u32, Vec<NodeId>> = BTreeMap::new();
 
     let mut scheduled = vec![false; n];
     let mut done_count: u64 = 0;
@@ -238,7 +295,15 @@ pub fn schedule(dag: &Dag, config: SchedulerConfig) -> ScheduleResult {
                 }
             }
         } else if !scheduled[i] {
-            pool.push(i);
+            // Release-gate even the initial ready set (a release floor > cycle
+            // 1 holds the node back). Reloads never land here -- they depend on
+            // their spill-store -- but keep the path uniform for correctness.
+            let r = rel_of(i);
+            if r <= 1 {
+                pool.push(i);
+            } else {
+                held.entry(r).or_default().push(i);
+            }
         }
     }
 
@@ -249,6 +314,41 @@ pub fn schedule(dag: &Dag, config: SchedulerConfig) -> ScheduleResult {
 
     while done_count < n as u64 {
         result.cycles += 1;
+
+        // Admit any release-floored nodes whose cycle has now arrived.
+        while let Some((&rel, _)) = held.iter().next() {
+            if rel <= result.cycles as u32 {
+                let mut due = held.remove(&rel).unwrap();
+                pool.append(&mut due);
+            } else {
+                break;
+            }
+        }
+        // If nothing is ready this cycle but work is merely being held back,
+        // fast-forward the clock to the next release (charging the idle gap as
+        // elapsed cycles) rather than spinning one empty cycle at a time. A
+        // truly empty pool with nothing held while work remains is a real
+        // deadlock (the pre-override scheduler asserts the same, one line down).
+        if pool.is_empty() {
+            if let Some((&rel, _)) = held.iter().next() {
+                result.cycles = rel as u64;
+                let mut due = held.remove(&rel).unwrap();
+                pool.append(&mut due);
+                while let Some((&r2, _)) = held.iter().next() {
+                    if r2 <= result.cycles as u32 {
+                        let mut more = held.remove(&r2).unwrap();
+                        pool.append(&mut more);
+                    } else {
+                        break;
+                    }
+                }
+            } else {
+                panic!(
+                    "deadlock: {} nodes unscheduled with empty pool and no held work",
+                    n as u64 - done_count
+                );
+            }
+        }
 
         // BTreeMap (not HashMap) so opcode iteration order is deterministic:
         // the greedy priority ties are then broken the same way every run,
@@ -462,7 +562,16 @@ pub fn schedule(dag: &Dag, config: SchedulerConfig) -> ScheduleResult {
             for &dep in &dependents[node] {
                 remaining_deps[dep] -= 1;
                 if remaining_deps[dep] == 0 {
-                    pool.push(dep);
+                    // Natural earliest = next cycle (single-cycle latency). A
+                    // release floor beyond that parks the node in `held` until
+                    // its cycle arrives; otherwise it joins the ready pool now.
+                    let natural = result.cycles as u32 + 1;
+                    let r = rel_of(dep);
+                    if r <= natural {
+                        pool.push(dep);
+                    } else {
+                        held.entry(r).or_default().push(dep);
+                    }
                 }
             }
         }
