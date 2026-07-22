@@ -501,15 +501,15 @@ class KernelBuilder:
         state_vecs = [self.alloc_scratch(f"st{g}", VLEN) for g in range(n_groups)]
         val_vecs = [self.alloc_scratch(f"val{g}", VLEN) for g in range(n_groups)]
         nv_vecs = [self.alloc_scratch(f"nv{g}", VLEN) for g in range(n_groups)]
-        TP = 16
+        TP = 14
         t1 = [self.alloc_scratch(None, VLEN) for _ in range(TP)]
-        t2 = [self.alloc_scratch(None, VLEN) for _ in range(TP)]
-        CP = 6
+        CP = 3
         if maxT >= 2:
             condA = [self.alloc_scratch(None, VLEN) for _ in range(CP)]
             condB = [self.alloc_scratch(None, VLEN) for _ in range(CP)]
-        if maxT >= 3:
             tm = [self.alloc_scratch(None, VLEN) for _ in range(CP)]
+        if maxT >= 3:
+            tmM = [self.alloc_scratch(None, VLEN) for _ in range(CP)]
 
         # --- initial vals ---
         val_addrs = []
@@ -543,20 +543,20 @@ class KernelBuilder:
                         vec("&", condA[j], st, one_vec)   # newest bit b1
                         vec("&", condB[j], st, two_vec)   # mask for b0
                         madd(t1[s], condA[j], diffs[0], evens[0])
-                        madd(t2[s], condA[j], diffs[1], evens[1])
-                        vsel(nv, condB[j], t2[s], t1[s])
+                        madd(tm[j], condA[j], diffs[1], evens[1])
+                        vsel(nv, condB[j], tm[j], t1[s])
                     else:  # L == 3
                         vec("&", condA[j], st, one_vec)   # newest bit b2
                         vec("&", condB[j], st, two_vec)   # mask for b1
                         madd(t1[s], condA[j], diffs[0], evens[0])  # m0
-                        madd(t2[s], condA[j], diffs[1], evens[1])  # m1
-                        madd(tm[j], condA[j], diffs[2], evens[2])  # m2
-                        madd(nv, condA[j], diffs[3], evens[3])     # m3
+                        madd(tmM[j], condA[j], diffs[1], evens[1])  # m1
+                        madd(tm[j], condA[j], diffs[2], evens[2])   # m2
+                        madd(nv, condA[j], diffs[3], evens[3])      # m3
                         # condA is dead after the madds; reuse it for b0.
                         vec(">>", condA[j], st, two_vec)  # b0 (p is 3 bits)
-                        vsel(t1[s], condB[j], t2[s], t1[s])  # q0 = b1 ? m1 : m0
-                        vsel(nv, condB[j], nv, tm[j])        # q1 = b1 ? m3 : m2
-                        vsel(nv, condA[j], nv, t1[s])        # b0 ? q1 : q0
+                        vsel(t1[s], condB[j], tmM[j], t1[s])  # q0 = b1 ? m1 : m0
+                        vsel(nv, condB[j], nv, tm[j])         # q1 = b1 ? m3 : m2
+                        vsel(nv, condA[j], nv, t1[s])         # b0 ? q1 : q0
                 else:
                     nvsrc = nv  # gathered during round r-1
 
@@ -567,18 +567,22 @@ class KernelBuilder:
                            reads=self._v(nvsrc))
 
                 # ---- val = fused_hash(val ^ node_val) ----
+                # Each xor-shift stage uses ONE temp: the shifted copy goes
+                # to t, then val updates in place (same-cycle write-after-
+                # read of val is safe under the bundle semantics).
+                t = t1[s]
                 vec("^", vl, vl, nvsrc)
                 madd(vl, vl, hv["k0"], hv["C0"])
-                avec("^", t1[s], vl, hv["C1"])
-                avec(">>", t2[s], vl, hv["sh1"])
-                vec("^", vl, t1[s], t2[s])
-                madd(t1[s], vl, hv["kp"], hv["ap"])
-                madd(t2[s], vl, hv["kq"], hv["aq"])
-                vec("^", vl, t1[s], t2[s])
+                avec(">>", t, vl, hv["sh1"])
+                avec("^", vl, vl, hv["C1"])
+                vec("^", vl, vl, t)
+                madd(t, vl, hv["kp"], hv["ap"])
+                madd(vl, vl, hv["kq"], hv["aq"])
+                vec("^", vl, vl, t)
                 madd(vl, vl, hv["k4"], hv["C4"])
-                vec("^", t1[s], vl, hv["C5"])
-                vec(">>", t2[s], vl, hv["sh5"])
-                vec("^", vl, t1[s], t2[s])
+                vec(">>", t, vl, hv["sh5"])
+                vec("^", vl, vl, hv["C5"])
+                vec("^", vl, vl, t)
 
                 if debug_compares:
                     S.emit("debug",
