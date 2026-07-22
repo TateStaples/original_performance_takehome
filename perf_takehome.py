@@ -221,7 +221,7 @@ class KernelBuilder:
             and rounds >= 1
         ):
             self.build_kernel_scheduled(
-                batch_size, rounds, forest_height, tournament_levels=(1, 2)
+                batch_size, rounds, forest_height, tournament_levels=(1, 2, 3)
             )
         else:
             self.build_kernel_pipelined(
