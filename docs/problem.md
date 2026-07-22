@@ -88,12 +88,19 @@ room:
 | `mem[4]` | `forest_values_p` — pointer to the tree values array |
 | `mem[5]` | `inp_indices_p` — pointer to the walkers' indices array |
 | `mem[6]` | `inp_values_p` — pointer to the walkers' values array |
-| `mem[7]` | `extra_room` — pointer past all the above, free scratch space in memory |
 
 `KernelBuilder.build_kernel`'s very first job is reading these 7 header
-values (`rounds` through `inp_values_p`) out of memory into named scratch
-slots, since it only knows their *addresses* (`0`..`6`) at build time, not
-their values.
+values out of memory into named scratch slots, since it only knows their
+*addresses* (`0`..`6`) at build time, not their values.
+
+`build_mem_image` also *tries* to write a would-be `extra_room` pointer to
+`mem[7]` — but `forest_values_p` is `7` too (the header is 7 words), so
+`mem[7]` is simultaneously "header slot 7" and "the tree values array's
+first element," and the very next line (`mem[header:inp_indices_p] =
+t.values`) overwrites it. `mem[7]` ends up holding `tree.values[0]`, the
+`extra_room` pointer is never actually readable anywhere, and nothing reads
+`mem[7]` as a header field — harmless, since the kernel never uses it, but
+worth knowing if you go looking for it.
 
 ## 3. What you're given (`KernelBuilder`, in `perf_takehome.py`)
 
@@ -164,6 +171,13 @@ of the relevant memory ranges each round — and every `debug`/`compare`
 bundle your kernel emits is checked live, so a wrong intermediate value
 fails fast with the exact `(round, i, field)` it diverged on, rather than
 only failing the final memory comparison.
+
+For a much faster version of this same loop — the same debug-compare
+correctness checking, but running in milliseconds instead of ~1s, with a
+strongly-typed instruction builder that catches ISA misuse at compile time —
+see `../rust_harness/README.md`. It's a development accelerator, not a
+replacement for grading: `python tests/submission_tests.py` is still what
+decides your score.
 
 ## 6. Rules & anti-cheating
 
