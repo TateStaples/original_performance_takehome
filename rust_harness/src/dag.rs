@@ -59,6 +59,28 @@ pub struct Node {
     pub deps: Vec<NodeId>,
 }
 
+/// The *purpose* of a node, orthogonal to which engine it uses (`ResKind`).
+/// Lets us ask "what fraction of the arithmetic is the hash vs. the index
+/// bookkeeping vs. getting the tree value to the walker" -- see the
+/// `breakdown` binary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub enum NodeCat {
+    /// Shared constants / setup, initial per-walker value load.
+    #[default]
+    Setup,
+    /// Computing/mixing the hashed value: the `val ^ node_val` fold-in and
+    /// every `emit_hash` op.
+    Hash,
+    /// The index recurrence: parity, `2*idx + 1 + parity`, wraparound.
+    Idx,
+    /// Getting `node_val = tree[idx]` to the walker: the gather address + load,
+    /// or (smart dag) the shared level read + the select cascade that routes
+    /// it. This is the "gather vs. routing" work.
+    Routing,
+    /// Final per-walker stores.
+    Store,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Dag {
     pub nodes: Vec<Node>,
@@ -68,9 +90,13 @@ pub struct Dag {
     /// register-pressure-aware scheduler group work by walker without
     /// re-deriving ownership from node indices.
     pub walker_of: Vec<u32>,
+    /// Purpose of each node (parallel to `nodes`); see `NodeCat`.
+    pub category: Vec<NodeCat>,
     /// Walker currently being emitted; `add` tags new nodes with it.
     /// `u32::MAX` outside any walker loop.
     cur_walker: u32,
+    /// Purpose currently being emitted; `add` tags new nodes with it.
+    cur_category: NodeCat,
 }
 
 impl Dag {
@@ -78,7 +104,9 @@ impl Dag {
         Dag {
             nodes: Vec::new(),
             walker_of: Vec::new(),
+            category: Vec::new(),
             cur_walker: u32::MAX,
+            cur_category: NodeCat::Setup,
         }
     }
 
@@ -86,6 +114,7 @@ impl Dag {
         let id = self.nodes.len();
         self.nodes.push(Node { kind, deps });
         self.walker_of.push(self.cur_walker);
+        self.category.push(self.cur_category);
         id
     }
 
@@ -132,16 +161,20 @@ pub fn build_problem_dag(forest_height: u32, batch_size: u32, rounds: u32) -> Da
 
     for w in 0..batch_size {
         dag.cur_walker = w;
+        dag.cur_category = NodeCat::Setup;
         let mut idx = dag.free();
         let mut val = dag.add(ResKind::ContiguousLoad, vec![]);
 
         for round in 0..rounds {
             let local_level = round % levels;
+            dag.cur_category = NodeCat::Routing;
             let addr = dag.add(ResKind::Alu(AluOp::Add), vec![idx, forest_values_p]);
             let node_val = dag.add(ResKind::GatherLoad, vec![addr]);
+            dag.cur_category = NodeCat::Hash;
             let xor = dag.add(ResKind::Alu(AluOp::Xor), vec![val, node_val]);
             let val_new = emit_hash(&mut dag, xor);
 
+            dag.cur_category = NodeCat::Idx;
             let parity = dag.add(ResKind::Alu(AluOp::Mod), vec![val_new, two]);
             let offset = dag.add(ResKind::Alu(AluOp::Add), vec![parity]);
             let doubled = dag.add(ResKind::Alu(AluOp::Mul), vec![idx, two]);
@@ -165,11 +198,13 @@ pub fn build_problem_dag(forest_height: u32, batch_size: u32, rounds: u32) -> Da
             val = val_new;
         }
 
+        dag.cur_category = NodeCat::Store;
         dag.add(ResKind::Store, vec![idx]);
         dag.add(ResKind::Store, vec![val]);
     }
 
     dag.cur_walker = u32::MAX;
+    dag.cur_category = NodeCat::Setup;
     dag
 }
 
@@ -362,6 +397,7 @@ pub fn build_problem_dag_smart_tuned(
 
     for w in 0..batch_size {
         dag.cur_walker = w;
+        dag.cur_category = NodeCat::Setup;
         let mut idx = dag.free(); // idx = 0
         let mut val = dag.add(ResKind::ContiguousLoad, vec![]);
         let mut epoch_bits: Vec<NodeId> = Vec::new();
@@ -372,6 +408,7 @@ pub fn build_problem_dag_smart_tuned(
                 epoch_bits.clear();
             }
 
+            dag.cur_category = NodeCat::Routing;
             let node_val =
                 if (1u64 << local_level) < batch_size as u64 && local_level < share_threshold {
                     let arr = level_array(&mut dag, &mut level_cache, local_level);
@@ -381,9 +418,11 @@ pub fn build_problem_dag_smart_tuned(
                     dag.add(ResKind::GatherLoad, vec![addr])
                 };
 
+            dag.cur_category = NodeCat::Hash;
             let xor = dag.add(ResKind::Alu(AluOp::Xor), vec![val, node_val]);
             let val_new = emit_hash(&mut dag, xor);
 
+            dag.cur_category = NodeCat::Idx;
             let parity = dag.add(ResKind::Alu(AluOp::Mod), vec![val_new, two]);
             epoch_bits.push(parity);
 
@@ -406,11 +445,13 @@ pub fn build_problem_dag_smart_tuned(
             val = val_new;
         }
 
+        dag.cur_category = NodeCat::Store;
         dag.add(ResKind::Store, vec![idx]);
         dag.add(ResKind::Store, vec![val]);
     }
 
     dag.cur_walker = u32::MAX;
+    dag.cur_category = NodeCat::Setup;
     dag
 }
 

@@ -33,3 +33,7 @@ opt-level = 3
 [[bin]]
 name = "frontier"
 path = "src/bin/frontier.rs"
+
+[[bin]]
+name = "breakdown"
+path = "src/bin/breakdown.rs"
