@@ -712,7 +712,8 @@ class KernelBuilder:
         else:
             n_blocks, lag = skew
             lags = [lag * b for b in range(n_blocks)]
-        assert n_groups % len(lags) == 0
+        if n_groups % len(lags) != 0:
+            lags = [0]  # degenerate shapes: no skew
         bs_ = n_groups // len(lags)
         for t in range(rounds + max(lags)):
             for b, lb in enumerate(lags):
