@@ -25,7 +25,7 @@ fn main() {
     let dags: [(&str, Dag); 2] = [
         (
             "plain (literal per-walker gather)",
-            build_problem_dag(batch_size, rounds),
+            build_problem_dag(forest_height, batch_size, rounds),
         ),
         (
             "smart (shared-root bounded fan-out)",

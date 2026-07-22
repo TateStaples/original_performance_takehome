@@ -424,7 +424,7 @@ mod tests {
 
     #[test]
     fn schedules_every_non_free_node_exactly_once() {
-        let dag = build_problem_dag(16, 4);
+        let dag = build_problem_dag(4, 16, 4);
         let free_count = dag
             .nodes
             .iter()
@@ -457,7 +457,7 @@ mod tests {
         // With gather_batchable=false, gather_load specifically should never
         // exceed slot_limits::LOAD nodes retired per busy cycle -- i.e.
         // nodes_done <= 2 * busy_cycles, unlike valu which can do 8x.
-        let dag = build_problem_dag(16, 4);
+        let dag = build_problem_dag(4, 16, 4);
         let result = schedule(
             &dag,
             SchedulerConfig {
@@ -472,7 +472,7 @@ mod tests {
 
     #[test]
     fn relaxed_mode_lets_gather_load_batch() {
-        let dag = build_problem_dag(16, 4);
+        let dag = build_problem_dag(4, 16, 4);
         let result = schedule(
             &dag,
             SchedulerConfig {
@@ -492,7 +492,7 @@ mod tests {
         // Every op the realistic scheduler can do, the relaxed one can also
         // do (it's a strict widening of what can share a slot) -- so
         // relaxed cycles should never exceed realistic cycles.
-        let dag = build_problem_dag(16, 4);
+        let dag = build_problem_dag(4, 16, 4);
         let realistic = schedule(
             &dag,
             SchedulerConfig {
@@ -514,7 +514,7 @@ mod tests {
         // should find meaningfully more parallelism than the fixed
         // "wave of 6 groups" heuristic in vectorized.rs (4990 cycles at
         // batch_size=256, rounds=16).
-        let dag = build_problem_dag(256, 16);
+        let dag = build_problem_dag(10, 256, 16);
         let result = schedule(
             &dag,
             SchedulerConfig {
@@ -545,7 +545,7 @@ mod tests {
         // The whole point of build_problem_dag_smart: exploiting the shared
         // root should meaningfully reduce the realistic-mode schedule
         // versus the plain per-walker-gather dag, at the real benchmark size.
-        let plain = build_problem_dag(256, 16);
+        let plain = build_problem_dag(10, 256, 16);
         let smart = build_problem_dag_smart(10, 256, 16);
         let plain_result = schedule(
             &plain,
@@ -580,7 +580,7 @@ mod tests {
         // pushes it over -- so the smart dag's lower cycle count is *not*
         // directly realizable as-is, despite "beating" the plain dag in
         // schedule::tests::smart_dag_beats_plain_dag_at_full_scale.
-        let plain = build_problem_dag(256, 16);
+        let plain = build_problem_dag(10, 256, 16);
         let smart = build_problem_dag_smart(10, 256, 16);
         let plain_result = schedule(
             &plain,
@@ -613,7 +613,7 @@ mod tests {
     fn peak_register_pressure_is_at_least_the_widest_single_cycle_batch() {
         // Sanity check on the liveness math itself: pressure at any cycle
         // can't be less than the number of values produced *that* cycle.
-        let dag = build_problem_dag(16, 4);
+        let dag = build_problem_dag(4, 16, 4);
         let result = schedule(&dag, SchedulerConfig::default());
         let (peak, _) = peak_register_pressure(&dag, &result);
         assert!(peak >= 1);

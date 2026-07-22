@@ -108,18 +108,20 @@ fn emit_hash(dag: &mut Dag, start: NodeId) -> NodeId {
 /// docs/problem.md), one node per scalar operation, for every walker and
 /// round -- no addresses, no scratch allocation, no valu/vload grouping.
 /// `batch_size` independent walkers x `rounds` sequential rounds each.
-pub fn build_problem_dag(batch_size: u32, rounds: u32) -> Dag {
+pub fn build_problem_dag(forest_height: u32, batch_size: u32, rounds: u32) -> Dag {
     let mut dag = Dag::new();
 
     let forest_values_p = dag.free();
     let n_nodes = dag.free();
     let two = dag.free();
+    let levels = forest_height + 1;
 
     for _w in 0..batch_size {
         let mut idx = dag.free();
         let mut val = dag.add(ResKind::ContiguousLoad, vec![]);
 
-        for _round in 0..rounds {
+        for round in 0..rounds {
+            let local_level = round % levels;
             let addr = dag.add(ResKind::Alu(AluOp::Add), vec![idx, forest_values_p]);
             let node_val = dag.add(ResKind::GatherLoad, vec![addr]);
             let xor = dag.add(ResKind::Alu(AluOp::Xor), vec![val, node_val]);
@@ -129,10 +131,22 @@ pub fn build_problem_dag(batch_size: u32, rounds: u32) -> Dag {
             let offset = dag.add(ResKind::Alu(AluOp::Add), vec![parity]);
             let doubled = dag.add(ResKind::Alu(AluOp::Mul), vec![idx, two]);
             let idx_new = dag.add(ResKind::Alu(AluOp::Add), vec![doubled, offset]);
-            let cmp = dag.add(ResKind::Alu(AluOp::Lt), vec![idx_new, n_nodes]);
-            let idx_final = dag.add(ResKind::Flow, vec![cmp, idx_new]);
 
-            idx = idx_final;
+            // The tree is exactly full (n_nodes = 2^(forest_height+1) - 1) and
+            // every walker starts at the shared root, so the level of `idx` at
+            // round r is deterministically r % levels. Stepping past the
+            // deepest level (local_level == forest_height) always overflows
+            // n_nodes for every walker regardless of its position within that
+            // level -- a statically-known wrap, so it folds to the constant
+            // idx = 0. Every other round keeps the genuine compare+select
+            // (idx_new is a runtime, data-dependent value). Mirrors
+            // build_problem_dag_smart's fold at the same boundary.
+            idx = if local_level == forest_height {
+                dag.free()
+            } else {
+                let cmp = dag.add(ResKind::Alu(AluOp::Lt), vec![idx_new, n_nodes]);
+                dag.add(ResKind::Flow, vec![cmp, idx_new])
+            };
             val = val_new;
         }
 
@@ -301,7 +315,9 @@ mod tests {
         // across the whole dag.
         let batch_size = 4;
         let rounds = 3;
-        let dag = build_problem_dag(batch_size, rounds);
+        // forest_height=10 => levels=11 > rounds, so no round wraps and the
+        // per-round shape (incl. the cmp+select tail) is unchanged.
+        let dag = build_problem_dag(10, batch_size, rounds);
         let per_round = 3 + 12 + 6;
         let per_walker = 1 + 1 + per_round * rounds as usize + 2; // idx free + val load + rounds + 2 stores
         let expected = 3 + batch_size as usize * per_walker;
@@ -310,7 +326,7 @@ mod tests {
 
     #[test]
     fn is_acyclic_and_deps_point_backward() {
-        let dag = build_problem_dag(4, 3);
+        let dag = build_problem_dag(10, 4, 3);
         for (i, node) in dag.nodes.iter().enumerate() {
             for &d in &node.deps {
                 assert!(
@@ -325,7 +341,7 @@ mod tests {
     fn walkers_are_mutually_independent() {
         // No node in walker 0's subgraph should be reachable from walker 1's,
         // or vice versa -- batch_size shouldn't affect the critical path.
-        let dag = build_problem_dag(2, 2);
+        let dag = build_problem_dag(10, 2, 2);
         let per_walker = 1 + 1 + (3 + 12 + 6) * 2 + 2;
         let walker0_range = 3..3 + per_walker;
         let walker1_start = 3 + per_walker;
@@ -357,6 +373,46 @@ mod tests {
         let reduced_stage_nodes = 3; // 3 stages x 1 node each
         let full_stage_nodes = 3 * 3; // 3 stages x 3 nodes each
         assert_eq!(total_hash_nodes, reduced_stage_nodes + full_stage_nodes);
+    }
+
+    #[test]
+    fn plain_dag_folds_deterministic_wraparound() {
+        // Tree is exactly full, so a walker at the deepest level
+        // (local_level == forest_height) always overflows n_nodes and wraps to
+        // 0 -- unconditional for every walker. Those rounds drop the
+        // cmp(Lt)+select(Flow); every other round keeps them. Mirrors
+        // build_problem_dag_smart's fold at the same boundary.
+        let forest_height = 2u32;
+        let batch_size = 3u32;
+        let rounds = 6u32;
+        let levels = forest_height + 1;
+        let wrap_rounds_per_walker = (0..rounds).filter(|r| r % levels == forest_height).count();
+        assert_eq!(wrap_rounds_per_walker, 2); // r = 2 and r = 5
+
+        let dag = build_problem_dag(forest_height, batch_size, rounds);
+
+        let flow = dag
+            .nodes
+            .iter()
+            .filter(|n| matches!(n.kind, ResKind::Flow))
+            .count();
+        let lt = dag
+            .nodes
+            .iter()
+            .filter(|n| matches!(n.kind, ResKind::Alu(crate::isa::AluOp::Lt)))
+            .count();
+
+        // Exactly one Lt + one Flow per (walker, non-wrap round); none on wraps.
+        let expected_selects = batch_size as usize * (rounds as usize - wrap_rounds_per_walker);
+        assert_eq!(flow, expected_selects);
+        assert_eq!(lt, expected_selects);
+
+        // Each wrap round replaces cmp+select (2 nodes) with one Free node,
+        // i.e. -1 node per wrap round vs the no-fold count.
+        let per_round = 3 + 12 + 6; // addr,node_val,xor + hash(12) + tail(6)
+        let per_walker = 1 + 1 + per_round * rounds as usize - wrap_rounds_per_walker + 2;
+        let expected = 3 + batch_size as usize * per_walker;
+        assert_eq!(dag.nodes.len(), expected);
     }
 
     #[test]
