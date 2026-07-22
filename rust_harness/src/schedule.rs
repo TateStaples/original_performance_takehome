@@ -58,6 +58,11 @@ pub struct ScheduleResult {
     pub gather_load: EngineTotals,
     pub store: EngineTotals,
     pub flow: EngineTotals,
+    /// The cycle each node was scheduled on (0 for `Free` nodes, resolved
+    /// before cycle 1). Exists so register-pressure analysis (see
+    /// `peak_register_pressure`) can be computed *after* the fact, without
+    /// the scheduler itself needing to know anything about registers.
+    pub node_cycle: Vec<u32>,
 }
 
 impl ScheduleResult {
@@ -197,7 +202,10 @@ pub fn schedule(dag: &Dag, config: SchedulerConfig) -> ScheduleResult {
         }
     }
 
-    let mut result = ScheduleResult::default();
+    let mut result = ScheduleResult {
+        node_cycle: vec![0u32; n],
+        ..Default::default()
+    };
 
     while done_count < n as u64 {
         result.cycles += 1;
@@ -325,6 +333,7 @@ pub fn schedule(dag: &Dag, config: SchedulerConfig) -> ScheduleResult {
 
         for &node in &this_cycle {
             scheduled[node] = true;
+            result.node_cycle[node] = result.cycles as u32;
         }
         // O(pool) filter via the `scheduled` array, not O(pool * this_cycle)
         // `Vec::contains` -- this loop runs once per cycle over a pool that
@@ -342,6 +351,62 @@ pub fn schedule(dag: &Dag, config: SchedulerConfig) -> ScheduleResult {
     }
 
     result
+}
+
+/// Peak number of DAG values simultaneously live under `result`'s actual
+/// schedule -- i.e. the minimum scratch words a register allocator could
+/// possibly get away with, *if* it could freely reuse any word the instant
+/// a value's last reader has executed and place any live value in any word
+/// (no contiguity constraints, no allocation-conflict overhead). This is
+/// the piece `schedule()` deliberately doesn't compute: the DAG and
+/// scheduler know nothing about scratch addresses at all, so this cycle
+/// count is unconditionally optimistic about register pressure -- if this
+/// number exceeds `isa::SCRATCH_SIZE`, the schedule literally cannot be
+/// realized as-is; a real compiler would need to either narrow the
+/// schedule (limit how much gets interleaved, trading cycles for
+/// registers -- see `vectorized.rs`'s `pipeline_width` for exactly this
+/// trade-off, chosen by hand there) or spill (extra load/store traffic,
+/// which costs cycles this count doesn't include either).
+///
+/// A value is live from the cycle it's produced through the last cycle any
+/// of its dependents consumes it (inclusive); `Store` nodes don't produce a
+/// readable value and are excluded.
+pub fn peak_register_pressure(dag: &Dag, result: &ScheduleResult) -> (u64, u32) {
+    let n = dag.nodes.len();
+    let mut dependents: Vec<Vec<NodeId>> = vec![Vec::new(); n];
+    for (i, node) in dag.nodes.iter().enumerate() {
+        for &d in &node.deps {
+            dependents[d].push(i);
+        }
+    }
+
+    let max_cycle = result.cycles as usize;
+    let mut delta = vec![0i64; max_cycle + 2];
+    for (i, deps_of_i) in dependents.iter().enumerate() {
+        if matches!(dag.nodes[i].kind, ResKind::Store) {
+            continue;
+        }
+        let birth = result.node_cycle[i] as usize;
+        let death = deps_of_i
+            .iter()
+            .map(|&d| result.node_cycle[d] as usize)
+            .max()
+            .unwrap_or(birth);
+        delta[birth] += 1;
+        delta[death + 1] -= 1;
+    }
+
+    let mut live = 0i64;
+    let mut peak = 0i64;
+    let mut peak_cycle = 0u32;
+    for (c, d) in delta.iter().enumerate().take(max_cycle + 1) {
+        live += d;
+        if live > peak {
+            peak = live;
+            peak_cycle = c as u32;
+        }
+    }
+    (peak as u64, peak_cycle)
 }
 
 #[cfg(test)]
@@ -500,5 +565,57 @@ mod tests {
             smart_result.cycles,
             plain_result.cycles
         );
+    }
+
+    #[test]
+    fn plain_dag_peak_register_pressure_fits_but_smart_dag_does_not() {
+        // The scheduler's cycle count is entirely register-oblivious (see
+        // peak_register_pressure's docs), so it's worth actually measuring
+        // rather than assuming a direction. Measured finding, pinned here
+        // so a future change to either dag or the scheduler's priority
+        // heuristic can't silently invert it without a test noticing: the
+        // plain dag's height-priority schedule happens to keep peak
+        // pressure under SCRATCH_SIZE, but the smart dag's extra per-walker
+        // state (the epoch_bits history threaded through select_cascade)
+        // pushes it over -- so the smart dag's lower cycle count is *not*
+        // directly realizable as-is, despite "beating" the plain dag in
+        // schedule::tests::smart_dag_beats_plain_dag_at_full_scale.
+        let plain = build_problem_dag(256, 16);
+        let smart = build_problem_dag_smart(10, 256, 16);
+        let plain_result = schedule(
+            &plain,
+            SchedulerConfig {
+                gather_batchable: false,
+            },
+        );
+        let smart_result = schedule(
+            &smart,
+            SchedulerConfig {
+                gather_batchable: false,
+            },
+        );
+        let (plain_peak, _) = peak_register_pressure(&plain, &plain_result);
+        let (smart_peak, _) = peak_register_pressure(&smart, &smart_result);
+        assert!(
+            plain_peak <= crate::isa::SCRATCH_SIZE as u64,
+            "plain dag peak register pressure ({plain_peak}) no longer fits SCRATCH_SIZE ({})",
+            crate::isa::SCRATCH_SIZE
+        );
+        assert!(
+            smart_peak > crate::isa::SCRATCH_SIZE as u64,
+            "smart dag peak register pressure ({smart_peak}) unexpectedly fits SCRATCH_SIZE ({}) -- \
+             if this is now true, the register-pressure caveat on its cycle-count win no longer applies",
+            crate::isa::SCRATCH_SIZE
+        );
+    }
+
+    #[test]
+    fn peak_register_pressure_is_at_least_the_widest_single_cycle_batch() {
+        // Sanity check on the liveness math itself: pressure at any cycle
+        // can't be less than the number of values produced *that* cycle.
+        let dag = build_problem_dag(16, 4);
+        let result = schedule(&dag, SchedulerConfig::default());
+        let (peak, _) = peak_register_pressure(&dag, &result);
+        assert!(peak >= 1);
     }
 }

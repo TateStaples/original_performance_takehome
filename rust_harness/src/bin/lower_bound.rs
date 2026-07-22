@@ -11,7 +11,8 @@
 //! Usage: cargo run --release --bin lower_bound -- <forest_height> <batch_size> <rounds>
 
 use perf_harness::dag::{build_problem_dag, build_problem_dag_smart, Dag};
-use perf_harness::schedule::{schedule, SchedulerConfig};
+use perf_harness::isa::SCRATCH_SIZE;
+use perf_harness::schedule::{peak_register_pressure, schedule, SchedulerConfig};
 use std::env;
 use std::time::Instant;
 
@@ -50,8 +51,13 @@ fn main() {
         ] {
             let t1 = Instant::now();
             let result = schedule(dag, cfg);
+            let (peak, peak_cycle) = peak_register_pressure(dag, &result);
             println!("=== {label} ===");
             println!("{result}");
+            println!(
+                "peak register pressure: {peak} words (at cycle {peak_cycle}) -- {} SCRATCH_SIZE={SCRATCH_SIZE}",
+                if peak > SCRATCH_SIZE as u64 { format!("{:.1}x OVER", peak as f64 / SCRATCH_SIZE as f64) } else { "within".to_string() }
+            );
             eprintln!("scheduled in {:?}", t1.elapsed());
         }
     }
