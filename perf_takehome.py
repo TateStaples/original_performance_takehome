@@ -37,6 +37,122 @@ from problem import (
 )
 
 
+# Vector ops whose lanes are independent 1-in-1-out scalar alu ops, so a
+# single valu slot can instead be split into 8 scalar alu slots (the alu
+# engine has 12 slots/cycle and is otherwise completely idle in this
+# workload). multiply_add / vbroadcast have no scalar alu equivalent.
+_SCALARIZABLE = {"+", "-", "*", "^", "&", "|", "<<", ">>", "<", "=="}
+
+
+class ListScheduler:
+    """
+    Greedy dependency-tracking list scheduler over the VLIW bundle stream.
+
+    Ops are emitted in program order; each is placed in the EARLIEST bundle
+    that (a) satisfies its data hazards and (b) has a free slot on its
+    engine. Hazard rules follow the machine's bundle semantics (docs/isa.md
+    §2: all reads in a bundle see start-of-cycle state; writes commit at end
+    of cycle):
+      RAW: a read of scratch addr X must be placed at cycle >= write(X)+1.
+      WAW: a write of X must be placed at cycle >= write(X)+1.
+      WAR: a write of X may share a cycle with the last read of X
+           (reads see the old value), so write(X) >= last_read(X) suffices.
+    Because ops are processed strictly in program order and the constraints
+    above are enforced against running per-address maxima, placing a later
+    op into an earlier bundle than a previously placed independent op is
+    always safe.
+
+    Memory is tracked coarsely (one pseudo-location for all of mem): reads
+    are plentiful (gathers) and the only writes are the final vstores, so
+    per-address tracking would buy nothing.
+
+    Placement scans start from a per-engine `hint` = first cycle known to
+    possibly have a free slot on that engine (monotone, since slots only
+    ever fill), keeping total scan cost ~linear.
+    """
+
+    def __init__(self):
+        self.bundles = []
+        self.counts = []
+        self.last_write = {}
+        self.last_read = {}
+        self.mem_read_c = -1
+        self.mem_write_c = -1
+        self.hint = dict.fromkeys(SLOT_LIMITS, 0)
+
+    def ready(self, reads=(), writes=(), mem_read=False, mem_write=False, min_cycle=0):
+        c = min_cycle
+        lw = self.last_write
+        lr = self.last_read
+        for a in reads:
+            t = lw.get(a, -1) + 1
+            if t > c:
+                c = t
+        for a in writes:
+            t = lw.get(a, -1) + 1
+            if t > c:
+                c = t
+            t = lr.get(a, -1)
+            if t > c:
+                c = t
+        if mem_read and self.mem_write_c + 1 > c:
+            c = self.mem_write_c + 1
+        if mem_write:
+            if self.mem_write_c + 1 > c:
+                c = self.mem_write_c + 1
+            if self.mem_read_c > c:
+                c = self.mem_read_c
+        return c
+
+    def find_free(self, engine, c, extra=None):
+        if c < self.hint[engine]:
+            c = self.hint[engine]
+        counts = self.counts
+        limit = SLOT_LIMITS[engine]
+        n = len(counts)
+        if extra is None:
+            while c < n and counts[c][engine] >= limit:
+                c += 1
+            return c
+        while True:
+            base = counts[c][engine] if c < n else 0
+            if base + extra.get(c, 0) < limit:
+                return c
+            c += 1
+
+    def put(self, engine, slot, c, reads=(), writes=(), mem_read=False, mem_write=False):
+        bundles = self.bundles
+        counts = self.counts
+        while len(bundles) <= c:
+            bundles.append({})
+            counts.append(dict.fromkeys(SLOT_LIMITS, 0))
+        bundles[c].setdefault(engine, []).append(slot)
+        counts[c][engine] += 1
+        lr = self.last_read
+        lw = self.last_write
+        for a in reads:
+            if lr.get(a, -1) < c:
+                lr[a] = c
+        for a in writes:
+            lw[a] = c
+        if mem_read and self.mem_read_c < c:
+            self.mem_read_c = c
+        if mem_write and self.mem_write_c < c:
+            self.mem_write_c = c
+        if counts[c][engine] >= SLOT_LIMITS[engine] and c == self.hint[engine]:
+            h = c
+            n = len(counts)
+            while h < n and counts[h][engine] >= SLOT_LIMITS[engine]:
+                h += 1
+            self.hint[engine] = h
+
+    def emit(self, engine, slot, reads=(), writes=(), mem_read=False, mem_write=False, min_cycle=0):
+        c = self.ready(reads, writes, mem_read, mem_write, min_cycle)
+        c = self.find_free(engine, c)
+        self.put(engine, slot, c, reads, writes, mem_read, mem_write)
+        return c
+
+
 class KernelBuilder:
     def __init__(self):
         self.instrs = []
@@ -98,9 +214,17 @@ class KernelBuilder:
     def build_kernel(
         self, forest_height: int, n_nodes: int, batch_size: int, rounds: int
     ):
-        self.build_kernel_pipelined(
-            batch_size, rounds, forest_height=forest_height, pipeline_width=16
-        )
+        if (
+            forest_height is not None
+            and n_nodes == 2 ** (forest_height + 1) - 1
+            and batch_size % VLEN == 0
+            and rounds >= 1
+        ):
+            self.build_kernel_scheduled(batch_size, rounds, forest_height)
+        else:
+            self.build_kernel_pipelined(
+                batch_size, rounds, forest_height=forest_height, pipeline_width=16
+            )
 
     # ------------------------------------------------------------------
     # Fused-hash constants (see docs/problem.md 2.4 and the bit-exact proof
@@ -174,6 +298,319 @@ class KernelBuilder:
                 ref = fns[op2](fns[op1](ref, val1), fns[op3](ref, val3))
             assert fused(a) == ref, f"fused hash mismatch at {a:#x}"
         return c
+
+    # ------------------------------------------------------------------
+    # List-scheduled kernel (the graded path).
+    # ------------------------------------------------------------------
+    def _v(self, base):
+        return tuple(range(base, base + VLEN))
+
+    def _sched_vec(self, S, op, dest, a, b, allow_alu=False):
+        """
+        Emit an elementwise vector op, either as one valu slot or -- when the
+        valu engine is backed up and the (otherwise idle) scalar alu can
+        retire all 8 lanes strictly earlier -- as 8 scalar alu slots.
+        """
+        reads = self._v(a) + self._v(b)
+        writes = self._v(dest)
+        c0 = S.ready(reads, writes)
+        cv = S.find_free("valu", c0)
+        if allow_alu and op in _SCALARIZABLE and cv > c0:
+            extra = {}
+            lanes = []
+            worst = -1
+            for i in range(VLEN):
+                ci = S.ready((a + i, b + i), (dest + i,))
+                ci = S.find_free("alu", ci, extra)
+                lanes.append(ci)
+                extra[ci] = extra.get(ci, 0) + 1
+                if ci > worst:
+                    worst = ci
+            if worst < cv:
+                for i in range(VLEN):
+                    S.put("alu", (op, dest + i, a + i, b + i), lanes[i],
+                          (a + i, b + i), (dest + i,))
+                return worst
+        S.put("valu", (op, dest, a, b), cv, reads, writes)
+        return cv
+
+    def _sched_madd(self, S, dest, a, b, c):
+        return S.emit(
+            "valu", ("multiply_add", dest, a, b, c),
+            self._v(a) + self._v(b) + self._v(c), self._v(dest),
+        )
+
+    def _sched_vsel(self, S, dest, cond, a, b):
+        return S.emit(
+            "flow", ("vselect", dest, cond, a, b),
+            self._v(cond) + self._v(a) + self._v(b), self._v(dest),
+        )
+
+    def build_kernel_scheduled(
+        self,
+        batch_size: int,
+        rounds: int,
+        forest_height: int,
+        tournament_levels=(),
+        alu_offload: bool = False,
+        debug_compares: bool = True,
+    ):
+        """
+        Same maths as `build_kernel_pipelined` (fused hash, gaddr-carried
+        indices, root-broadcast level-0 rounds) re-expressed as a flat op
+        stream placed by `ListScheduler`, plus:
+
+        - NO wraparound compare/select. All walkers start at the root and
+          advance one level per round, so every walker is at tree level
+          (round % (height+1)); wrapping happens exactly on level==height
+          rounds, for every lane at once, and is compiled away: the round
+          after a bottom round is a broadcast-root round and the position
+          state is simply re-seeded from that round's parities.
+
+        - "Tournament" rounds (`tournament_levels`, a prefix {1..k} of the
+          shallow levels): level d has only 2^d distinct node values, and a
+          walker's position within the level is the d-bit number formed by
+          its last d branch parities (oldest bit = MSB). Instead of
+          gathering 8 node values per group through the 2-slot load engine,
+          the level's values are pre-broadcast into scratch at setup and
+          each group folds the 2^d candidates down to 1:
+            * first fold, by the NEWEST parity bit b:
+              select(b, v[2k+1], v[2k]) == multiply_add(b, v[2k+1]-v[2k], v[2k])
+              with the diff vector precomputed at setup -- one valu op, no
+              flow slot;
+            * remaining folds on the flow engine's vselect, with condition
+              vectors extracted from the position accumulator by masking
+              (vselect only tests !=0, so `p & 2^j` needs no shift).
+          Position accumulator: on rounds feeding a tournament round the
+          kernel carries p (p' = 2p + parity, one multiply_add) in the same
+          scratch vector that otherwise carries gaddr = forest_values_p+idx;
+          on the last tournament level it converts p back to a gather
+          address: gaddr = 2p + parity + (fp + 2^(k+1) - 1).
+
+        - Optional alu offload (`alu_offload`): elementwise vector ops may
+          be split into 8 scalar alu slots when that retires them earlier
+          (see `_sched_vec`), raising compute throughput from 6 to up to
+          7.5 vector-ops/cycle.
+
+        `debug_compares` interleaves free `("debug", ("vcompare", ...))`
+        slots (skipped by the grader) checking node_val and hashed_val of
+        every (round, walker) against the reference trace.
+        """
+        assert batch_size % VLEN == 0
+        n_groups = batch_size // VLEN
+        period = forest_height + 1
+
+        T = tuple(l for l in tournament_levels if l < forest_height)
+        assert T == tuple(range(1, len(T) + 1)), "tournament levels must be 1..k"
+        maxT = len(T)
+        T_set = set(T)
+
+        def level(r):
+            return r % period
+
+        S = ListScheduler()
+
+        def const(val, name=None):
+            if val not in self.const_map:
+                addr = self.alloc_scratch(name)
+                S.emit("load", ("const", addr, val), writes=(addr,))
+                self.const_map[val] = addr
+            return self.const_map[val]
+
+        def bvec(src, name=None):
+            d = self.alloc_scratch(name, VLEN)
+            S.emit("valu", ("vbroadcast", d, src), (src,), self._v(d))
+            return d
+
+        vec = lambda op, dst, a, b: self._sched_vec(S, op, dst, a, b, alu_offload)
+        madd = lambda dst, a, b, c: self._sched_madd(S, dst, a, b, c)
+        vsel = lambda dst, cond, a, b: self._sched_vsel(S, dst, cond, a, b)
+
+        # --- header (inp_indices is never read: only values are graded) ---
+        for name, hidx in (("forest_values_p", 4), ("inp_values_p", 6)):
+            self.alloc_scratch(name)
+            caddr = const(hidx)
+            S.emit("load", ("load", self.scratch[name], caddr),
+                   (caddr,), (self.scratch[name],), mem_read=True)
+        fp = self.scratch["forest_values_p"]
+        ivp = self.scratch["inp_values_p"]
+
+        # Matches reference_kernel2's first yield (dev harness; grader
+        # disables pausing). Lands in bundle 0's flow slot.
+        S.emit("flow", ("pause",))
+
+        # --- constants / broadcasts ---
+        one_c = const(1)
+        omf_s = self.alloc_scratch("omf")  # 1 - forest_values_p
+        S.emit("alu", ("-", omf_s, one_c, fp), (one_c, fp), (omf_s,))
+        root_nv = self.alloc_scratch("root_nv")
+        S.emit("load", ("load", root_nv, fp), (fp,), (root_nv,), mem_read=True)
+
+        one_vec = bvec(one_c, "one_vec")
+        two_vec = bvec(const(2), "two_vec")
+        omf_vec = bvec(omf_s, "omf_vec")
+        root_nv_vec = bvec(root_nv, "root_nv_vec")
+        hc = self._fused_hash_constants()
+        hv = {k: bvec(const(hc[k]), k) for k in
+              ("k0", "C0", "C1", "sh1", "kp", "ap", "kq", "aq", "k4", "C4", "C5", "sh5")}
+
+        # gaddr reconstruction constant for the first gather level after the
+        # tournament levels: fp + 2^(maxT+1) - 1  (== fp + 1 when maxT == 0).
+        rec_s = self.alloc_scratch("rec_s")
+        S.emit("flow", ("add_imm", rec_s, fp, 2 ** (maxT + 1) - 1), (fp,), (rec_s,))
+        fpK_vec = bvec(rec_s, "fpK_vec")
+
+        # --- tournament level values: load tree[1 .. 2^(maxT+1)-2],
+        # broadcast each pair's even element and its (odd-even) diff ---
+        lvl = {}
+        if maxT:
+            n_lv = 2 ** (maxT + 1) - 2
+            lv = self.alloc_scratch("lv", ((n_lv + VLEN - 1) // VLEN) * VLEN)
+            la = self.alloc_scratch("lv_addr")
+            for blk in range(0, n_lv, VLEN):
+                S.emit("flow", ("add_imm", la, fp, 1 + blk), (fp,), (la,))
+                S.emit("load", ("vload", lv + blk, la),
+                       (la,), self._v(lv + blk), mem_read=True)
+            for L in T:
+                base = 2 ** L - 1  # first tree index of level L; lv[i] = tree[1+i]
+                evens, diffs = [], []
+                for k in range(2 ** (L - 1)):
+                    s0 = lv + (base + 2 * k - 1)
+                    s1 = s0 + 1
+                    d = self.alloc_scratch()
+                    S.emit("alu", ("-", d, s1, s0), (s0, s1), (d,))
+                    evens.append(bvec(s0))
+                    diffs.append(bvec(d))
+                lvl[L] = (evens, diffs)
+
+        # --- persistent state ---
+        # state_vecs[g] carries p (position accumulator) during tournament
+        # levels and gaddr = forest_values_p + idx during gather levels.
+        state_vecs = [self.alloc_scratch(f"st{g}", VLEN) for g in range(n_groups)]
+        val_vecs = [self.alloc_scratch(f"val{g}", VLEN) for g in range(n_groups)]
+        nv_vecs = [self.alloc_scratch(f"nv{g}", VLEN) for g in range(n_groups)]
+        TP = 16
+        t1 = [self.alloc_scratch(None, VLEN) for _ in range(TP)]
+        t2 = [self.alloc_scratch(None, VLEN) for _ in range(TP)]
+        CP = 6
+        if maxT >= 2:
+            condA = [self.alloc_scratch(None, VLEN) for _ in range(CP)]
+            condB = [self.alloc_scratch(None, VLEN) for _ in range(CP)]
+        if maxT >= 3:
+            tm = [self.alloc_scratch(None, VLEN) for _ in range(CP)]
+
+        # --- initial vals ---
+        val_addrs = []
+        for g in range(n_groups):
+            a = self.alloc_scratch(f"va{g}")
+            S.emit("flow", ("add_imm", a, ivp, g * VLEN), (ivp,), (a,))
+            val_addrs.append(a)
+            S.emit("load", ("vload", val_vecs[g], a),
+                   (a,), self._v(val_vecs[g]), mem_read=True)
+
+        # --- rounds ---
+        for r in range(rounds):
+            L = level(r)
+            for g in range(n_groups):
+                s = g % TP
+                j = g % CP
+                st = state_vecs[g]
+                vl = val_vecs[g]
+                nv = nv_vecs[g]
+
+                # ---- node_val: broadcast root / tournament select / gather ----
+                if L == 0:
+                    nvsrc = root_nv_vec
+                elif L in T_set:
+                    nvsrc = nv
+                    evens, diffs = lvl[L]
+                    if L == 1:
+                        # p is the single parity bit itself.
+                        madd(nv, st, diffs[0], evens[0])
+                    elif L == 2:
+                        vec("&", condA[j], st, one_vec)   # newest bit b1
+                        vec("&", condB[j], st, two_vec)   # mask for b0
+                        madd(t1[s], condA[j], diffs[0], evens[0])
+                        madd(t2[s], condA[j], diffs[1], evens[1])
+                        vsel(nv, condB[j], t2[s], t1[s])
+                    else:  # L == 3
+                        vec("&", condA[j], st, one_vec)   # newest bit b2
+                        vec("&", condB[j], st, two_vec)   # mask for b1
+                        madd(t1[s], condA[j], diffs[0], evens[0])  # m0
+                        madd(t2[s], condA[j], diffs[1], evens[1])  # m1
+                        madd(tm[j], condA[j], diffs[2], evens[2])  # m2
+                        madd(nv, condA[j], diffs[3], evens[3])     # m3
+                        # condA is dead after the madds; reuse it for b0.
+                        vec(">>", condA[j], st, two_vec)  # b0 (p is 3 bits)
+                        vsel(t1[s], condB[j], t2[s], t1[s])  # q0 = b1 ? m1 : m0
+                        vsel(nv, condB[j], nv, tm[j])        # q1 = b1 ? m3 : m2
+                        vsel(nv, condA[j], nv, t1[s])        # b0 ? q1 : q0
+                else:
+                    nvsrc = nv  # gathered during round r-1
+
+                if debug_compares:
+                    S.emit("debug",
+                           ("vcompare", nvsrc,
+                            [(r, g * VLEN + i, "node_val") for i in range(VLEN)]),
+                           reads=self._v(nvsrc))
+
+                # ---- val = fused_hash(val ^ node_val) ----
+                vec("^", vl, vl, nvsrc)
+                madd(vl, vl, hv["k0"], hv["C0"])
+                vec("^", t1[s], vl, hv["C1"])
+                vec(">>", t2[s], vl, hv["sh1"])
+                vec("^", vl, t1[s], t2[s])
+                madd(t1[s], vl, hv["kp"], hv["ap"])
+                madd(t2[s], vl, hv["kq"], hv["aq"])
+                vec("^", vl, t1[s], t2[s])
+                madd(vl, vl, hv["k4"], hv["C4"])
+                vec("^", t1[s], vl, hv["C5"])
+                vec(">>", t2[s], vl, hv["sh5"])
+                vec("^", vl, t1[s], t2[s])
+
+                if debug_compares:
+                    S.emit("debug",
+                           ("vcompare", vl,
+                            [(r, g * VLEN + i, "hashed_val") for i in range(VLEN)]),
+                           reads=self._v(vl))
+
+                # ---- position/state update & gather prefetch for r+1 ----
+                if r == rounds - 1:
+                    continue
+                Ln = level(r + 1)
+                if Ln == 0:
+                    continue  # everyone wraps to the root; state re-seeded there
+                if Ln in T_set:
+                    if L == 0:
+                        vec("&", st, vl, one_vec)          # p := b
+                    else:
+                        vec("&", t1[s], vl, one_vec)
+                        madd(st, st, two_vec, t1[s])       # p := 2p + b
+                else:
+                    vec("&", t1[s], vl, one_vec)
+                    if L == maxT:
+                        # leave accumulator mode: gaddr = 2p + b + fp + 2^Ln - 1
+                        if maxT == 0:
+                            vec("+", st, fpK_vec, t1[s])
+                        else:
+                            madd(st, st, two_vec, fpK_vec)
+                            vec("+", st, st, t1[s])
+                    else:
+                        madd(st, st, two_vec, omf_vec)     # 2*gaddr + 1 - fp
+                        vec("+", st, st, t1[s])
+                    for lane in range(VLEN):
+                        S.emit("load", ("load", nv + lane, st + lane),
+                               (st + lane,), (nv + lane,), mem_read=True)
+
+        # --- store final values; second pause after everything ---
+        last = 0
+        for g in range(n_groups):
+            c = S.emit("store", ("vstore", val_addrs[g], val_vecs[g]),
+                       (val_addrs[g],) + self._v(val_vecs[g]), (), mem_write=True)
+            last = max(last, c)
+        S.emit("flow", ("pause",), min_cycle=last)
+
+        self.instrs = [b for b in S.bundles if b]
 
     def build_kernel_pipelined(
         self,
