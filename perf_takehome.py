@@ -363,6 +363,7 @@ class KernelBuilder:
         tournament_levels=(),
         alu_offload: bool = False,
         l4_gmin=(14, 32),
+        pool_sizes=(16, 4),
         debug_compares: bool = True,
     ):
         """
@@ -550,9 +551,9 @@ class KernelBuilder:
         state_vecs = [self.alloc_scratch(f"st{g}", VLEN) for g in range(n_groups)]
         val_vecs = [self.alloc_scratch(f"val{g}", VLEN) for g in range(n_groups)]
         nv_vecs = [self.alloc_scratch(f"nv{g}", VLEN) for g in range(n_groups)]
-        TP = 14
+        TP, CP = pool_sizes
         t1 = [self.alloc_scratch(None, VLEN) for _ in range(TP)]
-        CP = 3
+
         if maxT >= 2:
             condA = [self.alloc_scratch(None, VLEN) for _ in range(CP)]
             condB = [self.alloc_scratch(None, VLEN) for _ in range(CP)]
