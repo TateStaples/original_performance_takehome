@@ -11,8 +11,10 @@
 //! Usage: cargo run --release --bin breakdown -- <forest_height> <batch_size> <rounds> [threshold] [algebraic|flow]
 
 use perf_harness::dag::{
-    build_problem_dag, build_problem_dag_smart_tuned, Dag, NodeCat, ResKind, SelectImpl,
+    build_problem_dag, build_problem_dag_idxlite, build_problem_dag_smart_tuned, Dag, NodeCat,
+    ResKind, SelectImpl,
 };
+use perf_harness::schedule::{peak_register_pressure, schedule, SchedulerConfig};
 use std::env;
 
 const CATS: [NodeCat; 5] = [
@@ -101,6 +103,39 @@ fn report(label: &str, dag: &Dag) {
             100.0 * n as f64 / arith as f64
         );
     }
+
+    // Analytical arithmetic floor: alu+valu can retire 60 lane-ops/cycle
+    // (alu 12 + valu 6*8), and only alu-kind + valu-madd must use them (flow
+    // ops go on the flow engine). Report the idx-only floor too.
+    let alu_valu_ops = col_tot[0] + col_tot[1];
+    let idx_alu_valu = grid[1][0] + grid[1][1]; // Idx row, alu-kind + madd
+    println!(
+        "arith floor (alu+valu ops / 60) ~= {} cyc;  idx-only ~= {} cyc;  flow ops = {}",
+        alu_valu_ops.div_ceil(60),
+        idx_alu_valu.div_ceil(48),
+        col_tot[2],
+    );
+
+    // Actually schedule it (realistic, walker_window=16) for the real cycles.
+    let r = schedule(
+        dag,
+        SchedulerConfig {
+            gather_batchable: false,
+            walker_window: Some(16),
+        },
+    );
+    let (peak, _) = peak_register_pressure(dag, &r);
+    let pct = |b: u64| 100.0 * b as f64 / r.cycles as f64;
+    println!(
+        "scheduled: {} cyc  (alu {:.0}% valu {:.0}% flow {:.0}% load {:.0}%)  peak {} {}",
+        r.cycles,
+        pct(r.alu.busy_cycles),
+        pct(r.valu.busy_cycles),
+        pct(r.flow.busy_cycles),
+        pct(r.load().busy_cycles),
+        peak,
+        if peak <= 1536 { "fits" } else { "OVER" },
+    );
 }
 
 fn main() {
@@ -119,4 +154,28 @@ fn main() {
         &format!("smart (threshold={threshold}, {select:?})"),
         &build_problem_dag_smart_tuned(fh, bs, r, select, threshold),
     );
+    report(
+        &format!("idxlite (threshold={threshold}, {select:?}) -- idx recurrence elided"),
+        &build_problem_dag_idxlite(fh, bs, r, select, threshold),
+    );
+
+    // idxlite reshapes liveness, so re-tune the walker window for realizability.
+    println!("\n### idxlite window sweep (threshold={threshold}, {select:?}) ###");
+    let idxlite = build_problem_dag_idxlite(fh, bs, r, select, threshold);
+    for w in [4u32, 6, 8, 10, 12, 16] {
+        let res = schedule(
+            &idxlite,
+            SchedulerConfig {
+                gather_batchable: false,
+                walker_window: Some(w),
+            },
+        );
+        let (peak, _) = peak_register_pressure(&idxlite, &res);
+        println!(
+            "  window {w:>2}: {} cyc,  peak {} {}",
+            res.cycles,
+            peak,
+            if peak <= 1536 { "fits" } else { "OVER" }
+        );
+    }
 }

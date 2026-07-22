@@ -455,6 +455,88 @@ pub fn build_problem_dag_smart_tuned(
     dag
 }
 
+/// Same computation as [`build_problem_dag_smart_tuned`], but with the index
+/// recurrence *elided* down to its irreducible residue, to validate the
+/// "push idx off the ALU" floor. The observation: the router (cascade)
+/// consumes the parity *bits* directly, and `idx` is only ever needed as a
+/// gather *address* and the final stored value -- never as a per-round
+/// integer. So instead of `parity, offset, doubled, idx_new, cmp,
+/// wrap-select` (5 alu + 1 flow / round), we keep only two things per round:
+/// `parity = val & 1` (1 op, feeds the router), and `pos = 2*pos + parity`
+/// as one valu `multiply_add` (the within-epoch position, needed only to form
+/// gather addresses; skipped on the last level since the next epoch resets it).
+///
+/// The wraparound is fully deterministic (full tree), so *every* cmp+select
+/// is dropped -- `pos` simply resets to a free `0` at each epoch start. Gather
+/// addresses become `pos + (fvp + 2^L - 1)` where the parenthesised part is a
+/// compile-time constant (one `Free`). Routing (cascade/gather) is unchanged,
+/// so the measured idx drop here is independent of any butterfly-routing work.
+pub fn build_problem_dag_idxlite(
+    forest_height: u32,
+    batch_size: u32,
+    rounds: u32,
+    select_impl: SelectImpl,
+    share_threshold: u32,
+) -> Dag {
+    let mut dag = Dag::new();
+
+    let levels = forest_height + 1;
+    let mut level_cache: HashMap<u32, Vec<NodeId>> = HashMap::new();
+
+    for w in 0..batch_size {
+        dag.cur_walker = w;
+        dag.cur_category = NodeCat::Setup;
+        let mut val = dag.add(ResKind::ContiguousLoad, vec![]);
+        let mut pos = dag.free(); // pos_0 = 0 at the root
+        let mut epoch_bits: Vec<NodeId> = Vec::new();
+
+        for r in 0..rounds {
+            let local_level = r % levels;
+            if local_level == 0 {
+                epoch_bits.clear();
+                dag.cur_category = NodeCat::Setup;
+                pos = dag.free(); // epoch reset: root position is 0
+            }
+
+            dag.cur_category = NodeCat::Routing;
+            let node_val =
+                if (1u64 << local_level) < batch_size as u64 && local_level < share_threshold {
+                    let arr = level_array(&mut dag, &mut level_cache, local_level);
+                    select_cascade(&mut dag, &arr, &epoch_bits, select_impl)
+                } else {
+                    // addr = pos + (fvp + 2^L - 1); the const is compile-time.
+                    let addr_base = dag.free();
+                    let addr = dag.add(ResKind::Alu(AluOp::Add), vec![pos, addr_base]);
+                    dag.add(ResKind::GatherLoad, vec![addr])
+                };
+
+            dag.cur_category = NodeCat::Hash;
+            let xor = dag.add(ResKind::Alu(AluOp::Xor), vec![val, node_val]);
+            let val_new = emit_hash(&mut dag, xor);
+
+            // idx residue: just the parity bit (feeds the router) and the
+            // position accumulator (feeds gather addresses). No offset,
+            // doubled, idx_new, cmp, or wrap-select.
+            dag.cur_category = NodeCat::Idx;
+            let parity = dag.add(ResKind::Alu(AluOp::And), vec![val_new]); // val & 1
+            epoch_bits.push(parity);
+            if local_level != forest_height {
+                // pos = 2*pos + parity, one fused multiply_add on valu.
+                pos = dag.add(ResKind::MultiplyAdd, vec![pos, parity]);
+            }
+            val = val_new;
+        }
+
+        dag.cur_category = NodeCat::Store;
+        dag.add(ResKind::Store, vec![pos]);
+        dag.add(ResKind::Store, vec![val]);
+    }
+
+    dag.cur_walker = u32::MAX;
+    dag.cur_category = NodeCat::Setup;
+    dag
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -476,6 +558,36 @@ mod tests {
         let per_walker = 1 + 1 + per_round * rounds as usize + 2; // idx free + val load + rounds + 2 stores
         let expected = 3 + batch_size as usize * per_walker;
         assert_eq!(dag.nodes.len(), expected);
+    }
+
+    #[test]
+    fn idxlite_elides_the_index_recurrence() {
+        let smart = build_problem_dag_smart_tuned(10, 256, 16, SelectImpl::Flow, 4);
+        let lite = build_problem_dag_idxlite(10, 256, 16, SelectImpl::Flow, 4);
+        let idx_alu = |d: &Dag| {
+            d.nodes
+                .iter()
+                .enumerate()
+                .filter(|(i, n)| {
+                    d.category[*i] == NodeCat::Idx && matches!(n.kind, ResKind::Alu(_))
+                })
+                .count()
+        };
+        // idxlite keeps only `parity = val & 1` on the ALU per round; the
+        // smart dag's index recurrence is ~5 ALU ops/round. So idxlite's
+        // ALU-idx work is well under half.
+        assert!(
+            idx_alu(&lite) * 2 < idx_alu(&smart),
+            "idxlite idx-alu ({}) should be well under smart ({})",
+            idx_alu(&lite),
+            idx_alu(&smart)
+        );
+        // And it stays a valid DAG.
+        for (i, node) in lite.nodes.iter().enumerate() {
+            for &dep in &node.deps {
+                assert!(dep < i, "node {i} deps on {dep}, not earlier");
+            }
+        }
     }
 
     #[test]
