@@ -788,6 +788,11 @@ mod tests {
         // becomes the near-bind (~93% busy). So Flow still offloads valu (its
         // mechanism works) but no longer wins on cycles. Algebraic stays the
         // default for exactly this reason.
+        //
+        // NOTE: this reversal is specific to the UN-WINDOWED case. Once walker
+        // windowing (idea #1) bounds concurrency, the flow engine is no longer
+        // over-subscribed within a window and Flow wins again -- that combined
+        // optimum is pinned in flow_plus_windowing_is_the_best_realizable.
         use crate::dag::{build_problem_dag_smart_with, SelectImpl};
         let cfg = SchedulerConfig {
             gather_batchable: false,
@@ -914,6 +919,62 @@ mod tests {
             "windowed smart ({}) should still beat the plain realizable baseline ({})",
             windowed.cycles,
             plain_res.cycles
+        );
+    }
+
+    #[test]
+    fn flow_plus_windowing_is_the_best_realizable_schedule() {
+        // The synthesis of all the DAG/scheduler ideas: flow-engine selects
+        // (#5) + walker windowing (#1), on top of the overflow-balanced
+        // scheduler (#2) and the wraparound-folded, multiply_add-reduced DAG
+        // (#3/#4). Individually flow-selects lost to algebraic once balancing
+        // was in play (see flow_selects_offload_valu_but_lose_to_balanced_
+        // algebraic), but windowing bounds concurrency so the 1-slot flow
+        // engine stops being over-subscribed -- and the combination is both
+        // the fastest realistic schedule AND realizable (fits SCRATCH_SIZE),
+        // beating every other realizable option here.
+        use crate::dag::{build_problem_dag_smart_with, SelectImpl};
+        let win = SchedulerConfig {
+            gather_batchable: false,
+            walker_window: Some(16),
+        };
+        let flow_win = schedule(
+            &build_problem_dag_smart_with(10, 256, 16, SelectImpl::Flow),
+            win,
+        );
+        let alg_win = schedule(
+            &build_problem_dag_smart_with(10, 256, 16, SelectImpl::Algebraic),
+            win,
+        );
+        let plain = schedule(
+            &build_problem_dag(10, 256, 16),
+            SchedulerConfig {
+                gather_batchable: false,
+                walker_window: None,
+            },
+        );
+        let (flow_peak, _) = peak_register_pressure(
+            &build_problem_dag_smart_with(10, 256, 16, SelectImpl::Flow),
+            &flow_win,
+        );
+        // Realizable: fits scratch on pure capacity grounds.
+        assert!(
+            flow_peak <= crate::isa::SCRATCH_SIZE as u64,
+            "flow+window(16) peak ({flow_peak}) should fit SCRATCH_SIZE ({})",
+            crate::isa::SCRATCH_SIZE
+        );
+        // Fastest realizable: beats the algebraic-windowed and plain baselines.
+        assert!(
+            flow_win.cycles < alg_win.cycles,
+            "flow+window ({}) should beat algebraic+window ({})",
+            flow_win.cycles,
+            alg_win.cycles
+        );
+        assert!(
+            flow_win.cycles < plain.cycles,
+            "flow+window ({}) should beat plain realizable ({})",
+            flow_win.cycles,
+            plain.cycles
         );
     }
 
