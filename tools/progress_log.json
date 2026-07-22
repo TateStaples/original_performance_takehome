@@ -4,5 +4,11 @@
     "label": "Naive scalar baseline\n(shipped)",
     "cycles": 147734,
     "note": "KernelBuilder.build_kernel as shipped: one scalar op per bundle, no valu, no packing."
+  },
+  {
+    "step": "vectorize",
+    "label": "Vectorized with valu\n(pipeline_width=1)",
+    "cycles": 12416,
+    "note": "8-wide valu across the batch; idx/val resident in scratch for a group's whole round-lifetime instead of round-tripping through memory every round; algebraic parity simplification removes one select. No cross-group pipelining yet, so valu's 6 slots are mostly unfilled (see rust_harness stats: 17% fill)."
   }
 ]
