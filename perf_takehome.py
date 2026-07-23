@@ -448,6 +448,9 @@ class KernelBuilder:
         flow_consts: bool = False,
         vals_first: bool = False,
         tie_break: tuple = (),
+        derive_consts: bool = False,
+        alu_val_addrs: bool = False,
+        lazy_val_loads: bool = False,
         debug_compares: bool = True,
     ):
         """
@@ -632,6 +635,25 @@ class KernelBuilder:
           the r15 drain is chain-LATENCY-bound (interleaving cannot
           compress it; see research/strains/scheduler/STATE.md). Kept as
           negative controls / sweep dimensions.
+
+        - `derive_consts` / `alu_val_addrs` / `lazy_val_loads` (H-024):
+          setup load/flow-slot removal; none changes the maths.
+          `derive_consts` materializes the nine setup constants that are
+          cheap algebraic combinations of already-loaded ones (2, 8,
+          sh5=16, k4=9, kp=33, kq=kp<<9, k0=(16<<8)+1, sh1=19, -2) with
+          in-place scalar alu chains instead of one `load:const` slot
+          each -- the alu is idle during the setup ramp while the load
+          engine (2/cycle) is the binder; the arbitrary hash addends
+          (C0, C1, ap, aq, C4, C5) have no such relations (brute-forced)
+          and stay as const loads. `alu_val_addrs` computes the 32
+          initial-value vload addresses (ivp + 8g) on the alu as four
+          parallel +32 chains instead of 32 serial `add_imm` slots on
+          the 1-wide flow engine (which otherwise books flow solid to
+          ~cycle 40 and crowds the tournament fold vselect races off
+          flow). `lazy_val_loads` emits each group's va/vload at the
+          top of that group's round-0 emission instead of all up-front
+          (placement backfills, so this only moves slot-contention
+          tie-breaks). All default off; defaults are bit-identical.
 
         `debug_compares` interleaves free `("debug", ("vcompare", ...))`
         slots (skipped by the grader) checking node_val and hashed_val of
@@ -960,11 +982,50 @@ class KernelBuilder:
         root_nv = self.alloc_scratch("root_nv")
         S.emit("load", ("load", root_nv, fp), (fp,), (root_nv,), mem_read=True)
 
+        hc = self._fused_hash_constants()
+        if derive_consts:
+            # H-024 (setup load-slot removal): the setup ramp is bound by
+            # the 2-wide load engine (~21 scalar const/header loads ahead
+            # of the lv/val vloads) while the alu sits idle until the
+            # first hash round. Nine of the setup constants are cheap
+            # algebraic combinations of already-loaded ones; materialize
+            # them with IN-PLACE alu chains (each costs only its own
+            # scratch word) and pre-seed const_map so the const() calls
+            # below find them. The arbitrary hash addends (C0, C1, ap,
+            # aq, C4, C5) have no 1-op relations (brute-forced) and stay
+            # as const loads, as do 1/4/6 (header critical path).
+            four_c = self.const_map[4]
+
+            def dconst(val, name, *steps):
+                addr = self.alloc_scratch(name)
+                for op, a, b in steps:
+                    a = addr if a is None else a
+                    b = addr if b is None else b
+                    S.emit("alu", (op, addr, a, b), (a, b), (addr,))
+                self.const_map[val] = addr
+                return addr
+
+            two_c = dconst(2, "dc_two", ("+", one_c, one_c))
+            eight_c = dconst(8, "dc_eight", ("+", four_c, four_c))
+            sh5_c = dconst(hc["sh5"], "dc_sh5",            # 16 = 1<<4
+                           ("<<", one_c, four_c))
+            k4_c = dconst(hc["k4"], "dc_k4",               # 9 = 8+1
+                          ("+", eight_c, one_c))
+            kp_c = dconst(hc["kp"], "dc_kp",               # 33 = 16+16+1
+                          ("+", sh5_c, sh5_c), ("+", None, one_c))
+            dconst(hc["kq"], "dc_kq",                      # 16896 = 33<<9
+                   ("<<", kp_c, k4_c))
+            dconst(hc["k0"], "dc_k0",                      # 4097 = (16<<8)+1
+                   ("<<", sh5_c, eight_c), ("+", None, one_c))
+            dconst(hc["sh1"], "dc_sh1",                    # 19 = (2+1)+16
+                   ("+", two_c, one_c), ("+", None, sh5_c))
+            dconst((1 << 32) - 2, "dc_negtwo",             # -2 = (1^1)-2
+                   ("^", one_c, one_c), ("-", None, two_c))
+
         one_vec = bvec(one_c, "one_vec")
         two_vec = bvec(const(2), "two_vec")
         omf_vec = bvec(omf_s, "omf_vec")
         root_nv_vec = bvec(root_nv, "root_nv_vec")
-        hc = self._fused_hash_constants()
         hv = {k: bvec(const(hc[k]), k) for k in
               ("k0", "C0", "C1", "sh1", "kp", "ap", "kq", "aq", "k4", "C4", "C5", "sh5")}
 
@@ -1011,15 +1072,43 @@ class KernelBuilder:
             if maxT >= 3:
                 tmM = [self.alloc_scratch(None, VLEN) for _ in range(CP)]
 
+        va_chain = {}  # alu_val_addrs scalars, materialized on first use
+
+        def emit_val_g(g):
+            a = self.alloc_scratch(f"va{g}")
+            val_addrs[g] = a
+            if alu_val_addrs:
+                # H-024: va addresses (ivp + 8g) on the ramp-idle alu as
+                # four parallel +32 chains instead of 32 serial add_imm
+                # slots on the 1-wide flow engine (pause + rec + la + 32
+                # va otherwise book flow solid to ~cycle 40, gating the
+                # val vloads at 1/cycle AND crowding the tournament fold
+                # vselect races off flow).
+                if not va_chain:
+                    c8, c16 = const(8), const(16)
+                    t24 = self.alloc_scratch("va_c24")
+                    S.emit("alu", ("+", t24, c8, c16), (c8, c16), (t24,))
+                    t32 = self.alloc_scratch("va_c32")
+                    S.emit("alu", ("+", t32, c16, c16), (c16,), (t32,))
+                    va_chain.update({1: c8, 2: c16, 3: t24, "step": t32})
+                if g == 0:
+                    S.emit("alu", ("|", a, ivp, ivp), (ivp,), (a,))
+                elif g < 4:
+                    h = va_chain[g]
+                    S.emit("alu", ("+", a, ivp, h), (ivp, h), (a,))
+                else:
+                    prev, stp = val_addrs[g - 4], va_chain["step"]
+                    S.emit("alu", ("+", a, prev, stp), (prev, stp), (a,))
+            else:
+                S.emit("flow", ("add_imm", a, ivp, g * VLEN), (ivp,), (a,))
+            S.emit("load", ("vload", val_vecs[g], a),
+                   (a,), self._v(val_vecs[g]), mem_read=True)
+
         def emit_vals():
             nonlocal val_addrs
-            val_addrs = []
+            val_addrs = [None] * n_groups
             for g in range(n_groups):
-                a = self.alloc_scratch(f"va{g}")
-                S.emit("flow", ("add_imm", a, ivp, g * VLEN), (ivp,), (a,))
-                val_addrs.append(a)
-                S.emit("load", ("vload", val_vecs[g], a),
-                       (a,), self._v(val_vecs[g]), mem_read=True)
+                emit_val_g(g)
 
         if vals_first == "hash":
             alloc_state()
@@ -1156,9 +1245,15 @@ class KernelBuilder:
             eight_vec = bvec(const(8), "eight_vec")
 
         # --- persistent state + initial vals (default position) ---
+        assert not (lazy_val_loads and vals_first), \
+            "lazy_val_loads replaces the default val-vload position"
         if not vals_first:
             alloc_state()
-            emit_vals()
+            if lazy_val_loads:
+                # H-024: filled per group at its round-0 emission instead.
+                val_addrs = [None] * n_groups
+            else:
+                emit_vals()
 
         if l4_mem_primed:
             # Write the primed level-4 values (already ^C5 in lv scratch)
@@ -1182,6 +1277,10 @@ class KernelBuilder:
         # reproducing the historical contiguous emission bit-for-bit.
         def _egr_stages(r, g):
             if True:  # keep the original indentation of the body below
+                if lazy_val_loads and val_addrs[g] is None:
+                    # H-024: the group's initial-value va/vload emitted at
+                    # its first touch instead of all up-front at setup.
+                    emit_val_g(g)
                 L = level(r)
                 s = g % TP
                 j = g % CP
