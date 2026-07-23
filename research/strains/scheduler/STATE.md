@@ -100,6 +100,61 @@ Order/priority/tie-break knobs cannot change (a) or (b).
   but epoch phasing is fixed by rounds=16; only l4_gmin=(.,32) tests it
   and loses +16 on gathers (net +16-13 > 0, consistent).
 
+## H-024 successor work (iter 5): setup load-slot removal — variant frontier 1064
+
+**Result: -6 (1070 -> 1064) from `derive_consts=True, alu_val_addrs=True`**,
+flag-gated, default BIT-IDENTICAL to baa91e7 (programmatic instr compare,
+scheduled + fallback paths); grader 9/9 green at 1070 (default dispatch
+untouched). Variant correct on seeds {unseeded, 1, 2, 7, 42} and with
+`debug_compares=True`.
+
+Three new default-off kwargs in `build_kernel_scheduled`:
+
+- `derive_consts` (H-024 lead 1): 9 of the 18 setup constants are cheap
+  algebraic combinations of already-loaded ones and now materialize as
+  IN-PLACE scalar alu chains (no temp words) instead of one `load:const`
+  slot each: 2=1+1, 8=4+4, sh5=16=1<<4, k4=9=8+1, kp=33=16+16+1,
+  kq=kp<<k4 (0x4200=0x21<<9 confirmed), k0=(16<<8)+1=4097,
+  sh1=19=(2+1)+16, negtwo=(1^1)-2. The arbitrary hash addends (C0, C1,
+  ap, aq, C4, C5) have NO 1-op relations (brute-forced over +,-,^,|,&,
+  shifts against every loaded scalar; also loading C2+C3 instead of
+  ap/aq is load-count-neutral) and stay as loads, as do 1/4/6 (header
+  critical path: deriving 6 delays the ivp load +2 on the val0 path).
+  14 alu ops (idle ramp) replace 9 of ~21 scalar load slots. Alone: 1068.
+- `alu_val_addrs` (found while profiling lead 2): the 32 initial-value
+  vload ADDRESSES (ivp + 8g) move off the 1-wide flow engine (32 serial
+  add_imms which booked flow solid to ~cycle 40, gating val vloads at
+  1/cycle from c16 and crowding the tournament fold vselect races off
+  flow) onto the alu as four parallel +32 chains (34 ops, 2 scratch
+  words for the 24/32 steppers). Alone: 1070 — the const-load queue is
+  still the binder; composed with derive_consts: **1064**, and total
+  valu slots drop 6262 -> 6261 (one fold race wins flow back).
+- `lazy_val_loads` (H-024 lead 3, NEGATIVE control): emitting each
+  group's va/vload at its round-0 first touch instead of up-front is
+  +9 alone (1079) — the va flow add_imms then claim slots BEHIND the
+  pst/rec setup ops, delaying round-0 starts — and exactly neutral under
+  alu_val_addrs (1064: placement backfills, emission position of
+  feasible-early ops only moves ties). Confirms H-021's mechanism note.
+
+Ramp profile before/after (tools/sched_profile.py):
+| | mainline | derive+alu_val_addrs |
+|---|---|---|
+| cycles | 1070 | 1064 |
+| friction vs valu floor | 26 | 20 |
+| empty valu slots (gap cycles) | 158 (55) | 123 (45) |
+| setup-ramp empty slots | 49 | 22 |
+| first tagged (round-0) cycle | 12 | 7 |
+| load engine | 2/2 c0-c15, then 1/cyc (flow-gated vals) | 2/2 c0-c15 solid |
+| ramp blockers | load:const 33.3, vload/add_imm | val 73 (r0 hash warmup), load:const 9.5 |
+
+Composition sweep: tie_break=fold_flow 1064 (=), flow_consts 1066,
+vals_first=True/'hash' 1070/1070, +lazy 1064 (=). Remaining ramp (~22
+slots over c0-c6) is round-0 hash-chain warmup + the irreducible
+fp->root->bvec->fold depth — near-structural; the drain (r15 L4, 66
+slots) is untouched and stays H-023's territory. Follow-up for the sweep
+strain: re-tune l4_gmin/skew/pools under derive_consts+alu_val_addrs
+(the ramp shift may move the sharp 1070 optimum).
+
 ## Iteration log
 (append-only)
 - iter 4 (H-021): friction profiled to the slot (tools/sched_profile.py,
@@ -110,3 +165,9 @@ Order/priority/tie-break knobs cannot change (a) or (b).
   controls + sweep dimensions (emit_order, flow_consts, vals_first,
   tie_break). Honest zero; b3-last drain restructure promoted as the
   strain's successor lead. Grader 9/9 @ 1070.
+- iter 5 (H-024): setup load-slot removal ACCEPTED at the variant
+  frontier: derive_consts (9 consts alu-derived, kq=kp<<9 et al.) +
+  alu_val_addrs (32 va addresses off flow onto 4 parallel alu chains)
+  = 1070 -> 1064; ramp empty slots 49 -> 22, round 0 starts c12 -> c7.
+  lazy_val_loads negative alone (+9), neutral composed — kept as a
+  negative control. Default bit-identical; grader 9/9 @ 1070.
