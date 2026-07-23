@@ -278,8 +278,9 @@ class KernelBuilder:
             self.build_kernel_scheduled(
                 batch_size, rounds, forest_height,
                 tournament_levels=(1, 2, 3), alu_offload=True,
-                parity_conds=True, c5_prexor=True, vsel_auto=(1, 3),
-                pool_sizes=(17, 4), l4_gmin=(15, 29),
+                parity_conds=True, c5_prexor=True, vsel_auto=(1, 2),
+                u_race=True, l4_race=3, idx_race=True,
+                pool_sizes=(16, 4), l4_gmin=(13, 28),
             )
         else:
             self.build_kernel_pipelined(

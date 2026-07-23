@@ -219,15 +219,22 @@ strain STATE.md and the driver promotes them here.
 - result:
 - log: 2026-07-23 promoted from flow-balance P-2.
 
-### H-019 [strain: flow-balance] [status: open]
+### H-019 [strain: flow-balance] [status: accepted]
 - statement: Generalize dual placement (H-017's P-4): partial-L4 vsel_auto
   (17 free words fund 2 of 8 W-pair odd tables) and a ListScheduler
   `emit_any(encodings)` primitive unifying the fold race with the alu-split
   race — every multi-encoding op placed wherever it retires earliest.
 - predicted: -5..-15 cyc (valu floor 1073 vs 1107 actual = 34 cyc of slack
   to harvest). cost: M. depends: H-017 (in mainline).
-- result:
-- log: 2026-07-23 promoted from flow-balance P-4.
+- result: ACCEPTED iter 3 at 1070 (-17 net): emit_any() unifies all encoding
+  races (bit-identical refactor of dual_fold + alu-split); u_race (L4
+  U-combines flow-vs-valu) is the enabler (-4 alone), l4_race=3 partial odd
+  tables, idx_race alu spellings (-5 composed), l4_gmin drifts again to
+  (13,28). sel_race (reverse race) measured negative -> G-14. Composed
+  retune confirms va=(1,2); the (1,3) sweep-win was flag-set-specific.
+  valu 6262 slots (floor 1044); alu now 93.9% -- BOTH compute engines near
+  saturation; placement racing is at its ceiling (P-7: op removal next).
+- log: 2026-07-23 promoted; iter 3 ACCEPTED, dispatch flipped.
 
 ### H-020 [strain: sweep] [status: open]
 - statement: pool-shape x vsel_auto interaction sweep ((16,3) beat (17,3) by
@@ -247,3 +254,10 @@ strain STATE.md and the driver promotes them here.
 - predicted: -10..-26 cyc (bounded by the floor gap). cost: M.
 - result:
 - log: 2026-07-23 opened at strain rotation.
+
+### H-022 [strain: sweep] [status: open]
+- statement: grid additions from H-019's P-8: u_race x l4_race subsets x
+  idx_race x l4_gmin dense x pools under the 1070 mainline.
+- predicted: -1..-5. cost: S. depends: none.
+- result:
+- log: 2026-07-23 promoted from flow-balance P-8.

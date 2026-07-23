@@ -116,3 +116,12 @@ Seeded 2026-07-23 from the 2148->1140 campaign's measured rejections.
   critical-path rejection (G-8, G-11, G-13) -> strain retired.
 - reopen-if: valu AND alu both gain >=8% headroom. Retest hooks kept:
   parity_early, spec_fold flags (one command each, see H-013).
+
+### G-14 sel_race: flow->valu reverse race for 0/1-cond selects (H-019 part)
+- statement: letting existing flow vselects fall back to valu when flow is
+  locally constrained wins cycles.
+- evidence: +1..+3 in every combination at the 1088 base; valu is the
+  binding engine so giving it MORE work never pays, even raced. Kept
+  in-tree as a negative control flag.
+- reopen-if: valu drops below ~90% busy while flow locally saturates
+  (e.g. after a large op-removal accept).

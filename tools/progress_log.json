@@ -100,5 +100,11 @@
     "label": "sweep: va=(1,3)",
     "cycles": 1087,
     "note": "Phase-3 sweep under 1088: vsel_auto=(1,3) beats (1,2) by 1 under c5_prexor."
+  },
+  {
+    "step": "emit_any",
+    "label": "emit_any racing\n(H-019)",
+    "cycles": 1070,
+    "note": "Unified multi-encoding placement racing: U-combines valu-vs-flow, partial-L4 odd tables, Idx madd alu spellings; l4_gmin drifts to (13,28). alu now 93.9% -- placement racing near ceiling."
   }
 ]

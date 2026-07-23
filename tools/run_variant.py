@@ -32,12 +32,15 @@ sys.path.insert(0, os.path.join(REPO_ROOT, "tests"))
 BASE_KWARGS = {
     "tournament_levels": (1, 2, 3),
     "alu_offload": True,
-    "l4_gmin": (15, 29),
-    "pool_sizes": (17, 4),
+    "l4_gmin": (13, 28),
+    "pool_sizes": (16, 4),
     "skew": (4, 3),
     "parity_conds": True,  # H-001 accepted iter 1 (1140 -> 1130)
-    "vsel_auto": (1, 3),  # H-017 iter 2; retuned to (1,3) by phase-3 sweep @1087
+    "vsel_auto": (1, 2),  # H-017 iter 2; (1,3) sweep-win superseded by H-019 retune
     "c5_prexor": True,  # H-015 accepted iter 2 (composed retune -> 1088)
+    "u_race": True,  # H-019 accepted iter 3 (emit_any U-combine race)
+    "l4_race": 3,  # H-019: first 3 W-pairs dual-encoded
+    "idx_race": True,  # H-019: Idx madds get alu spellings
     "debug_compares": False,  # speed; grader ignores debug slots anyway
 }
 SHAPE = {"forest_height": 10, "batch_size": 256, "rounds": 16}

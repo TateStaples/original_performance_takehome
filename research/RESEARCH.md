@@ -7,13 +7,14 @@
 
 | cycles | commit | config |
 |---|---|---|
-| 1087 | (iter-3 sweep) | `tournament_levels=(1,2,3), alu_offload=True, parity_conds=True, c5_prexor=True, vsel_auto=(1,3), pool_sizes=(17,4), l4_gmin=(15,29)` |
+| 1070 | (iter-3) | `tournament_levels=(1,2,3), alu_offload=True, parity_conds=True, c5_prexor=True, vsel_auto=(1,2), u_race=True, l4_race=3, idx_race=True, pool_sizes=(16,4), l4_gmin=(13,28)` |
 
 ## Floors (calibrated 2026-07-23, see tools/diagnose_kernel.py)
 
-- Op-mix floor: valu still binding: 6439 slots / 6 = ~1073 cycle-equivalents
-  at 1107 actual (34 cyc scheduling slack). flow 58.3%, alu 87.6%, load 89.6%.
-- Scratch: 1519/1536 -- 17 words FREE (first headroom since iter 0).
+- Op-mix floor: valu 6262 slots / 6 = ~1044 cycle-equivalents at 1070 actual
+  (26 cyc slack). alu 93.9% (near-saturated!), flow 61.9%, load 89.8%.
+  BOTH compute engines converging: placement racing at ceiling; remaining
+  route to <1000 = lane-op REMOVAL (valu toward <6000) + slack harvest.
 - Flow-offload ceiling: floor -> ~962 if routing/idx arithmetic moves to flow (29.6% used)
 - Load floor: 1,936 gathers / 2 per cyc = 968 (load 87.4% busy)
 - Hash-only absolute floor: 49,152 lane-ops / 60 per cyc = 819
@@ -48,3 +49,4 @@ Global: 6 dry iterations -> one cross-pollination iteration. Status report to us
 - iter 2 CLOSED | H-014 REJECTED (0 nv-bound gathers) -> G-11; H-017 vsel_auto ACCEPTED (-23) -> 1107, hard flip -> G-12; H-015 c5_prexor ACCEPTED composed (-19) -> 1088 (driver fixed vsel_auto arm-order interaction + composed retune: va=(1,2), gmin=(15,29)); re-sweep negative | best 1088
 - iter 3 (in flight) | sweep phase 3: vsel_auto=(1,3) accepted (-1) -> 1087; H-019/H-004+18/H-010 agents running | best 1087
 - iter 3 | H-010 honest zero -> G-13; critical-path RETIRED, scheduler strain rotated in (H-021). H-019, H-004+18 still running | best 1087
+- iter 3 | H-019 emit_any ACCEPTED 1070 (-17); sel_race -> G-14; alu 93.9% (racing ceiling reached). H-004+18 agent still running | best 1070
