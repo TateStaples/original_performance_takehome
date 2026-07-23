@@ -121,7 +121,31 @@ def phase3_grid():
         yield {"tournament_levels": tl}
 
 
-PHASES = {1: phase1_grid, 2: phase2_grid, 3: phase3_grid}
+def phase4_grid():
+    """Under the 1070 mainline (u_race/l4_race/idx_race landed): race-flag
+    subsets x the drifting l4_gmin x pools x va."""
+    for ur in (True, False):
+        for lr in (0, 1, 2, 3, 4):
+            for ir in (True, False):
+                yield {"u_race": ur, "l4_race": lr, "idx_race": ir}
+    for a in range(7, 20):
+        for b in range(24, 32):
+            yield {"l4_gmin": (a, b)}
+    for va in ((1, 2), (1, 3), (1, 2, 3), (2,), (1,), (2, 3), ()):
+        for gmin in ((13, 28), (11, 28), (13, 27), (15, 28)):
+            yield {"vsel_auto": va, "l4_gmin": gmin}
+    for tp in range(14, 19):
+        for cp in (3, 4, 5):
+            yield {"pool_sizes": (tp, cp)}
+    for blocks, lag in ((4, 2), (4, 3), (4, 4), (8, 1), (8, 2), (2, 5)):
+        yield {"skew": (blocks, lag)}
+    for a in range(1, 9):
+        for bb in range(a, 11):
+            for c in range(bb, 13):
+                yield {"skew": [0, a, bb, c]}
+
+
+PHASES = {1: phase1_grid, 2: phase2_grid, 3: phase3_grid, 4: phase4_grid}
 
 
 def main():
