@@ -24,8 +24,11 @@ skew=[0,3,6,9] and l4_race=(0,1,7) tie at 1070.
 - H-019 (iter 3): generalize dual placement (emit_any). DONE: 1088 -> 1070
   (-18) via u_race + l4_race=3 + idx_race + retune; emit_any primitive
   landed and dual_fold/_sched_vec unified through it bit-identically.
-Queued: H-007 (subsumed in practice by emit_any — driver may close), H-006
-(load-side), H-009, H-011, H-018 (idx-madd REMOVAL, now the bigger lever).
+- H-006 (iter 4): load-side demand reduction, measurement first. DONE:
+  REJECTED/closed permanently (honest negative, see iter 4 log). No kernel
+  change; measurement tool `tools/measure_gather_dist.py` landed.
+Queued: H-007 (subsumed in practice by emit_any — driver may close),
+H-009, H-011.
 
 ## Iteration log
 (append-only)
@@ -127,6 +130,70 @@ Queued: H-007 (subsumed in practice by emit_any — driver may close), H-006
   scheduler-level primitive H-007 asked for (driver may close H-007 as
   subsumed).
 
+- iter 4 (H-006): load-side demand reduction — CLOSED NEGATIVE by
+  measurement, no kernel change (perf_takehome.py untouched; grader 9/9 on
+  the unchanged mainline). Four independent kill shots, all at the graded
+  shape (fh=10, bs=256, r=16):
+  1. GATHER-ADDRESS DISTRIBUTION (`tools/measure_gather_dist.py`, 50 random
+     instances): lane-order contiguity of a group's 8 gather addresses is
+     0.00% at EVERY round (contiguous-SET <= 0.5%, and only at L3 which is
+     already tournament-served) -> vload-batched gathers are dead. Within-
+     group duplication at the gather levels is the uniform-draw expectation:
+     0.86 dup/group (L5), 0.45 (L6), 0.23 (L7), 0.12 (L8), 0.06 (L9), 0.03
+     (L10) -> even a hypothetical input-dependent dedup router would save
+     <1 load slot per group-round, and NO input-dependent scheme is legal
+     (kernel is built before data; grader runs fresh seeds). Cross-group:
+     L5's 32 structural nodes are always all hit (256 walkers), L6 63.1/64.
+     Only structural facts (2^d distinct nodes at level d) are exploitable.
+  2. NO SCRATCH-INDEXED SCRATCH ACCESS (verified in problem.py
+     Machine.load/flow, not just isa.md): every scratch operand of every op
+     is a literal instruction field; the ONLY data-dependent addressing is
+     through MEM (`load`: mem[scratch[addr]]; `store`; `vload/vstore` with
+     scalar base). So values parked in scratch can reach walkers only via
+     select folds = the tournament; and a mem-table lookup costs exactly
+     the 1 load slot/walker the gather already pays. Table service cannot
+     beat gathers on load slots without eating the fold tree.
+  3. TOURNAMENT WALL RE-MEASURED under the full iter-3 racing stack
+     (parity_conds + vsel_auto + emit_any + u_race + l4_race + idx_race):
+     l4_gmin=(0,0) [full L4 service, -328 load slots] = 1145 (+75), seeds
+     1 and 7 identical. G-9-era cost was 1270 vs 1140 (+130): the wall
+     MOVED ~55 cyc — racing service keeps getting cheaper — but the
+     pre-registered "try L5-partial if ~1100" threshold is NOT met.
+     Decomposition: (0,28)=1096 (+26, epoch 0), (13,0)=1120 (+50, epoch 1),
+     additive. Marginal curve around the swept optimum (13,28)=1070:
+     (12,28)=1071, (11,28)=1072, (9,28)=1077, (0,28)=1096; other side
+     (15,28)=1080, (13,26)=1075. So (13,28) is a true local min and the
+     MORE-service side is nearly flat: the first extra groups cost ~+1
+     cycle per 8 load slots freed. L5 service was NOT coded, by
+     arithmetic: 16 W + 8 U + 4 + 2 + 1 = 31 folds + ~4 conds ~= 35
+     valu/flow ops per group-round to free the same 8 load slots — 2x
+     L4's exchange rate at a point where L4's own margin already loses.
+  4. WINDOWED PROFILE (the sharpest new fact): load runs at 100.0% busy
+     for cycles ~100-950 — an 850-cycle fully saturated wall — and valu
+     AND alu are also ~100% there. The aggregate 89.8% load util is an
+     artifact of setup/tail slack; mid-kernel the machine is TRIPLE-
+     saturated (load+valu+alu). Load already IS a wall locally; every
+     service variant loses because it relieves load by ADDING valu ops
+     inside that same window. Only demand REMOVAL (any engine) or
+     end-window shifting can shorten it.
+  Pair-gather reopen check (G-3): free scratch at the 1070 config is 6
+  words (kb.scratch_ptr 1530/1536; the 17 free at 1107 were spent on
+  l4_race odd tables) vs >=256 required — NOT met; loads are slot-
+  contention-bound, not latency-bound (G-11), so the vload pair-fetch
+  variant (children 2i+1/2i+2 are ADJACENT, one vload/walker is demand-
+  NEUTRAL and issueable a round early) buys latency nobody needs, and
+  costs 64 live words/group across the boundary (>=512 under skew
+  overlap) + 8 scalar flow selects/group-round. Closed without coding.
+  VERDICT: H-006 rejected; load-side demand reduction is permanently
+  closed EXCEPT through the existing l4_gmin dial, which the standing
+  sweeps already re-tune after every accept (P-3 pattern: (22,28) ->
+  (20,29) -> (15,29) -> (13,28) as valu was relieved). Endgame note for
+  the driver: when op-removal accepts push toward <1000 and load's
+  1921-slot demand becomes the strict wall, the dial sheds up to 328
+  slots at a price that today starts at ~1 cyc/group and totals +75 —
+  and that price FALLS with every valu-relief accept, so no new
+  mechanism is needed; H-005/H-022 harvest it for free.
+
 ## Proposed hypotheses
 (agent appends; driver promotes to backlog.md)
 - P-1 [-> strengthens H-007, cost S]: madd->vselect flip for tournament
@@ -185,3 +252,31 @@ Queued: H-007 (subsumed in practice by emit_any — driver may close), H-006
   0/1-cond selects): +1..+3 on every base measured (1088 mainline, u_race,
   l4_race stacks). Reopen only if valu gains real headroom (<90%) while
   flow saturates locally — i.e. the exact inverse of today's profile.
+- P-10 [iter 4, graveyard entry for the driver — proposed G-16 text]:
+  "Load-side demand reduction beyond the l4_gmin dial (H-006): vload-
+  batched gathers (0.00% lane-order contiguity, 50 seeds), input-dependent
+  dedup (<1 dup load/group-round at gather levels, and illegal anyway),
+  L5/L6 table service (no scratch-indexed scratch read exists; routing =
+  31+ folds/group-round = 2x L4's exchange rate; L4-full measured 1145
+  (+75) under the full racing stack, vs G-9's +130 — wall moved, sign
+  robust), and pair-gather (6 free scratch words vs >=256; loads slot-
+  contention-bound per G-11; the demand-neutral vload pair-fetch buys
+  non-binding latency for >=512 words + 8 flow selects/group-round).
+  Reopen-if: an accept frees >=10% of mid-kernel valu (then the l4_gmin
+  dial slides via the standing sweep — no new code), or a sub-960 target
+  needs load demand <~1750 (then re-cost L5 at the then-current racing
+  exchange rate; today's honest price is ~35 valu/flow ops per 8 slots)."
+- P-11 [iter 4 coordination note -> driver/op-reduction/scheduler]: the
+  windowed profile shows an 850-cycle mid-kernel window (cycles ~100-950)
+  where load, valu AND alu are ALL at 100.0% (flow 30-94%); every free
+  slot of the three binding engines lives in setup (0-100) or drain
+  (950-1070). Consequences: (a) an op-removal accept on ONE engine only
+  moves cycles once the other two shed proportionally — H-016 hash hits
+  (alu 10224 + valu 4582 slots) are the right shape, pure-alu or pure-load
+  diets are not; (b) after any hash-op removal, load's 1700-slot share of
+  that window becomes the strict wall and l4_gmin must slide down in the
+  SAME retune (its marginal price is ~1 cyc per 8 slots today and falls
+  with valu relief); (c) H-021's scheduling-slack harvest is bounded by
+  the drain tail (~120 cycles at <=90% load/valu) more than by mid-kernel
+  friction — shortening the pipeline fill/drain (skew shape, store
+  placement) is where the last ~26 cycles over the valu floor sit.
