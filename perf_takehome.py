@@ -78,6 +78,11 @@ class ListScheduler:
         self.last_read = {}
         self.mem_read_c = -1
         self.mem_write_c = -1
+        # H-028 (store_pair): when True, two mem WRITES may share a cycle
+        # (writes commit at end of cycle, so same-cycle writes to DISJOINT
+        # addresses are exact; this kernel never writes the same mem word
+        # twice). Reads keep full ordering against writes both ways.
+        self.pair_writes = False
         self.hint = dict.fromkeys(SLOT_LIMITS, 0)
         # Optional placement trace (tools/sched_profile.py): when `trace` is
         # a list, every put() appends (cycle, engine, tag, slot, reads,
@@ -105,8 +110,9 @@ class ListScheduler:
         if mem_read and self.mem_write_c + 1 > c:
             c = self.mem_write_c + 1
         if mem_write:
-            if self.mem_write_c + 1 > c:
-                c = self.mem_write_c + 1
+            t = self.mem_write_c + (0 if self.pair_writes else 1)
+            if t > c:
+                c = t
             if self.mem_read_c > c:
                 c = self.mem_read_c
         return c
@@ -440,6 +446,7 @@ class KernelBuilder:
         vsel_folds=False,
         vsel_auto=(),
         c5_prexor: bool = False,
+        mem_prime=(),
         spec_fold=(),
         l4_race=(),
         u_race: bool = False,
@@ -447,6 +454,8 @@ class KernelBuilder:
         idx_race: bool = False,
         b3_last=(),
         b3l_race: bool = True,
+        b3l_diffs: bool = False,
+        bl_last=(),
         emit_order: str = "group",
         flow_consts: bool = False,
         vals_first: bool = False,
@@ -454,6 +463,7 @@ class KernelBuilder:
         derive_consts: bool = False,
         alu_val_addrs: bool = False,
         lazy_val_loads: bool = False,
+        store_pair: bool = False,
         debug_compares: bool = True,
     ):
         """
@@ -572,6 +582,27 @@ class KernelBuilder:
           (32 words) for the negtwo/primed-root vectors, like
           parity_early does.
 
+        - `mem_prime` (H-026, cross): extend c5_prexor's in-mem priming
+          from level 4 to deeper GATHER levels. For each level d in the
+          iterable, the 2^d tree words at that level are vloaded, xored
+          with C5 and vstored back during the setup load-engine lull
+          (between the setup vloads and the first gather; staged through
+          the setup-dead `lv` scratch). Round d's gathers then return
+          PRIMED values, so round d-1 joins the elide set and drops its
+          `^ C5` for every group (32 vec ops per level at the graded
+          shape). Rounds that exit an elided round into gather mode carry
+          an inverted parity; the update becomes
+            gaddr' = 2*gaddr + (omf+1) - par'
+          (same op count: the `omf1` vector rides the last 8 words of the
+          setup-dead lv scratch, so no persistent allocation). Cost per
+          level d: 2^d/8 vloads + vstores + vec xors in the setup lull,
+          where the load engine is otherwise idle -- the marginal-cost
+          refutation of H-015's P-4 all-or-nothing arithmetic. Levels
+          must be gather levels above the tournament (5..height); load
+          cost doubles per level while the elide gain stays constant, so
+          only the shallowest levels can pay. Requires c5_prexor (and the
+          full-width lv scratch: maxT == 3 with level-4 service on).
+
         - `spec_fold` (H-010): parity speculation at shallow tournament
           levels. xor distributes over select, so the hash fold-in
             vl ^ select(b, O, E)  ==  select(b, vl^O, vl^E):
@@ -636,6 +667,36 @@ class KernelBuilder:
           of round numbers. Requires parity_conds; disjoint from a hard
           level-4 vsel_folds.
 
+        - `bl_last` (H-027 companion, cross): the b3_last idea applied to
+          the shallow tournament levels 2 and 3 WITHOUT any new tables:
+          node_val = evens[t] + b_new * diffs[t] where t is chosen by the
+          OLDER bits already sitting in `st` at round start, so the even
+          and diff tables can be folded down to evens[t]/diffs[t] by
+          flow vselects BEFORE the newest parity arrives, leaving a
+          post-parity chain of ONE madd (L2: 2 -> 1 dependency levels,
+          L3: 3 -> 1) at the cost of moving fold work from valu madds to
+          flow vselects (L2: 2 madd + 1 vsel -> 1 madd + 2 vsel; L3:
+          4 madd + 3 vsel -> 1 madd + 6 vsel). That trade loses in the
+          triple-saturated middle (G-12: flow floods) but wins in the
+          drain where flow idles and the LAST skew block's serial
+          round chain is the binder, so it applies only to rounds listed
+          in `bl_last` AND groups of the last skew block. Requires
+          parity_conds.
+
+        - `b3l_diffs` (H-027, cross; G-17's reopen-if): fund b3_last's
+          leaf folds with PRECOMPUTED leaf-diff tables --
+          dT[k] = tabs[2k+1] - tabs[2k] for both E_vecs and D_vecs --
+          so each leaf select spells as ONE valu madd (raced against the
+          flow vselect via `dual_fold`) instead of H-023's 2-op
+          subtract+madd or a serialized flow vselect. The ~64 words those
+          8 vectors need do not exist as free scratch; at the FINAL round
+          they ride the `st` vectors of the non-served groups, which are
+          truly dead there (their last read is the previous round's
+          gather issue) -- the 8 subtracts are emitted lazily at the
+          first served group's fold and land in the r14/r15 seam where
+          valu drains. Applies to the final round only (earlier rounds'
+          st vectors are live; those keep H-023's race_leaf path).
+
         - `emit_order` / `flow_consts` / `vals_first` / `tie_break`
           (H-021): pure EMISSION-ORDER / setup-encoding / tie-break
           experiments; none changes the maths. `emit_order="group"`
@@ -678,6 +739,14 @@ class KernelBuilder:
           top of that group's round-0 emission instead of all up-front
           (placement backfills, so this only moves slot-contention
           tie-breaks). All default off; defaults are bit-identical.
+
+        - `store_pair` (H-028, cross): allow two mem WRITES to share a
+          cycle in the scheduler's coarse memory model. Writes commit at
+          end of cycle and every store in this kernel targets a distinct
+          mem word, so same-cycle write pairs are exact; reads keep full
+          ordering against writes in both directions. Without it the 32
+          final vstores serialize at 1/cycle on the 2-wide store engine
+          and the last few are exposed at the very end of the drain.
 
         `debug_compares` interleaves free `("debug", ("vcompare", ...))`
         slots (skipped by the grader) checking node_val and hashed_val of
@@ -815,6 +884,24 @@ class KernelBuilder:
         assert not b3l_rounds or (parity_conds and 4 not in vf_levels), \
             "b3_last requires parity_conds and no hard level-4 vsel_folds"
 
+        # bl_last (H-027 companion): newest-parity-last folds at L2/L3 for
+        # the LAST skew block's listed rounds (see docstring).
+        if bl_last is True:
+            bl_rounds = {r for r in range(rounds) if level(r) in (2, 3)}
+        elif bl_last:
+            bl_rounds = set(bl_last)
+        else:
+            bl_rounds = set()
+        bl_rounds = {r for r in bl_rounds if level(r) in (2, 3)}
+        assert not bl_rounds or parity_conds, "bl_last requires parity_conds"
+
+        def bl_lastq(r, g):
+            # bs_ (groups per skew block) is defined before emission runs.
+            return (r in bl_rounds and level(r) in T_set
+                    and g >= n_groups_ - bs_
+                    and level(r) not in sp_levels
+                    and level(r) not in vf_levels)
+
         def served(r, g):
             # node_val comes from scratch (no gather) on these rounds
             lv_ = level(r)
@@ -829,6 +916,22 @@ class KernelBuilder:
         # are already vloaded into lv scratch for the pair-tournament.
         l4_mem_primed = c5_prexor and l4_any and maxT == 3
 
+        # mem_prime (H-026): deeper gather levels primed in mem at setup.
+        mp_levels = ({mem_prime} if isinstance(mem_prime, int)
+                     else set(mem_prime))
+        if mp_levels:
+            assert c5_prexor, "mem_prime requires c5_prexor"
+            assert l4_mem_primed, \
+                "mem_prime stages through the full-width lv scratch"
+            assert all(L4 < d < forest_height + 1 for d in mp_levels), \
+                "mem_prime levels must be gather levels above the tournament"
+            # dffold's lv leaf temps at NON-final b3_last rounds would
+            # clobber omf1_vec (lv[24..31]) while it is still live (elided
+            # gather exits read it after those rounds). Final-round
+            # b3_last is fine: omf1's last read precedes r15.
+            assert not (b3l_rounds - {rounds - 1}), \
+                "mem_prime supports b3_last on the final round only"
+
         def primed_nv(rr, g):
             # Does round rr's fold read a C5-pre-xored node_val source?
             if not c5_prexor:
@@ -838,6 +941,8 @@ class KernelBuilder:
                 return rr > 0  # round 0 uses the TRUE root broadcast
             if lv_ in T_set or l4_served(rr, g):
                 return True  # broadcast tables are primed at setup
+            if lv_ in mp_levels:
+                return True  # gather level primed in mem (H-026)
             return lv_ == L4 and l4_mem_primed  # level-4 mem primed in place
 
         def elide(r, g):
@@ -857,6 +962,13 @@ class KernelBuilder:
 
         S = ListScheduler()
         S.trace = getattr(self, "sched_trace", None)
+        # H-028 (store_pair): let mem writes pair up within a cycle -- the
+        # scheduler's coarse one-location mem model otherwise serializes
+        # the 32 final vstores at 1/cycle on the 2-wide store engine, and
+        # the last ~5 of them are exposed at the very end of the drain
+        # (every store in this kernel targets a distinct mem word, so
+        # same-cycle commits are exact).
+        S.pair_writes = bool(store_pair)
 
         if flow_consts:
             # H-021: the setup ramp is load-bound (consts + vloads share the
@@ -1007,7 +1119,8 @@ class KernelBuilder:
                 ) + (madd_op,))
             S.emit_any(encs)
 
-        def dffold(st_, tabs, r_lo, r_mid, r_hi, r_mask, dst, da=None, db=None):
+        def dffold(st_, tabs, r_lo, r_mid, r_hi, r_mask, dst, da=None,
+                   db=None):
             # H-023 (b3_last): depth-first fold of the 8 broadcast tables
             # tabs[0..7] (indexed by the level-3 winner t = b0b1b2) down to
             # tabs[t*], by b2 (leaf, st_&1), b1 (mid, st_&2), b0 (root,
@@ -1375,6 +1488,100 @@ class KernelBuilder:
                 S.emit("store", ("vstore", pst, src),
                        (pst,) + self._v(src), (), mem_write=True)
 
+        if mp_levels:
+            # H-026 (mem_prime): prime the listed deeper gather levels in
+            # mem -- vload / ^C5 / vstore waves staged through lv[0..23]
+            # (setup-dead once the broadcast tables have read it; the
+            # scheduler's per-address WAR tracking orders the waves after
+            # those reads, and its coarse mem hazards keep every wave's
+            # store ahead of the first gather). lv[24..31] becomes the
+            # permanent home of the omf1 = 2 - fp vector used by elided
+            # gather-mode exits (scratch is otherwise full).
+            omf1_s = self.alloc_scratch("omf1")
+            S.emit("alu", ("+", omf1_s, omf_s, one_c),
+                   (omf_s, one_c), (omf1_s,))
+            omf1_vec = lv + 3 * VLEN
+            S.emit("valu", ("vbroadcast", omf1_vec, omf1_s),
+                   (omf1_s,), self._v(omf1_vec))
+            k = 0
+            for d in sorted(mp_levels):
+                for off in range(0, 2 ** d, VLEN):
+                    stage = lv + (k % 3) * VLEN
+                    k += 1
+                    S.emit("flow", ("add_imm", la, fp, 2 ** d - 1 + off),
+                           (fp,), (la,))
+                    S.emit("load", ("vload", stage, la),
+                           (la,), self._v(stage), mem_read=True)
+                    vec("^", stage, stage, hv["C5"])
+                    S.emit("store", ("vstore", la, stage),
+                           (la,) + self._v(stage), (), mem_write=True)
+
+        b3l_dE = b3l_dD = b3l_pool = None
+
+        def b3l_make_diffs(r):
+            # H-027 (b3l_diffs): leaf-diff tables + a private-register pool
+            # for the b3-last fold at the FINAL round. There is no free
+            # scratch, but by the final round's served-group folds a large
+            # set of vectors is truly dead: the `st` of every non-served
+            # group (last read = round r-1's gather issue) and the `nv` of
+            # every earlier block's group (last read = its own final-round
+            # fold-in xor, emitted before the last block). The 8 diff
+            # vectors and each served group's private temps ride there --
+            # per-address hazard tracking makes the reuse safe, and the
+            # private temps remove the cond/tm-pool WAW serialization that
+            # dffold's shared working set suffers at the drain. Donors are
+            # ordered earliest-dead-first so the last group's temps never
+            # wait on a late donor read.
+            nonlocal b3l_dE, b3l_dD, b3l_pool
+            if b3l_dE is not None:
+                return
+            unserved = [g for g in range(n_groups) if not l4_served(r, g)]
+            early = 2 * bs_  # first two skew blocks die earliest
+            b3l_pool = (
+                [state_vecs[g] for g in unserved if g < early]
+                + [nv_vecs[g] for g in unserved if g < early]
+                + [state_vecs[g] for g in unserved if g >= early]
+                + [nv_vecs[g] for g in unserved if g >= early]
+            )
+            if len(b3l_pool) < 8 + 9:  # diffs + one private group
+                b3l_dE, b3l_dD, b3l_pool = [], [], []
+                return
+            b3l_dE, b3l_dD = [], []
+            for k in range(2 ** maxT // 2):
+                for tabs, out in ((E_vecs, b3l_dE), (D_vecs, b3l_dD)):
+                    h = b3l_pool.pop(0)
+                    vec("-", h, tabs[2 * k + 1], tabs[2 * k])
+                    odd_of[h] = tabs[2 * k + 1]
+                    out.append(h)
+
+        def b3l_fold_diffs(st_, nv_):
+            # Final-round b3-last fold with precomputed diffs and private
+            # registers: masks computed ONCE (exact 0/1, off st_ which is
+            # ready at round start), each leaf a dual_fold (1 valu madd
+            # racing 1 flow vselect), combines race_sel. Post-b3 chain =
+            # 1 madd + fold-in + hash. st_ is left intact (final round:
+            # nothing reads it after, but the masks need it here).
+            mb2, mb1, mb0, e0, e1, e2, d0, d1, d2 = (
+                b3l_pool.pop(0) for _ in range(9))
+            vec("&", mb2, st_, one_vec)
+            vec(">>", mb1, st_, one_vec)
+            vec("&", mb1, mb1, one_vec)
+            vec(">>", mb0, st_, two_vec)
+            vec("&", mb0, mb0, one_vec)
+            comb = race_sel if b3l_race else vsel
+            for tabs, dt, r0, r1, r2 in (
+                (E_vecs, b3l_dE, e0, e1, e2),
+                (D_vecs, b3l_dD, d0, d1, d2),
+            ):
+                dual_fold(r0, mb2, dt[0], tabs[0])    # u0
+                dual_fold(r1, mb2, dt[1], tabs[2])    # u1
+                comb(r0, mb1, r1, r0)                 # q0 = b1 ? u1 : u0
+                dual_fold(r1, mb2, dt[2], tabs[4])    # u2
+                dual_fold(r2, mb2, dt[3], tabs[6])    # u3
+                comb(r1, mb1, r2, r1)                 # q1 = b1 ? u3 : u2
+                comb(r0, mb0, r1, r0)                 # winner = b0 ? q1 : q0
+            madd(nv_, nv_, d0, e0)                    # node_val = E + b3*D
+
         # --- rounds ---
         # The round body is a GENERATOR yielding at stage boundaries
         # (node_val block, each hash dependency level, state update), so the
@@ -1462,7 +1669,17 @@ class KernelBuilder:
                         vsel(vl, condB[j], tmM[j], t1[s])   # by b0, into vl
                         nvsrc = None
                     elif L == 2:
-                        if parity_conds:
+                        if parity_conds and bl_lastq(r, g):
+                            # H-027 (bl_last): b0 (=st, ready at round
+                            # start) pre-selects the pair on flow; the
+                            # newest bit b1 (=nv) folds LAST via one madd.
+                            # node = evens[b0] + b1*diffs[b0]; post-parity
+                            # chain 2 -> 1 levels.
+                            vsel(t1[s], st, diffs[1], diffs[0])
+                            vsel(tm[j], st, evens[1], evens[0])
+                            pfold(st, nv)                    # st = b0b1
+                            madd(nv, nv, t1[s], tm[j])
+                        elif parity_conds:
                             # nv = b1 (raw parity), st = b0 (single bit).
                             # b0 copy (st folds next); vselect(c,a,a,a) is a
                             # pure copy, so it rides the idle flow engine.
@@ -1485,6 +1702,22 @@ class KernelBuilder:
                             madd(t1[s], condA[j], diffs[0], evens[0])
                             madd(tm[j], condA[j], diffs[1], evens[1])
                             vsel(nv, condB[j], tm[j], t1[s])
+                    elif parity_conds and bl_lastq(r, g):  # L == 3
+                        # H-027 (bl_last): both older bits b0,b1 sit in st
+                        # at round start, so the even and diff tables fold
+                        # to their winners on flow BEFORE the newest bit
+                        # b2 (=nv) arrives; post-parity chain 3 -> 1.
+                        # node = evens[t] + b2*diffs[t], t = b0b1.
+                        vec("&", condB[j], st, one_vec)   # b1
+                        vec("&", condA[j], st, two_vec)   # b0 mask
+                        vsel(t1[s], condB[j], evens[1], evens[0])
+                        vsel(tm[j], condB[j], evens[3], evens[2])
+                        vsel(t1[s], condA[j], tm[j], t1[s])       # Ew
+                        vsel(tm[j], condB[j], diffs[1], diffs[0])
+                        vsel(tmM[j], condB[j], diffs[3], diffs[2])
+                        vsel(tm[j], condA[j], tmM[j], tm[j])      # Dw
+                        pfold(st, nv)                     # st = b0b1b2
+                        madd(nv, nv, tm[j], t1[s])        # Ew + b2*Dw
                     elif parity_conds:  # L == 3
                         # nv = b2 (raw parity), st = b0b1 (bit1=b0, bit0=b1);
                         # both conds extract from st at round START.
@@ -1542,14 +1775,23 @@ class KernelBuilder:
                         # Leaf diff temps: dead `lv` scratch (setup-only);
                         # distinct slots for the E/D folds so they can run
                         # concurrently on valu when it is drain-idle.
-                        dffold(st, E_vecs, tm[j], tmM[j], t1[s], condA[j],
-                               condB[j], da=lv, db=lv + VLEN)   # E_win->condB
-                        dffold(st, D_vecs, tm[j], tmM[j], t1[s], condA[j],
-                               tm[j], da=lv + 2 * VLEN,
-                               db=lv + 3 * VLEN)                # D_win->tm
-                        if fold:
-                            pfold(st, nv)               # st=b0b1b2b3 (exit)
-                        madd(nv, nv, tm[j], condB[j])   # node_val = E + b3*D
+                        if (b3l_diffs and r == rounds - 1
+                                and (b3l_make_diffs(r) or
+                                     len(b3l_pool) >= 9)):
+                            # H-027: diff tables + private dead registers
+                            # (falls through to dffold if the dead-register
+                            # pool cannot fund another private group).
+                            b3l_fold_diffs(st, nv)
+                        else:
+                            dffold(st, E_vecs, tm[j], tmM[j], t1[s],
+                                   condA[j], condB[j], da=lv,
+                                   db=lv + VLEN)                # E_win->condB
+                            dffold(st, D_vecs, tm[j], tmM[j], t1[s],
+                                   condA[j], tm[j], da=lv + 2 * VLEN,
+                                   db=lv + 3 * VLEN)            # D_win->tm
+                            if fold:
+                                pfold(st, nv)       # st=b0b1b2b3 (exit)
+                            madd(nv, nv, tm[j], condB[j])  # E + b3*D
                     else:
                         # H-017: W-combines ride flow when level 4 is flipped
                         # (D_vecs holds odd VALUES there; nv = raw parity).
@@ -1726,15 +1968,21 @@ class KernelBuilder:
                                 madd(st, st, two_vec, rec_vecs[Ln])
                             vec("+", st, st, par)
                     else:
-                        assert not elide(r, g)  # gather rounds never elide
-                        if idx_race:
-                            # 2*gaddr + 1 - fp
-                            race_idx_madd(st, two_vec, omf_vec,
-                                          lambda i: ("+", st + i, st + i,
-                                                     omf_s))
+                        # H-026 (mem_prime): an elided round's parity is
+                        # inverted, so the gather-mode update flips to
+                        # 2*gaddr + (omf+1) - par. Same op count.
+                        if elide(r, g):
+                            ov, osrc, sgn = omf1_vec, omf1_s, "-"
                         else:
-                            madd(st, st, two_vec, omf_vec)  # 2*gaddr + 1 - fp
-                        vec("+", st, st, par)
+                            ov, osrc, sgn = omf_vec, omf_s, "+"
+                        if idx_race:
+                            # 2*gaddr + 1 - fp (+1 and -par when elided)
+                            race_idx_madd(st, two_vec, ov,
+                                          lambda i, osrc=osrc: (
+                                              "+", st + i, st + i, osrc))
+                        else:
+                            madd(st, st, two_vec, ov)  # 2*gaddr + 1 - fp
+                        vec(sgn, st, st, par)
                     for lane in range(VLEN):
                         S.emit("load", ("load", nv + lane, st + lane),
                                (st + lane,), (nv + lane,), mem_read=True)
