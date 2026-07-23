@@ -30,6 +30,12 @@ sys.path.insert(0, TOOLS)
 from run_variant import measure  # noqa: E402
 
 
+def current_best():
+    """Mainline best from the progress log (last recorded entry)."""
+    with open(os.path.join(REPO_ROOT, "tools", "progress_log.json")) as f:
+        return json.load(f)[-1]["cycles"]
+
+
 def config_key(cfg):
     return hashlib.sha1(
         json.dumps({k: repr(v) for k, v in sorted(cfg.items())}).encode()
@@ -97,6 +103,7 @@ def main():
     ap.add_argument("--phase", type=int, default=1)
     args = ap.parse_args()
 
+    baseline = current_best()
     os.makedirs(RESULTS, exist_ok=True)
     done = {f[:-5] for f in os.listdir(RESULTS) if f.endswith(".json")}
     ran = best = 0
@@ -113,13 +120,13 @@ def main():
         else:
             err = None
         rec = {"config": {k: repr(v) for k, v in cfg.items()},
-               "cycles": cycles, "correct": correct, "baseline": 1140}
+               "cycles": cycles, "correct": correct, "baseline": baseline}
         if err:
             rec["error"] = err
         with open(os.path.join(RESULTS, key + ".json"), "w") as f:
             json.dump(rec, f)
         ran += 1
-        if correct and 0 < cycles < 1140:
+        if correct and 0 < cycles < baseline:
             best += 1
             print(f"WINNER {cycles} {cfg}", flush=True)
         if args.limit and ran >= args.limit:

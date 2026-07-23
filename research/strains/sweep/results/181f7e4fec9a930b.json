@@ -1,1 +1,1 @@
-{"config": {"l4_gmin": "(2, 2)"}, "cycles": 1260, "correct": true, "baseline": 1140}
+{"config": {"l4_gmin": "(2, 2)"}, "cycles": 1236, "correct": true, "baseline": 1140}

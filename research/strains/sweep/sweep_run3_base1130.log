@@ -1,0 +1,71 @@
+WINNER 1130 {'skew': (4, 3)}
+WINNER 1139 {'skew': (8, 2)}
+WINNER 1138 {'l4_gmin': (16, 28)}
+WINNER 1138 {'l4_gmin': (18, 26)}
+WINNER 1133 {'l4_gmin': (18, 28)}
+WINNER 1138 {'l4_gmin': (18, 30)}
+WINNER 1137 {'l4_gmin': (20, 26)}
+WINNER 1132 {'l4_gmin': (20, 28)}
+WINNER 1137 {'l4_gmin': (20, 30)}
+WINNER 1138 {'l4_gmin': (22, 24)}
+WINNER 1135 {'l4_gmin': (22, 26)}
+WINNER 1130 {'l4_gmin': (22, 28)}
+WINNER 1135 {'l4_gmin': (22, 30)}
+WINNER 1138 {'l4_gmin': (24, 28)}
+WINNER 1139 {'pool_sizes': (13, 5)}
+WINNER 1134 {'pool_sizes': (14, 4)}
+WINNER 1133 {'pool_sizes': (15, 3)}
+WINNER 1132 {'pool_sizes': (15, 4)}
+WINNER 1134 {'pool_sizes': (16, 3)}
+WINNER 1131 {'pool_sizes': (16, 4)}
+WINNER 1130 {'pool_sizes': (17, 3)}
+WINNER 1130 {'pool_sizes': (17, 4)}
+WINNER 1132 {'pool_sizes': (18, 3)}
+WINNER 1134 {'pool_sizes': (19, 3)}
+WINNER 1136 {'pool_sizes': (20, 3)}
+WINNER 1137 {'pool_sizes': (21, 3)}
+WINNER 1137 {'skew': (4, 3), 'l4_gmin': (20, 26)}
+WINNER 1130 {'skew': (4, 3), 'l4_gmin': (22, 28)}
+WINNER 1139 {'skew': (8, 2), 'l4_gmin': (22, 28)}
+WINNER 1130 {'tournament_levels': (1, 2, 3), 'alu_offload': True}
+sweep: 153 new runs, 30 beat baseline, 21s
+WINNER 1130 {'skew': [0, 3, 6, 9]}
+WINNER 1139 {'skew': [0, 3, 7, 9]}
+WINNER 1131 {'skew': [0, 4, 6, 10]}
+WINNER 1132 {'skew': [0, 4, 7, 10]}
+WINNER 1134 {'skew': [0, 4, 7, 11]}
+WINNER 1133 {'skew': [0, 5, 7, 11]}
+WINNER 1135 {'skew': [0, 5, 8, 11]}
+WINNER 1135 {'skew': [0, 5, 8, 12]}
+WINNER 1131 {'skew': [0, 6, 8, 12]}
+WINNER 1135 {'skew': [0, 6, 9, 12]}
+WINNER 1137 {'pool_sizes': (17, 2)}
+WINNER 1138 {'pool_sizes': (24, 2)}
+WINNER 1137 {'skew': (4, 3), 'l4_gmin': (20, 26), 'pool_sizes': (17, 4)}
+WINNER 1137 {'skew': (4, 3), 'l4_gmin': (20, 26), 'pool_sizes': (16, 4)}
+WINNER 1130 {'skew': (4, 3), 'l4_gmin': (22, 28), 'pool_sizes': (17, 4)}
+WINNER 1130 {'skew': (4, 3), 'l4_gmin': (22, 28), 'pool_sizes': (17, 3)}
+WINNER 1131 {'skew': (4, 3), 'l4_gmin': (22, 28), 'pool_sizes': (16, 4)}
+WINNER 1138 {'skew': (4, 3), 'l4_gmin': (24, 28), 'pool_sizes': (17, 4)}
+WINNER 1139 {'skew': (4, 3), 'l4_gmin': (24, 28), 'pool_sizes': (17, 3)}
+WINNER 1136 {'skew': (4, 3), 'l4_gmin': (24, 28), 'pool_sizes': (16, 4)}
+WINNER 1135 {'skew': (4, 3), 'l4_gmin': (22, 30), 'pool_sizes': (17, 4)}
+WINNER 1135 {'skew': (4, 3), 'l4_gmin': (22, 30), 'pool_sizes': (17, 3)}
+WINNER 1136 {'skew': (4, 3), 'l4_gmin': (22, 30), 'pool_sizes': (16, 4)}
+WINNER 1137 {'skew': [0, 3, 6, 9], 'l4_gmin': (20, 26), 'pool_sizes': (17, 4)}
+WINNER 1137 {'skew': [0, 3, 6, 9], 'l4_gmin': (20, 26), 'pool_sizes': (16, 4)}
+WINNER 1130 {'skew': [0, 3, 6, 9], 'l4_gmin': (22, 28), 'pool_sizes': (17, 4)}
+WINNER 1130 {'skew': [0, 3, 6, 9], 'l4_gmin': (22, 28), 'pool_sizes': (17, 3)}
+WINNER 1131 {'skew': [0, 3, 6, 9], 'l4_gmin': (22, 28), 'pool_sizes': (16, 4)}
+WINNER 1138 {'skew': [0, 3, 6, 9], 'l4_gmin': (24, 28), 'pool_sizes': (17, 4)}
+WINNER 1139 {'skew': [0, 3, 6, 9], 'l4_gmin': (24, 28), 'pool_sizes': (17, 3)}
+WINNER 1136 {'skew': [0, 3, 6, 9], 'l4_gmin': (24, 28), 'pool_sizes': (16, 4)}
+WINNER 1135 {'skew': [0, 3, 6, 9], 'l4_gmin': (22, 30), 'pool_sizes': (17, 4)}
+WINNER 1135 {'skew': [0, 3, 6, 9], 'l4_gmin': (22, 30), 'pool_sizes': (17, 3)}
+WINNER 1136 {'skew': [0, 3, 6, 9], 'l4_gmin': (22, 30), 'pool_sizes': (16, 4)}
+WINNER 1139 {'skew': (8, 2), 'l4_gmin': (22, 28), 'pool_sizes': (17, 4)}
+WINNER 1139 {'skew': (8, 2), 'l4_gmin': (22, 28), 'pool_sizes': (16, 4)}
+WINNER 1137 {'skew': (8, 2), 'l4_gmin': (24, 28), 'pool_sizes': (17, 4)}
+WINNER 1138 {'skew': (8, 2), 'l4_gmin': (24, 28), 'pool_sizes': (17, 3)}
+WINNER 1136 {'skew': (8, 2), 'l4_gmin': (24, 28), 'pool_sizes': (16, 4)}
+sweep: 828 new runs, 39 beat baseline, 119s

@@ -1,1 +1,1 @@
-{"config": {"tournament_levels": "(1, 2, 3)", "alu_offload": "False"}, "cycles": 1406, "correct": true, "baseline": 1140}
+{"config": {"tournament_levels": "(1, 2, 3)", "alu_offload": "False"}, "cycles": 1367, "correct": true, "baseline": 1140}

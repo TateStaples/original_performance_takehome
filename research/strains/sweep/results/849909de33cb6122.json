@@ -1,1 +1,1 @@
-{"config": {"skew": "(4, 4)", "l4_gmin": "(20, 26)"}, "cycles": 1174, "correct": true, "baseline": 1140}
+{"config": {"skew": "(4, 4)", "l4_gmin": "(20, 26)"}, "cycles": 1162, "correct": true, "baseline": 1140}

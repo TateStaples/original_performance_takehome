@@ -1,1 +1,1 @@
-{"config": {"skew": "[0, 1, 2, 6]"}, "cycles": 1232, "correct": true, "baseline": 1140}
+{"config": {"skew": "[0, 1, 2, 6]"}, "cycles": 1220, "correct": true, "baseline": 1140}
