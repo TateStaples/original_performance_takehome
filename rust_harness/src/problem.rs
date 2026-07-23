@@ -89,6 +89,13 @@ pub mod hashseg {
     pub fn stage5(e: u32) -> u32 {
         (e ^ C5) ^ (e >> SH5)
     }
+    /// The C5-less xor-shift `x ^ (x >> 16)` — stage 5 as it appears in the
+    /// `c5_prexor` primed value domain (H-015), where the `^ C5` is absorbed
+    /// into the tree values. Used by the MITM search's primed-domain
+    /// cross-round targets (H-016).
+    pub fn sigma16(x: u32) -> u32 {
+        x ^ (x >> SH5)
+    }
     /// The full 11-op composition; equals `myhash` bit-for-bit (tested).
     pub fn fused_hash(a: u32) -> u32 {
         stage5(stage4(f23(stage1(stage0(a)))))
