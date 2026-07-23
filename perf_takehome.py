@@ -371,6 +371,7 @@ class KernelBuilder:
         parity_conds: bool = False,
         vsel_folds=False,
         vsel_auto=(),
+        c5_prexor: bool = False,
         debug_compares: bool = True,
     ):
         """
@@ -462,9 +463,40 @@ class KernelBuilder:
           Requires `parity_conds`; disjoint from `vsel_folds`. {1, 2} or
           {3} fit the freed scratch; larger sets overflow the allocator.
 
+        - `c5_prexor` (H-015): C5-pre-xor value domain. The hash's final
+          stage is val' = e ^ (e>>16) ^ C5 ^ n_next-fold; pre-xoring every
+          node-value SOURCE with C5 (broadcast tables + primed root at
+          setup; the 16 level-4 tree words rewritten in mem from the
+          already-loaded lv scratch) lets a round DROP its `^ C5` whenever
+          the next round's fold-in absorbs it: on such rounds the stored
+          val is primed (val^C5) and the next round's `val ^= node_val'`
+          cancels both C5s. One valu op per (group, elided round) is saved
+          -- 9 of 16 rounds at the graded shape (levels 5..10 gather the
+          untouched true tree, so rounds feeding them keep `^ C5`; the
+          last round always keeps it so the STORED values are true).
+          C5 is odd, so parities ride INVERTED out of elided rounds; all
+          rounds feeding tournaments are elided, so the position
+          accumulator uniformly carries the bitwise COMPLEMENT p' = ~p:
+            * within a broadcast pair the newest (inverted) bit selects
+              via base=odd, diff=even-odd (setup constant swap);
+            * the older (inverted) bits select correctly from tables
+              stored in REVERSED order (select-by-~t from reversed = t),
+              so the tournament fold emission is completely unchanged;
+            * epoch-exit gaddr conversion becomes
+              gaddr = -2*p' + (fp + 2^Ln-1 + 2^(L+1)-2 + inv) -/+ parity
+              (one madd by a negtwo vector + add/sub -- same op count).
+          Requires parity_conds; incompatible with parity_early (whose
+          carry-free parity is TRUE-domain). Trades one cond-pool slot
+          (32 words) for the negtwo/primed-root vectors, like
+          parity_early does.
+
         `debug_compares` interleaves free `("debug", ("vcompare", ...))`
         slots (skipped by the grader) checking node_val and hashed_val of
-        every (round, walker) against the reference trace.
+        every (round, walker) against the reference trace. Under
+        `c5_prexor` only true-domain values exist to compare, so compares
+        are emitted only where the scratch value equals the reference's:
+        node_val on non-primed rounds (round 0 + gather levels >= 5),
+        hashed_val on non-elided rounds (incl. the final stored round).
         """
         assert batch_size % VLEN == 0
         n_groups = batch_size // VLEN
@@ -531,6 +563,41 @@ class KernelBuilder:
             lv_ = level(r)
             return lv_ == 0 or lv_ in T_set or l4_served(r, g)
 
+        # --- C5-pre-xor value domain (H-015) -------------------------------
+        if c5_prexor:
+            assert parity_conds, "c5_prexor requires parity_conds"
+            assert maxT >= 2, "c5_prexor needs the tournament cond pools"
+            assert not pe_levels, "c5_prexor is incompatible with parity_early"
+        # Level-4 tree words can be primed in mem for free only when they
+        # are already vloaded into lv scratch for the pair-tournament.
+        l4_mem_primed = c5_prexor and l4_any and maxT == 3
+
+        def primed_nv(rr, g):
+            # Does round rr's fold read a C5-pre-xored node_val source?
+            if not c5_prexor:
+                return False
+            lv_ = level(rr)
+            if lv_ == 0:
+                return rr > 0  # round 0 uses the TRUE root broadcast
+            if lv_ in T_set or l4_served(rr, g):
+                return True  # broadcast tables are primed at setup
+            return lv_ == L4 and l4_mem_primed  # level-4 mem primed in place
+
+        def elide(r, g):
+            # Round r drops its stage-5 `^ C5` iff round r+1's fold-in
+            # absorbs it (never the last round: stored values must be true).
+            return r < rounds - 1 and primed_nv(r + 1, g)
+
+        def rec_off(r, g):
+            # Exit from a tournament round under c5_prexor: st is the
+            # complement position p' = 2^L - 1 - p, and par is inverted iff
+            # round r elided, so
+            #   gaddr = 2p + b + fp + 2^Ln - 1
+            #         = -2*p' + (2^Ln - 1 + 2^(L+1) - 2 + inv) + fp -/+ par
+            assert level(r) != 0
+            return (2 ** level(r + 1) - 1 + 2 ** (level(r) + 1) - 2
+                    + (1 if elide(r, g) else 0))
+
         S = ListScheduler()
 
         def const(val, name=None):
@@ -596,6 +663,17 @@ class KernelBuilder:
         hc = self._fused_hash_constants()
         hv = {k: bvec(const(hc[k]), k) for k in
               ("k0", "C0", "C1", "sh1", "kp", "ap", "kq", "aq", "k4", "C4", "C5", "sh5")}
+        if c5_prexor:
+            # Primed root broadcast (L0 rounds after round 0 fold a primed
+            # val, so they must fold the primed root) and the -2 multiplier
+            # for complement-position epoch exits. C5 must be odd for the
+            # inversion bookkeeping below; it is (0xB55A4F09).
+            assert hc["C5"] & 1 == 1, "c5_prexor bookkeeping assumes odd C5"
+            c5s = const(hc["C5"])
+            rootp = self.alloc_scratch("root_pr")
+            S.emit("alu", ("^", rootp, root_nv, c5s), (root_nv, c5s), (rootp,))
+            root_pr_vec = bvec(rootp, "root_pr_vec")
+            negtwo_vec = bvec(const((1 << 32) - 2), "negtwo_vec")
         if pe_levels:
             # Parity-early constants (see docstring): bit31(c*km + cm) is
             # bit0 of the final hash, carry-free by construction.
@@ -607,16 +685,22 @@ class KernelBuilder:
             hv["c31"] = bvec(const(31), "c31")
 
         # gaddr reconstruction constants: leaving a served round r for a
-        # gather round at level Ln needs  fp + 2^Ln - 1  as a vector.
-        rec_needed = sorted({
-            level(r + 1) for r in range(rounds - 1) for g in range(n_groups_)
+        # gather round at level Ln needs  fp + 2^Ln - 1  as a vector
+        # (under c5_prexor: fp + rec_off(r, g), keyed by the offset).
+        rec_exits = [
+            (r, g) for r in range(rounds - 1) for g in range(n_groups_)
             if served(r, g) and not served(r + 1, g) and level(r + 1) != 0
-        })
+        ]
+        if c5_prexor:
+            rec_needed = sorted({rec_off(r, g) for r, g in rec_exits})
+        else:
+            rec_needed = sorted({level(r + 1) for r, g in rec_exits})
         rec_vecs = {}
-        for Ln in rec_needed:
+        for key in rec_needed:
             rs = self.alloc_scratch()
-            S.emit("flow", ("add_imm", rs, fp, 2 ** Ln - 1), (fp,), (rs,))
-            rec_vecs[Ln] = bvec(rs, f"rec{Ln}")
+            off = key if c5_prexor else 2 ** key - 1
+            S.emit("flow", ("add_imm", rs, fp, off), (fp,), (rs,))
+            rec_vecs[key] = bvec(rs, f"rec{key}")
 
         # --- tournament level values: load tree[1..], broadcast each
         # pair's even element and its (odd-even) diff ---
@@ -629,11 +713,20 @@ class KernelBuilder:
                 S.emit("flow", ("add_imm", la, fp, 1 + blk), (fp,), (la,))
                 S.emit("load", ("vload", lv + blk, la),
                        (la,), self._v(lv + blk), mem_read=True)
+            if c5_prexor:
+                # Prime every loaded tree word in place: lv[i] ^= C5.
+                for blk in range(0, n_lv, VLEN):
+                    vec("^", lv + blk, lv + blk, hv["C5"])
             for L in T:
                 base = 2 ** L - 1  # first tree index of level L; lv[i] = tree[1+i]
                 evens, diffs = [], []
                 for k in range(2 ** (L - 1)):
-                    s0 = lv + (base + 2 * k - 1)
+                    # c5_prexor: inverted position bits select correctly
+                    # from tables stored in REVERSED pair order, with the
+                    # (inverted) newest bit handled by base=odd,
+                    # diff=even-odd. Emission is unchanged.
+                    kk = (2 ** (L - 1) - 1 - k) if c5_prexor else k
+                    s0 = lv + (base + 2 * kk - 1)
                     s1 = s0 + 1
                     if L in vf_levels:
                         # vselect first-fold (H-017): keep the odd VALUE
@@ -642,8 +735,12 @@ class KernelBuilder:
                         diffs.append(bvec(s1))
                         continue
                     d = self.alloc_scratch()
-                    S.emit("alu", ("-", d, s1, s0), (s0, s1), (d,))
-                    evens.append(bvec(s0))
+                    if c5_prexor:
+                        S.emit("alu", ("-", d, s0, s1), (s0, s1), (d,))
+                        evens.append(bvec(s1))
+                    else:
+                        S.emit("alu", ("-", d, s1, s0), (s0, s1), (d,))
+                        evens.append(bvec(s0))
                     diffs.append(bvec(d))
                     if L in va_levels:
                         # vsel_auto (H-017): odd VALUE kept alongside the
@@ -653,11 +750,13 @@ class KernelBuilder:
         if l4_any:
             # Level maxT+1 candidates, indexed by the level-maxT position t:
             # E[t] / D[t] = even child of the level-maxT winner / its
-            # (odd - even) sibling diff.
+            # (odd - even) sibling diff. (c5_prexor: reversed order and
+            # odd-base/negated-diff, exactly like the levels above.)
             base = 2 ** L4 - 1
             E_vecs, D_vecs = [], []
             for t in range(2 ** maxT):
-                s0 = lv + (base + 2 * t - 1)
+                tt = (2 ** maxT - 1 - t) if c5_prexor else t
+                s0 = lv + (base + 2 * tt - 1)
                 s1 = s0 + 1
                 if 4 in vf_levels:
                     # vselect W-combine (H-017): odd VALUE, not the diff.
@@ -665,8 +764,12 @@ class KernelBuilder:
                     D_vecs.append(bvec(s1))
                     continue
                 d = self.alloc_scratch()
-                S.emit("alu", ("-", d, s1, s0), (s0, s1), (d,))
-                E_vecs.append(bvec(s0))
+                if c5_prexor:
+                    S.emit("alu", ("-", d, s0, s1), (s0, s1), (d,))
+                    E_vecs.append(bvec(s1))
+                else:
+                    S.emit("alu", ("-", d, s1, s0), (s0, s1), (d,))
+                    E_vecs.append(bvec(s0))
                 D_vecs.append(bvec(d))
             four_vec = bvec(const(4), "four_vec")
             eight_vec = bvec(const(8), "eight_vec")
@@ -690,6 +793,10 @@ class KernelBuilder:
             # slot = 32 words; (17,3) measured == (17,4) == 1130).
             CP -= 1
             assert CP >= 1, "vsel_auto needs pool_sizes[1] >= 2"
+        if c5_prexor:
+            # Same trade for the negtwo/primed-root vectors (19 words).
+            CP -= 1
+            assert CP >= 1, "c5_prexor needs pool_sizes[1] >= 2"
         t1 = [self.alloc_scratch(None, VLEN) for _ in range(TP)]
 
         if maxT >= 2:
@@ -708,6 +815,20 @@ class KernelBuilder:
             S.emit("load", ("vload", val_vecs[g], a),
                    (a,), self._v(val_vecs[g]), mem_read=True)
 
+        if l4_mem_primed:
+            # Write the primed level-4 values (already ^C5 in lv scratch)
+            # back over tree[2^L4-1 .. 2^(L4+1)-2] so level-4 GATHERS read
+            # the primed domain too. Both vstores land in setup, long
+            # before the first gather is placed, so the scheduler's coarse
+            # mem_write hazard delays nothing.
+            pst = self.alloc_scratch("pst")
+            for blk in range(0, 2 ** L4, VLEN):
+                S.emit("flow", ("add_imm", pst, fp, 2 ** L4 - 1 + blk),
+                       (fp,), (pst,))
+                src = lv + (2 ** L4 - 2) + blk
+                S.emit("store", ("vstore", pst, src),
+                       (pst,) + self._v(src), (), mem_write=True)
+
         # --- rounds ---
         def emit_group_round(r, g):
             if True:  # keep the original indentation of the body below
@@ -720,7 +841,9 @@ class KernelBuilder:
 
                 # ---- node_val: broadcast root / tournament select / gather ----
                 if L == 0:
-                    nvsrc = root_nv_vec
+                    # c5_prexor: L0 rounds after round 0 fold a PRIMED val,
+                    # so they fold the primed root to cancel the C5s.
+                    nvsrc = root_pr_vec if c5_prexor and r > 0 else root_nv_vec
                 elif L in T_set:
                     nvsrc = nv
                     evens, diffs = lvl[L]
@@ -845,7 +968,7 @@ class KernelBuilder:
                 else:
                     nvsrc = nv  # gathered during round r-1
 
-                if debug_compares:
+                if debug_compares and not primed_nv(r, g):
                     S.emit("debug",
                            ("vcompare", nvsrc,
                             [(r, g * VLEN + i, "node_val") for i in range(VLEN)]),
@@ -876,10 +999,11 @@ class KernelBuilder:
                     madd(nv, vl, hv["km"], hv["cm"])
                 madd(vl, vl, hv["k4"], hv["C4"])
                 vec(">>", t, vl, hv["sh5"])
-                vec("^", vl, vl, hv["C5"])
+                if not elide(r, g):
+                    vec("^", vl, vl, hv["C5"])
                 vec("^", vl, vl, t)
 
-                if debug_compares:
+                if debug_compares and not elide(r, g):
                     S.emit("debug",
                            ("vcompare", vl,
                             [(r, g * VLEN + i, "hashed_val") for i in range(VLEN)]),
@@ -914,11 +1038,19 @@ class KernelBuilder:
                     if served(r, g):
                         # leave accumulator mode: gaddr = 2p + b + fp + 2^Ln - 1
                         if L == 0:
+                            # unreachable under c5_prexor (level 1 is served)
+                            assert not c5_prexor
                             vec("+", st, rec_vecs[Ln], par)
+                        elif c5_prexor:
+                            # st is the complement position; par inverted
+                            # iff this round elided (see rec_off).
+                            madd(st, st, negtwo_vec, rec_vecs[rec_off(r, g)])
+                            vec("-" if elide(r, g) else "+", st, st, par)
                         else:
                             madd(st, st, two_vec, rec_vecs[Ln])
                             vec("+", st, st, par)
                     else:
+                        assert not elide(r, g)  # gather rounds never elide
                         madd(st, st, two_vec, omf_vec)     # 2*gaddr + 1 - fp
                         vec("+", st, st, par)
                     for lane in range(VLEN):
