@@ -312,7 +312,7 @@ strain STATE.md and the driver promotes them here.
   kept as control. Retune: optimum unmoved. Dispatch flipped; grader 9/9.
 - log: 2026-07-23 promoted; iter 5 ACCEPTED.
 
-### H-025 [strain: op-reduction] [status: open]
+### H-025 [strain: op-reduction] [status: testing (background hunt)]
 - statement: (H-016's P-8) global synthesis attack on "the 11-op hash in
   10": CEGIS/SAT over the machine op set with free 32-bit constants —
   counterexample-guided: synthesize candidate on a few IO pairs (z3 bitvec),

@@ -59,3 +59,4 @@ Global: 6 dry iterations -> one cross-pollination iteration. Status report to us
 - iter 5 (in flight) | H-024 ACCEPTED 1064 (-6): setup consts on alu + va addrs off flow; H-023 drain fix still running | best 1064
 - iter 5 CLOSED | H-024 ACCEPTED (-6) -> 1064; H-023 REJECTED -> G-17 (drain unreachable by restructure). Iter 6: cross-pollination + H-025 CEGIS | best 1064
 - iter 6 | CROSS-POLLINATION: H-026/H-027/H-028 ACCEPTED composed (-11) -> 1053; each ~0 alone. Valu floor ~1035. H-025 CEGIS still running — the remaining op-removal lever | best 1053
+- iter 7 (in flight) | H-025 CEGIS/superoptimizer hunt LAUNCHED (deep-research confirmed it as the one un-tried on-target lever): 3 parallel bitwuzla lanes hunting a <=10-op myhash over free 32-bit consts + arbitrary DAG wiring, exact 2^32 verify; ~4.5h wall. Report on HIT (real shot at <1000) or exhaustion. Harness harvested from the abandoned iter-6 lane (tools/cegis_hash.py) | best 1053
