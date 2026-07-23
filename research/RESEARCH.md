@@ -15,7 +15,8 @@
 - Flow-offload ceiling: floor -> ~962 if routing/idx arithmetic moves to flow (29.6% used)
 - Load floor: 1,936 gathers / 2 per cyc = 968 (load 87.4% busy)
 - Hash-only absolute floor: 49,152 lane-ops / 60 per cyc = 819
-- Scratch: 1535/1536 words used — NO headroom; new state must be traded, not added.
+- Scratch: 1535/1536 words used at pool_sizes=(17,4); 32 words freeable at
+  ZERO cycle cost via pool_sizes=(17,3) (H-002 side finding, verified 1140).
 
 ## Strain roster
 
@@ -33,7 +34,7 @@ Global: 6 dry iterations -> one cross-pollination iteration. Status report to us
 
 (one line per iteration: `iter N | H-ids tested | results | best after`)
 
-- iter 1 (in flight) | H-001 flow-balance, H-002 critical-path, H-003 op-reduction (agents running); H-005 sweep phase 1 DONE: 0/150 beat 1140 (defaults locally optimal), phase 2 running | best 1140
+- iter 1 (in flight) | H-005 sweep: 978 configs, 0 < 1140, params exhausted (phases 1+2). H-002 parity-early: REJECTED (chain exists, depth 8 vs 10, but valu-throughput-bound; 1145-1198) -> G-8; H-008 tested under enabler: REJECTED (1270+) -> G-9; side finding +32 scratch words free via (17,3). H-001, H-003 agents still running | best 1140
 
 ## Milestones
 

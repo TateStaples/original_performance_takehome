@@ -19,7 +19,7 @@ strain STATE.md and the driver promotes them here.
 - result:
 - log: 2026-07-23 opened; assigned iter 1.
 
-### H-002 [strain: critical-path] [status: testing]
+### H-002 [strain: critical-path] [status: rejected -> graveyard G-8]
 - statement: Parity-early — produce bit0 of the hashed value (the only bit the
   next gather address needs) cheaper/earlier than the full 12-op hash, so the
   next round's gather issues before the full hash completes. Full hash still
@@ -31,8 +31,10 @@ strain STATE.md and the driver promotes them here.
   only because tournaments stall the r->r+1 load stream) + tightens the skew
   pipeline. Even +2 extra ops/walker pays if it removes the stall.
 - cost: M-L. depends: none (enabler for H-008).
-- result:
-- log: 2026-07-23 opened; assigned iter 1.
+- result: REJECTED iter 1. Chain EXISTS (depth 8 vs 10, +1 madd, proved
+  irreducible) and landed flag-gated (`parity_early`, commit on branch), but
+  kernel is valu-THROUGHPUT-bound: all variants 1145-1198 vs 1140. See G-8.
+- log: 2026-07-23 opened; assigned iter 1; rejected iter 1.
 
 ### H-003 [strain: op-reduction] [status: testing]
 - statement: Machine-search for further hash fusions: extend
@@ -74,7 +76,8 @@ strain STATE.md and the driver promotes them here.
   are coincidentally contiguous (measure frequency first); revisit pair-gather
   (both children fetched a round early) IF scratch is freed and load is no
   longer the binding engine on the target rounds (see graveyard G-3).
-- predicted: -10..-40 cyc. cost: M. depends: scratch relief (H-001/H-004).
+- predicted: -10..-40 cyc. cost: M. depends: scratch relief — NOTE: 32 words
+  now known freeable at zero cost via pool_sizes=(17,3) (H-002 side finding).
 - result:
 - log: 2026-07-23 opened.
 
@@ -87,13 +90,15 @@ strain STATE.md and the driver promotes them here.
 - result:
 - log: 2026-07-23 opened.
 
-### H-008 [strain: critical-path] [status: blocked(H-002)]
+### H-008 [strain: critical-path] [status: rejected -> graveyard G-9]
 - statement: Full-round L4 (and L5) tournament service once parity-early
   removes the tournament->load stall (today only groups >=22/28 are served).
   L5 = 16 more madd-combines/group but removes the 1,536 deepest… (recount:
   levels 5..10 gathers) — recost after H-002 lands.
 - predicted: -30..-100 cyc. cost: M. depends: H-002.
-- result:
+- result: REJECTED iter 1, tested WITH its enabler: l4_gmin=(0,0) alone 1270,
+  +parity_early(3,) 1284, +parity_early(True) 1339. The stall is the 7-level
+  select chain on saturated valu/flow, not parity latency. See G-9.
 - log: 2026-07-23 opened.
 
 ### H-009 [strain: flow-balance] [status: open]
@@ -118,7 +123,8 @@ strain STATE.md and the driver promotes them here.
 - statement: Flow-engine parity extraction (H-001 x H-002 combo): if parity
   vectors are kept (H-001) AND parity-early exists (H-002), the `& one_vec`
   per round disappears from valu into either the early chain or a vselect.
-- predicted: -15..-35 cyc. cost: S once parents land. depends: H-001+H-002.
+- predicted: -15..-35 cyc. cost: S once parents land. depends: H-001 (the
+  parity_early flag from H-002 already exists if a latency use appears).
 - result:
 - log: 2026-07-23 opened.
 
@@ -129,3 +135,19 @@ strain STATE.md and the driver promotes them here.
 - predicted: n/a (calibration). cost: S. depends: any structural accept.
 - result:
 - log: 2026-07-23 opened.
+
+### H-013 [strain: sweep] [status: open]
+- statement: After ANY accept that relieves valu (<~95% busy), auto-add
+  parity_early combos and l4_gmin=(0,0) to the sweep grid — H-002/H-008's
+  rejections are conditional on valu saturation and re-testing is one command.
+- predicted: contingent. cost: S. depends: any valu-relief accept.
+- result:
+- log: 2026-07-23 promoted from critical-path follow-ups.
+
+### H-014 [strain: critical-path] [status: open]
+- statement: Spend the 32 freed words (pool_sizes=(17,3)) on load-side state:
+  nv double-buffering so gathers for round r+1 never wait on round r's nv
+  consumption (today nv is reused; check ListScheduler WAR stalls on nv+lane).
+- predicted: -5..-20 cyc. cost: S-M. depends: none (words available now).
+- result:
+- log: 2026-07-23 promoted from critical-path follow-ups.

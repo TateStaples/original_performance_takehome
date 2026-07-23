@@ -56,3 +56,21 @@ Seeded 2026-07-23 from the 2148->1140 campaign's measured rejections.
 - evidence: rust harness measured 1356 -> 1795 (cycles) when window became a
   hard gate; pressure relief never paid for the ILP loss. Soft priority kept.
 - reopen-if: n/a (kept for the record; harness-side only).
+
+### G-8 Parity-early (H-002)
+- statement: cheap early bit0-of-hash chain unblocks next round's gather.
+- evidence: chain exists and is optimal (+1 madd, depth 8 vs 10; proof in
+  critical-path STATE.md / parity_math), but measured 1145-1198 vs 1140 on
+  every subset of rounds: the kernel is valu-throughput-bound (98.2%), so 2
+  levels of latency buy nothing while +1 madd/group-round costs ~extra/6 cyc.
+  Flag `parity_early` kept in-tree (default off, bit-exact).
+- reopen-if: valu busy drops well below ~95% (any H-001/H-003/H-007-class
+  accept) — retest is `run_variant --set parity_early=...` (see H-013).
+
+### G-9 Full-round L4 tournament under parity-early (H-008)
+- statement: parity-early removes the stall that forced l4_gmin group-split.
+- evidence: l4_gmin=(0,0) = 1270; + parity_early(3,) = 1284; + (True) = 1339.
+  Root cause is the ~7-dependent-level select chain on saturated valu/flow,
+  not parity arrival. Supersedes G-1's reopen-if (tested and still negative).
+- reopen-if: valu AND flow both gain >=10% headroom, or the L4 fold chain
+  shortens structurally (e.g. H-003 finds a shorter select form).
