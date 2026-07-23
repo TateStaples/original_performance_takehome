@@ -82,8 +82,10 @@ Seeded 2026-07-23 from the 2148->1140 campaign's measured rejections.
   cross-round tail 5->4 (126.3B), parity-from-c <=4 (66.2B) — all negative.
   Searcher self-test rediscovers the known stage2∘3 fusion. NOT a global
   minimality proof (global space ~10^28).
-- reopen-if: H-016 (MITM 6->5) finds a hit, or HASH_STAGES changes, or a
-  non-adjacent/algebraic (non-compositional) identity is conjectured.
+- reopen-if: (UPDATED iter 4: H-016 MITM ran and was negative on all 10
+  boundaries — 2.36T+16B nodes, solved meets.) Now reopens only via H-025
+  (global CEGIS/SAT synthesis), a kf=4-prefix run on a much bigger machine,
+  or HASH_STAGES changing.
 
 ### G-11 nv double-buffering (H-014)
 - statement: removing the gather->nv WAR edge lets the load engine run ahead.

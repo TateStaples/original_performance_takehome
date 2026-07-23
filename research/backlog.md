@@ -194,14 +194,19 @@ strain STATE.md and the driver promotes them here.
   (15,29) (freed valu funds more L4 service), pools back to (17,4).
 - log: 2026-07-23 promoted; iter 2 ACCEPTED composed, dispatch flipped.
 
-### H-016 [strain: op-reduction] [status: open]
+### H-016 [strain: op-reduction] [status: closed negative (comprehensive)]
 - statement: Extend fusion_search with meet-in-the-middle (forward-2
   signatures x invertible-backward-2) to push the two 5->4 boundary
   questions to 6->5 (stage1∘f23 span, b2d) and cross-round to depth 5 —
   the only remaining unsearched shortening candidates below global scale.
 - predicted: uncertain; each hit -68 cyc. cost: S-M. depends: none.
-- result:
-- log: 2026-07-23 promoted from op-reduction P-3.
+- result: CLOSED iter 4: ALL 10 boundary questions negative — 2.364T
+  engine-A candidates + 9.38B fwd-MITM + 6.68B chain-MITM nodes, meet-op
+  constants SOLVED over 2^32 (not pooled), incl. the primed-domain
+  cross-round (xr3p 5->4) and both 6->5 questions. Adjacent-segment fusion
+  is dead at every cut. Coverage boundary honestly stated (kf=4 general
+  prefixes ~1000x cost; >3 unary links). G-10 reopen-if updated.
+- log: 2026-07-23 promoted; iter 4 closed negative.
 
 ### H-017 [strain: flow-balance] [status: accepted]
 - statement: madd->vselect flip of tournament FIRST-folds, nearly free under
@@ -297,3 +302,14 @@ strain STATE.md and the driver promotes them here.
 - predicted: -3..-9 cyc. cost: S. depends: none.
 - result:
 - log: 2026-07-23 promoted from scheduler follow-up 2.
+
+### H-025 [strain: op-reduction] [status: open]
+- statement: (H-016's P-8) global synthesis attack on "the 11-op hash in
+  10": CEGIS/SAT over the machine op set with free 32-bit constants —
+  counterexample-guided: synthesize candidate on a few IO pairs (z3 bitvec),
+  verify on 10M inputs, add counterexamples, repeat. The ONLY remaining
+  tool class for hash op removal; adjacent-segment/MITM spaces exhausted.
+- predicted: -68 if a 10-op form exists (unknown); high risk of UNSAT-slow.
+- cost: L. depends: none (z3 installable).
+- result:
+- log: 2026-07-23 promoted from op-reduction P-8.
