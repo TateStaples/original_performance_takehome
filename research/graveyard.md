@@ -136,3 +136,17 @@ Seeded 2026-07-23 from the 2148->1140 campaign's measured rejections.
   scheduling-slack harvest (H-021), not engine moves.
 - reopen-if: any accept frees >=8% of alu or valu (re-run idx_race/madd_x2
   sweeps then; archived patch has the madd_x2 flag ready).
+
+### G-16 Load-side demand reduction: vload/dedup/L5-tables/pair-gather (H-006)
+- statement: gather slot demand can be cut by batching, dedup, or table service.
+- evidence: lane-contiguity 0.00% at every gather round (50 seeds);
+  within-group duplication = uniform-draw expectation (0.86 dup slots/group
+  at L5 down to 0.03 at L10); no scratch-indexed scratch read exists (only
+  mem addressing is data-dependent) so scratch tables reach walkers only via
+  fold tournaments; L4-full costs +75 TODAY (was +130 pre-racing — wall
+  moving but far); L5 exchange rate 2x L4's. Mid-kernel is triple-saturated
+  (load/valu/alu ~100% for cycles ~100-950): relieving load by adding valu
+  ops inside that window always loses.
+- reopen-if: valu frees >=10% mid-kernel (then l4_gmin slides via standing
+  sweep, zero new code), or target drops below ~960 (re-cost L5 at
+  then-current exchange rates).

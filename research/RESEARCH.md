@@ -11,10 +11,11 @@
 
 ## Floors (calibrated 2026-07-23, see tools/diagnose_kernel.py)
 
-- Op-mix floor: valu 6262 slots / 6 = ~1044 cycle-equivalents at 1070 actual
-  (26 cyc slack). alu 93.9% (near-saturated!), flow 61.9%, load 89.8%.
-  BOTH compute engines converging: placement racing at ceiling; remaining
-  route to <1000 = lane-op REMOVAL (valu toward <6000) + slack harvest.
+- Op-mix floor: valu 6262/6 = ~1044 cyc-equiv at 1070 actual. CRITICAL
+  (H-006 profile): cycles ~100-950 are TRIPLE-saturated (load+valu+alu
+  ~100%); aggregate slack (alu 93.9%, load 89.8%) is setup/drain artifact.
+  Only PROPORTIONAL multi-engine op removal (hash: valu+alu together) moves
+  the middle; scheduling slack lives in the ~120-cycle drain tail.
 - Flow-offload ceiling: floor -> ~962 if routing/idx arithmetic moves to flow (29.6% used)
 - Load floor: 1,936 gathers / 2 per cyc = 968 (load 87.4% busy)
 - Hash-only absolute floor: 49,152 lane-ops / 60 per cyc = 819
@@ -52,3 +53,4 @@ Global: 6 dry iterations -> one cross-pollination iteration. Status report to us
 - iter 3 | H-019 emit_any ACCEPTED 1070 (-17); sel_race -> G-14; alu 93.9% (racing ceiling reached). H-004+18 agent still running | best 1070
 - iter 3 CLOSED | accepts: H-019 emit_any (-17) + sweep va13 (-1); H-010 -> G-13 (strain rotated); H-004+18 -> G-15 (rebalancing exhausted; code subsumed by idx_race). Best 1140->1070 in 3 iterations. Route to <1000: op REMOVAL (H-016) + slack harvest (H-021) + endgame load-side (H-006) | best 1070
 - iter 4 (in flight) | sweep phase 4: 0/493 below 1070 (optimum sharp); H-016/H-021/H-006 agents running | best 1070
+- iter 4 | H-006 CLOSED permanently -> G-16 (0% contiguity, no scratch-indexed reads, L4-full +75, triple-saturated middle). H-016/H-021 still running | best 1070

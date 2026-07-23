@@ -87,7 +87,7 @@ strain STATE.md and the driver promotes them here.
 - result:
 - log: 2026-07-23 opened; background process launched iter 1.
 
-### H-006 [strain: flow-balance] [status: open]
+### H-006 [strain: flow-balance] [status: rejected -> graveyard G-16]
 - statement: Load-side tricks: vload-batch gathers when 8 walkers' addresses
   are coincidentally contiguous (measure frequency first — the nv-WAR
   instrumentation hook from H-014 measures contiguity too); revisit
