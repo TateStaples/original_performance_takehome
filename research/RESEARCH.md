@@ -7,7 +7,7 @@
 
 | cycles | commit | config |
 |---|---|---|
-| 1070 | (iter-3) | `tournament_levels=(1,2,3), alu_offload=True, parity_conds=True, c5_prexor=True, vsel_auto=(1,2), u_race=True, l4_race=3, idx_race=True, pool_sizes=(16,4), l4_gmin=(13,28)` |
+| 1064 | (iter-5) | prev + `derive_consts=True, alu_val_addrs=True` |
 
 ## Floors (calibrated 2026-07-23, see tools/diagnose_kernel.py)
 
@@ -56,3 +56,4 @@ Global: 6 dry iterations -> one cross-pollination iteration. Status report to us
 - iter 4 | H-006 CLOSED permanently -> G-16 (0% contiguity, no scratch-indexed reads, L4-full +75, triple-saturated middle). H-016/H-021 still running | best 1070
 - iter 4 | H-021 honest zero, friction mapped (13 drain latency + 9 setup load + 4 seams), strain retired with successors H-023/H-024; H-016 MITM still running | best 1070
 - iter 4 CLOSED | H-016 MITM comprehensive negative (2.36T candidates; fusion dead at every cut; G-10 hardened); iter-4 tally: 4 investigations, 4 high-value negatives, mainline 1070 unchanged. Iter 5 in flight: H-023 drain fix, H-024 setup ramp; H-025 (CEGIS) queued | best 1070
+- iter 5 (in flight) | H-024 ACCEPTED 1064 (-6): setup consts on alu + va addrs off flow; H-023 drain fix still running | best 1064

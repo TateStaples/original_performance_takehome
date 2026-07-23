@@ -291,6 +291,7 @@ class KernelBuilder:
                 tournament_levels=(1, 2, 3), alu_offload=True,
                 parity_conds=True, c5_prexor=True, vsel_auto=(1, 2),
                 u_race=True, l4_race=3, idx_race=True,
+                derive_consts=True, alu_val_addrs=True,
                 pool_sizes=(16, 4), l4_gmin=(13, 28),
             )
         else:

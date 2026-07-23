@@ -41,6 +41,8 @@ BASE_KWARGS = {
     "u_race": True,  # H-019 accepted iter 3 (emit_any U-combine race)
     "l4_race": 3,  # H-019: first 3 W-pairs dual-encoded
     "idx_race": True,  # H-019: Idx madds get alu spellings
+    "derive_consts": True,  # H-024 accepted iter 5 (setup consts on alu)
+    "alu_val_addrs": True,  # H-024: va addresses off the 1-wide flow engine
     "debug_compares": False,  # speed; grader ignores debug slots anyway
 }
 SHAPE = {"forest_height": 10, "batch_size": 256, "rounds": 16}

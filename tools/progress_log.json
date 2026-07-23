@@ -106,5 +106,11 @@
     "label": "emit_any racing\n(H-019)",
     "cycles": 1070,
     "note": "Unified multi-encoding placement racing: U-combines valu-vs-flow, partial-L4 odd tables, Idx madd alu spellings; l4_gmin drifts to (13,28). alu now 93.9% -- placement racing near ceiling."
+  },
+  {
+    "step": "setup_ramp",
+    "label": "setup ramp fix\n(H-024)",
+    "cycles": 1064,
+    "note": "9 of 18 setup constants alu-derived (kq=kp<<9 etc.); the 32 va add_imms moved off the 1-wide flow engine to parallel alu chains. Ramp friction 49 -> 22 empty valu slots."
   }
 ]

@@ -294,14 +294,19 @@ strain STATE.md and the driver promotes them here.
 - result:
 - log: 2026-07-23 promoted from scheduler follow-up 1.
 
-### H-024 [strain: scheduler->sweep] [status: open]
+### H-024 [strain: scheduler->sweep] [status: accepted]
 - statement: setup load-slot removal: derive hash-constant scalars from each
   other on alu (kq = kp<<9, aq from ap, etc.) instead of load:const slots;
   frees ~load slots during the 2/2-saturated 20-cycle setup ramp where
   vbroadcasts wait on lv vloads.
 - predicted: -3..-9 cyc. cost: S. depends: none.
-- result:
-- log: 2026-07-23 promoted from scheduler follow-up 2.
+- result: ACCEPTED iter 5: 1064 (-6) = derive_consts (9/18 consts alu-derived,
+  kq=kp<<k4 etc.; 6 arbitrary addends have no 1-op relations, brute-forced)
+  + alu_val_addrs (32 serial flow add_imms were booking the 1-wide flow
+  engine to ~c40, gating val vloads -- moved to 4 parallel alu chains).
+  Ramp friction 49 -> 22 empty valu slots. lazy_val_loads negative (+9),
+  kept as control. Retune: optimum unmoved. Dispatch flipped; grader 9/9.
+- log: 2026-07-23 promoted; iter 5 ACCEPTED.
 
 ### H-025 [strain: op-reduction] [status: open]
 - statement: (H-016's P-8) global synthesis attack on "the 11-op hash in
