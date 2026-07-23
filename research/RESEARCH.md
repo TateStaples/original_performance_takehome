@@ -7,7 +7,7 @@
 
 | cycles | commit | config |
 |---|---|---|
-| 1064 | (iter-5) | prev + `derive_consts=True, alu_val_addrs=True` |
+| 1053 | (iter-6) | prev + `mem_prime=(5,), store_pair=True, b3_last=(15,), b3l_diffs=True, l4_gmin=(12,30)` |
 
 ## Floors (calibrated 2026-07-23, see tools/diagnose_kernel.py)
 
@@ -58,3 +58,4 @@ Global: 6 dry iterations -> one cross-pollination iteration. Status report to us
 - iter 4 CLOSED | H-016 MITM comprehensive negative (2.36T candidates; fusion dead at every cut; G-10 hardened); iter-4 tally: 4 investigations, 4 high-value negatives, mainline 1070 unchanged. Iter 5 in flight: H-023 drain fix, H-024 setup ramp; H-025 (CEGIS) queued | best 1070
 - iter 5 (in flight) | H-024 ACCEPTED 1064 (-6): setup consts on alu + va addrs off flow; H-023 drain fix still running | best 1064
 - iter 5 CLOSED | H-024 ACCEPTED (-6) -> 1064; H-023 REJECTED -> G-17 (drain unreachable by restructure). Iter 6: cross-pollination + H-025 CEGIS | best 1064
+- iter 6 | CROSS-POLLINATION: H-026/H-027/H-028 ACCEPTED composed (-11) -> 1053; each ~0 alone. Valu floor ~1035. H-025 CEGIS still running — the remaining op-removal lever | best 1053

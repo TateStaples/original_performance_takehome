@@ -298,7 +298,9 @@ class KernelBuilder:
                 parity_conds=True, c5_prexor=True, vsel_auto=(1, 2),
                 u_race=True, l4_race=3, idx_race=True,
                 derive_consts=True, alu_val_addrs=True,
-                pool_sizes=(16, 4), l4_gmin=(13, 28),
+                mem_prime=(5,), store_pair=True,
+                b3_last=(15,), b3l_diffs=True,
+                pool_sizes=(16, 4), l4_gmin=(12, 30),
             )
         else:
             self.build_kernel_pipelined(

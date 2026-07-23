@@ -322,3 +322,29 @@ strain STATE.md and the driver promotes them here.
 - cost: L. depends: none (z3 installable).
 - result:
 - log: 2026-07-23 promoted from op-reduction P-8.
+
+### H-026 [strain: cross] [status: accepted]
+- statement: mem_prime — per-level in-mem C5-priming of deep gather levels
+  (marginal-cost refutation of P-4's all-or-nothing arithmetic): L5 = 4
+  vload+vxor+vstore in the setup load-lull, eliding r4's ^C5 for 32 groups.
+- result: ACCEPTED iter 6, -3 composed (L6 negative: coarse mem model
+  serializes priming into first gathers). Part of the 1053 stack.
+- log: 2026-07-23 cross-pollination find; dispatch flipped.
+
+### H-027 [strain: cross] [status: accepted]
+- statement: b3l_diffs — G-17's reopen-if satisfied by dead-register mining:
+  at r15, st of 28 non-served groups + nv of earlier blocks = 52 dead
+  vectors; fund 8 leaf-diff tables + 9 private regs per served group
+  (privates kill the pool-WAW). b3-last post-parity chain 4 levels -> 1 madd.
+- result: ACCEPTED iter 6, -4 composed, census below baseline. G-17 stands
+  for the tableless form; bl_last (L2/L3 analog, no tables) measured
+  +2..+13 -> negative control (G-12 holds).
+- log: 2026-07-23 cross-pollination find; dispatch flipped.
+
+### H-028 [strain: cross] [status: accepted]
+- statement: store_pair — scheduler model fix: final vstores were serialized
+  1/cycle by the coarse mem-write hazard on a 2-wide store engine; exact
+  relaxation pairs disjoint-address same-cycle writes.
+- result: ACCEPTED iter 6, -4 composed (masked alone by compute tail).
+  Grader-validated (frozen simulator accepts the paired stream).
+- log: 2026-07-23 cross-pollination find; dispatch flipped.

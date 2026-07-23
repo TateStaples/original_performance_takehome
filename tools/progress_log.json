@@ -112,5 +112,11 @@
     "label": "setup ramp fix\n(H-024)",
     "cycles": 1064,
     "note": "9 of 18 setup constants alu-derived (kq=kp<<9 etc.); the 32 va add_imms moved off the 1-wide flow engine to parallel alu chains. Ramp friction 49 -> 22 empty valu slots."
+  },
+  {
+    "step": "cross_iter6",
+    "label": "cross-pollination\n(H-026/27/28)",
+    "cycles": 1053,
+    "note": "Three composed pieces, each ~0 alone: L5 in-mem C5-priming, b3-last with leaf-diff tables in 52 dead registers (G-17 reopen satisfied), disjoint same-cycle store pairing (model fix)."
   }
 ]

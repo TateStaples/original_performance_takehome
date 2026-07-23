@@ -1,1 +1,1 @@
-{"config": {"vsel_auto": "(1, 2)", "l4_gmin": "(13, 28)"}, "cycles": 1070, "correct": true, "baseline": 1070}
+{"config": {"vsel_auto": "(1, 2)", "l4_gmin": "(13, 28)"}, "cycles": 1064, "correct": true, "baseline": 1064}

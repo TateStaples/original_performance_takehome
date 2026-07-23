@@ -32,7 +32,7 @@ sys.path.insert(0, os.path.join(REPO_ROOT, "tests"))
 BASE_KWARGS = {
     "tournament_levels": (1, 2, 3),
     "alu_offload": True,
-    "l4_gmin": (13, 28),
+    "l4_gmin": (12, 30),
     "pool_sizes": (16, 4),
     "skew": (4, 3),
     "parity_conds": True,  # H-001 accepted iter 1 (1140 -> 1130)
@@ -43,6 +43,10 @@ BASE_KWARGS = {
     "idx_race": True,  # H-019: Idx madds get alu spellings
     "derive_consts": True,  # H-024 accepted iter 5 (setup consts on alu)
     "alu_val_addrs": True,  # H-024: va addresses off the 1-wide flow engine
+    "mem_prime": (5,),  # H-026 iter 6: in-mem C5-priming of level 5
+    "store_pair": True,  # H-028 iter 6: disjoint same-cycle store pairing
+    "b3_last": (15,),  # H-027 iter 6: b3-last final round...
+    "b3l_diffs": True,  # ...with leaf-diff tables in dead registers
     "debug_compares": False,  # speed; grader ignores debug slots anyway
 }
 SHAPE = {"forest_height": 10, "batch_size": 256, "rounds": 16}

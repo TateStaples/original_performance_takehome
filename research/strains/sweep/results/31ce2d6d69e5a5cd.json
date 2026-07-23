@@ -1,1 +1,1 @@
-{"config": {"pool_sizes": "(15, 3)"}, "cycles": 1116, "correct": true, "baseline": 1070}
+{"config": {"pool_sizes": "(15, 3)"}, "cycles": 1110, "correct": true, "baseline": 1064}
