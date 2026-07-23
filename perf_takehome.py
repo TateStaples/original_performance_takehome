@@ -161,6 +161,8 @@ class KernelBuilder:
         self.scratch_ptr = 0
         self.const_map = {}
         self._current = {}  # bundle being greedily packed by _pack/_flush
+        # spec_fold auto-mode race tally: [A wins, cycles saved by B, B wins]
+        self._spec_stats = [0, 0, 0]
 
     def debug_info(self):
         return DebugInfo(scratch_map=self.scratch_debug)
@@ -372,6 +374,7 @@ class KernelBuilder:
         vsel_folds=False,
         vsel_auto=(),
         c5_prexor: bool = False,
+        spec_fold=(),
         debug_compares: bool = True,
     ):
         """
@@ -490,6 +493,29 @@ class KernelBuilder:
           (32 words) for the negtwo/primed-root vectors, like
           parity_early does.
 
+        - `spec_fold` (H-010): parity speculation at shallow tournament
+          levels. xor distributes over select, so the hash fold-in
+            vl ^ select(b, O, E)  ==  select(b, vl^O, vl^E):
+          the level's candidate values are pre-xored into vl BOTH ways
+          (elementwise xors, alu-split -- nearly free) and the
+          parity-dependent select runs LAST, on flow, feeding the first
+          hash madd directly. Removes the fold madd AND the fold-in xor
+          from valu (zero-net-valu by construction) and shortens the
+          parity->first-madd chain by one level. Value tables stored like
+          `vsel_folds` (no diffs); node_val itself never materializes, so
+          its debug compare is skipped on speculated rounds. Levels from
+          {1, 2}: level d costs 2^d speculated xors + 2^d - 1 vselects,
+          so deeper levels flood flow. Requires `parity_conds`; takes
+          precedence over `vsel_folds`/`vsel_auto` at the same level.
+          "auto" (level 1; needs its `vsel_auto` dual tables) instead
+          RACES the speculated form against the status-quo fold per site
+          via trial emission, keeping whichever completes vl earlier;
+          "auto:N" lets the speculated form pay up to N extra cycles of
+          local vl delay to shed valu slots. All modes measured >= 1088
+          (H-010 closed negative): the existing dual_fold/alu racing
+          already keeps these sites pointwise optimal, and the extra
+          speculated xor displaces alu-offloaded ops back onto valu.
+
         `debug_compares` interleaves free `("debug", ("vcompare", ...))`
         slots (skipped by the grader) checking node_val and hashed_val of
         every (round, walker) against the reference trace. Under
@@ -546,6 +572,36 @@ class KernelBuilder:
                      else set(vsel_auto)) & set(range(1, maxT + 1))
         va_levels -= vf_levels
         assert not va_levels or parity_conds, "vsel_auto requires parity_conds"
+
+        # spec_fold (H-010): levels whose whole fold + fold-in is speculated
+        # (see docstring). Wins the level from vsel_folds/vsel_auto.
+        # Modes: an int/iterable of ints speculates those levels HARD
+        # (measured negative: flow serializes, like G-12); "auto" / an
+        # iterable containing "auto" races the speculated form against the
+        # status-quo fold per site and commits whichever completes vl
+        # earlier (trial emission with scheduler-state snapshots). Auto is
+        # implemented for level 1 and needs its dual tables (vsel_auto).
+        if isinstance(spec_fold, str):
+            spec_fold = (spec_fold,)
+        elif isinstance(spec_fold, int):
+            spec_fold = (spec_fold,)
+        spa_tol = 0  # extra local vl-delay B may pay to shed valu slots
+        spa_levels = set()
+        for x in spec_fold:
+            if isinstance(x, str) and x.startswith("auto"):
+                spa_levels = {1}
+                if ":" in x:
+                    spa_tol = int(x.split(":", 1)[1])
+        sp_levels = ({x for x in spec_fold if isinstance(x, int)}
+                     & T_set & {1, 2}) - spa_levels
+        if maxT < 3:
+            sp_levels -= {2}  # the L2 site borrows the tmM pool (maxT >= 3)
+        assert not (sp_levels or spa_levels) or parity_conds, \
+            "spec_fold requires parity_conds"
+        vf_levels -= sp_levels
+        va_levels -= sp_levels
+        assert spa_levels <= va_levels, \
+            "spec_fold auto needs the level's vsel_auto dual tables"
 
         def l4_served(r, g):
             if maxT != 3 or L4 >= forest_height or level(r) != L4:
@@ -635,6 +691,22 @@ class KernelBuilder:
                 S.put("flow", ("vselect", dst, cond, ov, ev), cs, reads_s, writes)
             else:
                 S.put("valu", ("multiply_add", dst, cond, dv, ev), cm, reads_m, writes)
+
+        def sched_snap():
+            # Snapshot of the scheduler's mutable state (slot tuples inside
+            # bundle lists are immutable, so one level of container copy
+            # suffices). Used by spec_fold's auto mode to trial-emit both
+            # forms of a fold site and keep the better schedule.
+            return (
+                [{e: list(ss) for e, ss in b.items()} for b in S.bundles],
+                [dict(c) for c in S.counts],
+                dict(S.last_write), dict(S.last_read),
+                S.mem_read_c, S.mem_write_c, dict(S.hint),
+            )
+
+        def sched_install(snap):
+            (S.bundles, S.counts, S.last_write, S.last_read,
+             S.mem_read_c, S.mem_write_c, S.hint) = snap
 
         # --- header (inp_indices is never read: only values are graded) ---
         for name, hidx in (("forest_values_p", 4), ("inp_values_p", 6)):
@@ -728,10 +800,11 @@ class KernelBuilder:
                     kk = (2 ** (L - 1) - 1 - k) if c5_prexor else k
                     s0 = lv + (base + 2 * kk - 1)
                     s1 = s0 + 1
-                    if L in vf_levels:
-                        # vselect first-fold (H-017): keep the non-base
-                        # VALUE as the select arm; no subtract, no diff
-                        # word. Arms swap under c5_prexor (inverted bit).
+                    if L in vf_levels or L in sp_levels:
+                        # vselect first-fold (H-017) / speculated fold
+                        # (H-010): keep the non-base VALUE as the select
+                        # arm; no subtract, no diff word. Arms swap under
+                        # c5_prexor (inverted bit).
                         evens.append(bvec(s1 if c5_prexor else s0))
                         diffs.append(bvec(s0 if c5_prexor else s1))
                         continue
@@ -860,8 +933,57 @@ class KernelBuilder:
                     ff = (vsel if L in vf_levels
                           else dual_fold if L in va_levels else madd)
                     if L == 1:
-                        # p is the single parity bit itself.
-                        ff(nv, st, diffs[0], evens[0])
+                        if L in spa_levels:
+                            # H-010 auto: race the status-quo fold-then-xor
+                            # (path A) against the speculated xors-then-
+                            # select (path B); commit whichever hands vl to
+                            # the first hash madd earlier. Ties keep A (no
+                            # extra alu/flow traffic).
+                            st0 = sched_snap()
+                            dual_fold(nv, st, diffs[0], evens[0])
+                            cA = vec("^", vl, vl, nv)
+                            postA = sched_snap()
+                            sched_install(st0)
+                            avec("^", nv, vl, odd_of[diffs[0]])
+                            avec("^", t1[s], vl, evens[0])
+                            cB = self._sched_vsel(S, vl, st, nv, t1[s])
+                            if cA + spa_tol < cB:
+                                sched_install(postA)
+                                self._spec_stats[0] += 1
+                            else:
+                                self._spec_stats[1] += cA - cB
+                                self._spec_stats[2] += 1
+                            nvsrc = None
+                        elif L in sp_levels:
+                            # H-010: both candidates pre-xored into vl
+                            # (round r-1's hash output) on the idle alu;
+                            # the parity (riding st) then selects straight
+                            # INTO vl on flow -- the fold madd and the
+                            # fold-in xor both leave valu, and the first
+                            # hash madd waits only on the select. nv is
+                            # dead here and hosts one arm; the group's
+                            # hash temp hosts the other.
+                            avec("^", nv, vl, diffs[0])
+                            avec("^", t1[s], vl, evens[0])
+                            vsel(vl, st, nv, t1[s])
+                            nvsrc = None
+                        else:
+                            # p is the single parity bit itself.
+                            ff(nv, st, diffs[0], evens[0])
+                    elif L == 2 and parity_conds and L in sp_levels:
+                        # H-010 at L2: 4 speculated xors + 3 selects.
+                        # b0 rides st (copied to condB; st folds b1 next),
+                        # b1 = nv (the raw newest parity).
+                        vsel(condB[j], st, st, st)
+                        madd(st, st, two_vec, nv)
+                        avec("^", t1[s], vl, evens[0])
+                        avec("^", tm[j], vl, diffs[0])
+                        avec("^", tmM[j], vl, evens[1])
+                        avec("^", condA[j], vl, diffs[1])
+                        vsel(t1[s], nv, tm[j], t1[s])      # pair 0 by b1
+                        vsel(tmM[j], nv, condA[j], tmM[j])  # pair 1 by b1
+                        vsel(vl, condB[j], tmM[j], t1[s])   # by b0, into vl
+                        nvsrc = None
                     elif L == 2:
                         if parity_conds:
                             # nv = b1 (raw parity), st = b0 (single bit).
@@ -973,7 +1095,7 @@ class KernelBuilder:
                 else:
                     nvsrc = nv  # gathered during round r-1
 
-                if debug_compares and not primed_nv(r, g):
+                if debug_compares and nvsrc is not None and not primed_nv(r, g):
                     S.emit("debug",
                            ("vcompare", nvsrc,
                             [(r, g * VLEN + i, "node_val") for i in range(VLEN)]),
@@ -986,7 +1108,8 @@ class KernelBuilder:
                 pe = (L in pe_levels and r < rounds - 1
                       and level(r + 1) != 0)
                 t = t1[s]
-                vec("^", vl, vl, nvsrc)
+                if nvsrc is not None:
+                    vec("^", vl, vl, nvsrc)
                 madd(vl, vl, hv["k0"], hv["C0"])
                 avec(">>", t, vl, hv["sh1"])
                 avec("^", vl, vl, hv["C1"])
