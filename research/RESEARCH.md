@@ -33,6 +33,8 @@ Global: 6 dry iterations -> one cross-pollination iteration. Status report to us
 
 (one line per iteration: `iter N | H-ids tested | results | best after`)
 
+- iter 1 (in flight) | H-001 flow-balance, H-002 critical-path, H-003 op-reduction (agents running); H-005 sweep phase 1 DONE: 0/150 beat 1140 (defaults locally optimal), phase 2 running | best 1140
+
 ## Milestones
 
 - 2026-07-23: loop initialized at 1140 (commit b68a302). Target 1000.

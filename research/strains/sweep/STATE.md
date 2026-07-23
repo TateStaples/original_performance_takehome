@@ -18,3 +18,7 @@ k=1..5} + curated asymmetric lag lists. Done-set dedupe by config hash.
 
 ## Iteration log
 (append-only)
+- iter 1 / phase 1: 150 configs, 22s. NO config beats 1140; ties only re-express
+  the baseline (pool_sizes=(17,3) ties). Defaults are locally optimal on every
+  swept axis. Phase 2 (dense: exhaustive 4-block lag lists, l4_gmin incl.
+  full-serve 0, dense pools, cross products) launched.

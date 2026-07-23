@@ -63,7 +63,32 @@ def phase1_grid():
             yield {"tournament_levels": tl, "alu_offload": off}
 
 
-PHASES = {1: phase1_grid}
+def phase2_grid():
+    """Dense follow-up after phase 1 found the defaults locally optimal:
+    exhaustive 4-block asymmetric lag lists, dense l4_gmin (incl. 0 =
+    full-serve), dense pools, and cross-products in the good regions."""
+    # 1. All monotone 4-block lag lists [0, a, b, c], 0 <= a <= b <= c <= 12.
+    for a in range(0, 13):
+        for b in range(a, 13):
+            for c in range(b, 13):
+                if (a, b, c) != (0, 0, 0):
+                    yield {"skew": [0, a, b, c]}
+    # 2. Dense l4_gmin, including full-serve (0) and never (32).
+    for a, b in itertools.product(range(0, 33, 2), range(0, 33, 2)):
+        yield {"l4_gmin": (a, b)}
+    # 3. Dense pools.
+    for tp, cp in itertools.product(range(10, 25), range(2, 9)):
+        yield {"pool_sizes": (tp, cp)}
+    # 4. Cross products near the optimum.
+    for skew, gmin, pools in itertools.product(
+        ((4, 3), (4, 2), [0, 3, 6, 9], [0, 2, 5, 8], (8, 1), (8, 2)),
+        ((20, 26), (22, 28), (24, 28), (22, 30)),
+        ((17, 4), (17, 3), (16, 4), (18, 4)),
+    ):
+        yield {"skew": skew, "l4_gmin": gmin, "pool_sizes": pools}
+
+
+PHASES = {1: phase1_grid, 2: phase2_grid}
 
 
 def main():
