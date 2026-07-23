@@ -79,6 +79,13 @@ class ListScheduler:
         self.mem_read_c = -1
         self.mem_write_c = -1
         self.hint = dict.fromkeys(SLOT_LIMITS, 0)
+        # Optional placement trace (tools/sched_profile.py): when `trace` is
+        # a list, every put() appends (cycle, engine, tag, slot, reads,
+        # writes, mem_read, mem_write). `tag` is builder-set context (e.g.
+        # the (round, group) being emitted). Default off; placement is
+        # unaffected either way.
+        self.trace = None
+        self.tag = None
 
     def ready(self, reads=(), writes=(), mem_read=False, mem_write=False, min_cycle=0):
         c = min_cycle
@@ -121,6 +128,10 @@ class ListScheduler:
             c += 1
 
     def put(self, engine, slot, c, reads=(), writes=(), mem_read=False, mem_write=False):
+        if self.trace is not None:
+            self.trace.append(
+                (c, engine, self.tag, slot, reads, writes, mem_read, mem_write)
+            )
         bundles = self.bundles
         counts = self.counts
         while len(bundles) <= c:
@@ -366,7 +377,8 @@ class KernelBuilder:
     def _v(self, base):
         return tuple(range(base, base + VLEN))
 
-    def _sched_vec(self, S, op, dest, a, b, allow_alu=False, force_alu=False):
+    def _sched_vec(self, S, op, dest, a, b, allow_alu=False, force_alu=False,
+                   valu_ties=False):
         """
         Emit an elementwise vector op, either as one valu slot or -- when the
         valu engine is backed up and the (otherwise idle) scalar alu can
@@ -387,11 +399,13 @@ class KernelBuilder:
             cv = S.find_free("valu", c0)
             if cv > c0:
                 # valu is backed up: race the split. alu listed first so it
-                # keeps retire-time ties (the historical `worst <= cv` rule).
-                return S.emit_any((
+                # keeps retire-time ties (the historical `worst <= cv` rule);
+                # valu_ties flips that (H-021 tie_break="vec_valu").
+                encs = (
                     alu_enc,
                     (("valu", (op, dest, a, b), reads, writes),),
-                ))
+                )
+                return S.emit_any(encs[::-1] if valu_ties else encs)
             S.put("valu", (op, dest, a, b), cv, reads, writes)
             return cv
         cv = S.find_free("valu", S.ready(reads, writes))
@@ -430,6 +444,10 @@ class KernelBuilder:
         u_race: bool = False,
         sel_race: bool = False,
         idx_race: bool = False,
+        emit_order: str = "group",
+        flow_consts: bool = False,
+        vals_first: bool = False,
+        tie_break: tuple = (),
         debug_compares: bool = True,
     ):
         """
@@ -590,6 +608,30 @@ class KernelBuilder:
           spelling -- per-lane shift then add/subtract, 16 scalar slots
           over two dependent levels -- raced against the single valu madd.
           All except idx_race require parity_conds; all default off.
+
+        - `emit_order` / `flow_consts` / `vals_first` / `tie_break`
+          (H-021): pure EMISSION-ORDER / setup-encoding / tie-break
+          experiments; none changes the maths. `emit_order="group"`
+          (default) emits each group's round contiguously; "stage"
+          round-robins the hash/tournament STAGES of the 8 groups within a
+          skew block (all groups' fold-in, then all stage-0 madds, ...);
+          "stage_all" round-robins across ALL blocks active at a diagonal
+          step; "stage_tail:N"/"rev_tail:N" apply stage-interleave /
+          reversed group order only on the last N diagonal steps (the
+          drain). `flow_consts` materializes scratch constants on the idle
+          flow engine (`add_imm` off a zeroed word) instead of the load
+          engine's 2/cycle `const` slots. `vals_first` emits the initial
+          per-group value vloads BEFORE the tournament-table setup (True)
+          or right after the hash constants ("hash"). `tie_break` flips
+          which encoding keeps retire-time ties in the emit_any races
+          ("fold_flow", "idx_alu", "vec_valu"). ALL measured >= 1070 at
+          the mainline config (iter 4 friction study): the saturated
+          middle is insensitive to emission order (greedy placement
+          reorders it anyway), the setup ramp is load-THROUGHPUT-bound
+          (any reorder that delays the lv-table stream costs +15), and
+          the r15 drain is chain-LATENCY-bound (interleaving cannot
+          compress it; see research/strains/scheduler/STATE.md). Kept as
+          negative controls / sweep dimensions.
 
         `debug_compares` interleaves free `("debug", ("vcompare", ...))`
         slots (skipped by the grader) checking node_val and hashed_val of
@@ -754,11 +796,24 @@ class KernelBuilder:
                     + (1 if elide(r, g) else 0))
 
         S = ListScheduler()
+        S.trace = getattr(self, "sched_trace", None)
+
+        if flow_consts:
+            # H-021: the setup ramp is load-bound (consts + vloads share the
+            # 2-slot load engine); materialize constants on the idle flow
+            # engine instead: one real `const 0`, then add_imm off it.
+            zero_c = self.alloc_scratch("zero_c")
+            S.emit("load", ("const", zero_c, 0), writes=(zero_c,))
+            self.const_map[0] = zero_c
 
         def const(val, name=None):
             if val not in self.const_map:
                 addr = self.alloc_scratch(name)
-                S.emit("load", ("const", addr, val), writes=(addr,))
+                if flow_consts:
+                    S.emit("flow", ("add_imm", addr, zero_c, val),
+                           (zero_c,), (addr,))
+                else:
+                    S.emit("load", ("const", addr, val), writes=(addr,))
                 self.const_map[val] = addr
             return self.const_map[val]
 
@@ -767,14 +822,24 @@ class KernelBuilder:
             S.emit("valu", ("vbroadcast", d, src), (src,), self._v(d))
             return d
 
-        vec = lambda op, dst, a, b: self._sched_vec(S, op, dst, a, b, alu_offload)
+        vec = lambda op, dst, a, b: self._sched_vec(
+            S, op, dst, a, b, alu_offload, valu_ties="vec_valu" in tb
+        )
         avec = lambda op, dst, a, b: self._sched_vec(
-            S, op, dst, a, b, alu_offload, force_alu=alu_offload
+            S, op, dst, a, b, alu_offload, force_alu=alu_offload,
+            valu_ties="vec_valu" in tb
         )
         madd = lambda dst, a, b, c: self._sched_madd(S, dst, a, b, c)
         vsel = lambda dst, cond, a, b: self._sched_vsel(S, dst, cond, a, b)
 
         odd_of = {}  # diff-vector addr -> odd-value vector addr (vsel_auto)
+
+        # H-021 tie_break: flip which encoding keeps retire-time TIES in the
+        # emit_any races ("fold_flow": dual_fold's vselect; "idx_alu":
+        # race_idx_madd's alu split). Default () keeps the historical order.
+        if isinstance(tie_break, str):
+            tie_break = (tie_break,)
+        tb = set(tie_break)
 
         def dual_fold(dst, cond, dv, ev):
             # H-017 auto mode via emit_any (H-019): place this first-fold on
@@ -783,12 +848,13 @@ class KernelBuilder:
             # a raw 0/1 parity, so the two forms are equivalent).
             ov = odd_of[dv]
             writes = self._v(dst)
-            S.emit_any((
+            encs = (
                 (("valu", ("multiply_add", dst, cond, dv, ev),
                   self._v(cond) + self._v(dv) + self._v(ev), writes),),
                 (("flow", ("vselect", dst, cond, ov, ev),
                   self._v(cond) + self._v(ov) + self._v(ev), writes),),
-            ))
+            )
+            S.emit_any(encs[::-1] if "fold_flow" in tb else encs)
 
         def race_sel(dst, cond, wa, wb):
             # H-019 (u_race/sel_race): dst := cond ? wa : wb where the arms
@@ -848,7 +914,7 @@ class KernelBuilder:
                 ("alu", lane2(i), (lane2(i)[2], lane2(i)[3]), (lane2(i)[1],))
                 for i in range(VLEN)
             )
-            S.emit_any((enc_m, enc_a))
+            S.emit_any((enc_a, enc_m) if "idx_alu" in tb else (enc_m, enc_a))
 
         def pfold(st_, nv_):
             # The lagged position fold p := 2p + b (b = raw 0/1 parity).
@@ -901,6 +967,64 @@ class KernelBuilder:
         hc = self._fused_hash_constants()
         hv = {k: bvec(const(hc[k]), k) for k in
               ("k0", "C0", "C1", "sh1", "kp", "ap", "kq", "aq", "k4", "C4", "C5", "sh5")}
+
+        # --- persistent state + initial vals (definitions; called below) ---
+        # state_vecs[g] carries p (position accumulator) during tournament
+        # levels and gaddr = forest_values_p + idx during gather levels.
+        # Wrapped as functions so `vals_first` (H-021) can emit the initial
+        # value vloads BEFORE the tournament-table setup (True) or right
+        # after the hash constants ("hash"); the default calls them at the
+        # original position, keeping the stream bit-identical.
+        state_vecs = val_vecs = nv_vecs = t1 = None
+        condA = condB = tm = tmM = None
+        TP = CP = None
+        val_addrs = None
+
+        def alloc_state():
+            nonlocal state_vecs, val_vecs, nv_vecs, t1, condA, condB, tm, tmM
+            nonlocal TP, CP
+            state_vecs = [self.alloc_scratch(f"st{g}", VLEN) for g in range(n_groups)]
+            val_vecs = [self.alloc_scratch(f"val{g}", VLEN) for g in range(n_groups)]
+            nv_vecs = [self.alloc_scratch(f"nv{g}", VLEN) for g in range(n_groups)]
+            TP, CP = pool_sizes
+            if pe_levels and maxT >= 2:
+                # Scratch is full: trade one cond-pool slot (32 words across
+                # the 4 pools) for the 3 parity constant vectors (27 words).
+                # Measured free at the default shape ((17,3) == (17,4) ==
+                # 1140), unlike shrinking the t1 pool ((13,4) costs +12).
+                CP -= 1
+                assert CP >= 1, "parity_early needs pool_sizes[1] >= 2"
+            if va_levels and maxT >= 2:
+                # vsel_auto's odd tables are funded the same way (one cond-
+                # pool slot = 32 words; (17,3) measured == (17,4) == 1130).
+                CP -= 1
+                assert CP >= 1, "vsel_auto needs pool_sizes[1] >= 2"
+            if c5_prexor:
+                # Same trade for the negtwo/primed-root vectors (19 words).
+                CP -= 1
+                assert CP >= 1, "c5_prexor needs pool_sizes[1] >= 2"
+            t1 = [self.alloc_scratch(None, VLEN) for _ in range(TP)]
+            if maxT >= 2:
+                condA = [self.alloc_scratch(None, VLEN) for _ in range(CP)]
+                condB = [self.alloc_scratch(None, VLEN) for _ in range(CP)]
+                tm = [self.alloc_scratch(None, VLEN) for _ in range(CP)]
+            if maxT >= 3:
+                tmM = [self.alloc_scratch(None, VLEN) for _ in range(CP)]
+
+        def emit_vals():
+            nonlocal val_addrs
+            val_addrs = []
+            for g in range(n_groups):
+                a = self.alloc_scratch(f"va{g}")
+                S.emit("flow", ("add_imm", a, ivp, g * VLEN), (ivp,), (a,))
+                val_addrs.append(a)
+                S.emit("load", ("vload", val_vecs[g], a),
+                       (a,), self._v(val_vecs[g]), mem_read=True)
+
+        if vals_first == "hash":
+            alloc_state()
+            emit_vals()
+
         if c5_prexor:
             # Primed root broadcast (L0 rounds after round 0 fold a primed
             # val, so they must fold the primed root) and the -2 multiplier
@@ -941,6 +1065,10 @@ class KernelBuilder:
             S.emit("flow", ("add_imm", rs, fp, off), (fp,), (rs,))
             rec_vecs[key] = bvec(rs, f"rec{key}")
             rec_scalar[key] = rs
+
+        if vals_first and vals_first != "hash":
+            alloc_state()
+            emit_vals()
 
         # --- tournament level values: load tree[1..], broadcast each
         # pair's even element and its (odd-even) diff ---
@@ -1027,46 +1155,10 @@ class KernelBuilder:
             four_vec = bvec(const(4), "four_vec")
             eight_vec = bvec(const(8), "eight_vec")
 
-        # --- persistent state ---
-        # state_vecs[g] carries p (position accumulator) during tournament
-        # levels and gaddr = forest_values_p + idx during gather levels.
-        state_vecs = [self.alloc_scratch(f"st{g}", VLEN) for g in range(n_groups)]
-        val_vecs = [self.alloc_scratch(f"val{g}", VLEN) for g in range(n_groups)]
-        nv_vecs = [self.alloc_scratch(f"nv{g}", VLEN) for g in range(n_groups)]
-        TP, CP = pool_sizes
-        if pe_levels and maxT >= 2:
-            # Scratch is full: trade one cond-pool slot (32 words across the
-            # 4 pools) for the 3 parity constant vectors (27 words). Measured
-            # free at the default shape ((17,3) == (17,4) == 1140), unlike
-            # shrinking the t1 pool ((13,4) costs +12).
-            CP -= 1
-            assert CP >= 1, "parity_early needs pool_sizes[1] >= 2"
-        if va_levels and maxT >= 2:
-            # vsel_auto's odd tables are funded the same way (one cond-pool
-            # slot = 32 words; (17,3) measured == (17,4) == 1130).
-            CP -= 1
-            assert CP >= 1, "vsel_auto needs pool_sizes[1] >= 2"
-        if c5_prexor:
-            # Same trade for the negtwo/primed-root vectors (19 words).
-            CP -= 1
-            assert CP >= 1, "c5_prexor needs pool_sizes[1] >= 2"
-        t1 = [self.alloc_scratch(None, VLEN) for _ in range(TP)]
-
-        if maxT >= 2:
-            condA = [self.alloc_scratch(None, VLEN) for _ in range(CP)]
-            condB = [self.alloc_scratch(None, VLEN) for _ in range(CP)]
-            tm = [self.alloc_scratch(None, VLEN) for _ in range(CP)]
-        if maxT >= 3:
-            tmM = [self.alloc_scratch(None, VLEN) for _ in range(CP)]
-
-        # --- initial vals ---
-        val_addrs = []
-        for g in range(n_groups):
-            a = self.alloc_scratch(f"va{g}")
-            S.emit("flow", ("add_imm", a, ivp, g * VLEN), (ivp,), (a,))
-            val_addrs.append(a)
-            S.emit("load", ("vload", val_vecs[g], a),
-                   (a,), self._v(val_vecs[g]), mem_read=True)
+        # --- persistent state + initial vals (default position) ---
+        if not vals_first:
+            alloc_state()
+            emit_vals()
 
         if l4_mem_primed:
             # Write the primed level-4 values (already ^C5 in lv scratch)
@@ -1083,7 +1175,12 @@ class KernelBuilder:
                        (pst,) + self._v(src), (), mem_write=True)
 
         # --- rounds ---
-        def emit_group_round(r, g):
+        # The round body is a GENERATOR yielding at stage boundaries
+        # (node_val block, each hash dependency level, state update), so the
+        # emission loop can interleave stages across a block's groups
+        # (`emit_order`); the default drains each group fully in order,
+        # reproducing the historical contiguous emission bit-for-bit.
+        def _egr_stages(r, g):
             if True:  # keep the original indentation of the body below
                 L = level(r)
                 s = g % TP
@@ -1302,6 +1399,8 @@ class KernelBuilder:
                             [(r, g * VLEN + i, "node_val") for i in range(VLEN)]),
                            reads=self._v(nvsrc))
 
+                yield  # stage: node_val ready
+
                 # ---- val = fused_hash(val ^ node_val) ----
                 # Each xor-shift stage uses ONE temp: the shifted copy goes
                 # to t, then val updates in place (same-cycle write-after-
@@ -1312,12 +1411,15 @@ class KernelBuilder:
                 if nvsrc is not None:
                     vec("^", vl, vl, nvsrc)
                 madd(vl, vl, hv["k0"], hv["C0"])
+                yield  # stage: fold-in + stage0
                 avec(">>", t, vl, hv["sh1"])
                 avec("^", vl, vl, hv["C1"])
                 vec("^", vl, vl, t)
+                yield  # stage: stage1 xor-shift
                 madd(t, vl, hv["kp"], hv["ap"])
                 madd(vl, vl, hv["kq"], hv["aq"])
                 vec("^", vl, vl, t)
+                yield  # stage: fused stage2/3
                 if pe:
                     # Parity-early: bit31(vl*km + cm) == bit0 of the final
                     # hash (vl holds the pre-stage-4 value c here; see the
@@ -1337,6 +1439,8 @@ class KernelBuilder:
                            ("vcompare", vl,
                             [(r, g * VLEN + i, "hashed_val") for i in range(VLEN)]),
                            reads=self._v(vl))
+
+                yield  # stage: hash complete
 
                 # ---- position/state update & gather prefetch for r+1 ----
                 if r == rounds - 1:
@@ -1405,6 +1509,28 @@ class KernelBuilder:
                         S.emit("load", ("load", nv + lane, st + lane),
                                (st + lane,), (nv + lane,), mem_read=True)
 
+        def emit_stages(r, g):
+            # Re-tag on every resume so interleaved generators keep the
+            # optional placement trace honest (tags never affect placement).
+            inner = _egr_stages(r, g)
+            while True:
+                S.tag = (r, g)
+                try:
+                    next(inner)
+                except StopIteration:
+                    return
+                yield
+
+        def emit_group_round(r, g):
+            for _ in emit_stages(r, g):
+                pass
+
+        def round_robin(gens):
+            # Advance each generator one stage per pass until all exhaust.
+            done = object()
+            while gens:
+                gens = [gen for gen in gens if next(gen, done) is not done]
+
         # Groups are fully independent, so they need not march in lockstep:
         # emitting the later blocks a few ROUNDS behind the earlier ones
         # skews the whole batch into a software-pipelined diagonal, so one
@@ -1420,14 +1546,49 @@ class KernelBuilder:
         if n_groups % len(lags) != 0:
             lags = [0]  # degenerate shapes: no skew
         bs_ = n_groups // len(lags)
-        for t in range(rounds + max(lags)):
+        n_steps = rounds + max(lags)
+        # "stage_tail:N": group order in the saturated middle, per-block
+        # stage interleave only on the last N diagonal steps (the drain,
+        # where the last block's chains are the only fillable work).
+        tail_from = n_steps
+        order = emit_order
+        tail_mode = "stage"
+        if isinstance(emit_order, str) and (
+                emit_order.startswith("stage_tail")
+                or emit_order.startswith("rev_tail")):
+            n_tail = int(emit_order.split(":", 1)[1]) if ":" in emit_order else 1
+            tail_from = n_steps - n_tail
+            tail_mode = "rev" if emit_order.startswith("rev") else "stage"
+            order = "group"
+        for t in range(n_steps):
+            waves = []  # (round, group-range) active at this diagonal step
             for b, lb in enumerate(lags):
                 r = t - lb
                 if 0 <= r < rounds:
-                    for g in range(b * bs_, (b + 1) * bs_):
+                    waves.append((r, range(b * bs_, (b + 1) * bs_)))
+            step_order = tail_mode if t >= tail_from else order
+            if step_order == "group":
+                for r, gs in waves:
+                    for g in gs:
                         emit_group_round(r, g)
+            elif step_order == "rev":
+                # Reversed group order: the block's LAST groups (the global
+                # critical path at the drain) get first claim on slots.
+                for r, gs in waves:
+                    for g in reversed(gs):
+                        emit_group_round(r, g)
+            elif step_order == "stage":
+                # Round-robin the stages of the 8 groups WITHIN each block.
+                for r, gs in waves:
+                    round_robin([emit_stages(r, g) for g in gs])
+            elif emit_order == "stage_all":
+                # Round-robin across every block active at this step.
+                round_robin([emit_stages(r, g) for r, gs in waves for g in gs])
+            else:
+                raise ValueError(f"unknown emit_order {emit_order!r}")
 
         # --- store final values; second pause after everything ---
+        S.tag = None
         last = 0
         for g in range(n_groups):
             c = S.emit("store", ("vstore", val_addrs[g], val_vecs[g]),
