@@ -365,6 +365,7 @@ class KernelBuilder:
         l4_gmin=(22, 28),
         pool_sizes=(17, 4),
         skew=(4, 3),
+        parity_early=False,
         debug_compares: bool = True,
     ):
         """
@@ -404,6 +405,26 @@ class KernelBuilder:
           (see `_sched_vec`), raising compute throughput from 6 to up to
           7.5 vector-ops/cycle.
 
+        - Parity-early (`parity_early`, H-002): the next round's gather
+          address / tournament position needs ONLY bit0 of the hashed
+          value, but bit0 normally waits for the full hash (the stage-1/
+          stage-5 xor-shifts pull bits 19/16 down into bit0, so no shorter
+          boolean chain exists below the pre-stage-4 value c). One extra
+          madd off c, scheduled in parallel with the stage-4 madd, puts the
+          parity at BIT 31 carry-free:
+            m = c*Km + Cm  ==  d*(2^31+2^15) + (C5&1)<<31   (mod 2^32)
+          (Km = k4*(2^31+2^15), Cm = C4*(2^31+2^15) + (C5&1)<<31; below
+          bit31 only the d<<15 addend is nonzero, so bit31(m) = bit16(d) ^
+          bit0(d) ^ bit0(C5) = bit0(hash)), and `m >> 31` is the clean 0/1
+          parity: available at dependency depth 8 instead of 10, so the
+          next round's gather/tournament unblocks 2 levels earlier, at the
+          price of +1 valu madd per group-round (the >>31 replaces the old
+          `& 1`). The madd result is hosted in the group's dead nv vector
+          (no new state); the 3 constant vectors (27 words) are traded for
+          4 hash-temp slots since scratch is full. `parity_early` is False
+          (off), True (all rounds), or an iterable of CURRENT-round levels
+          at which to apply it (e.g. (3,) = only rounds feeding level 4).
+
         `debug_compares` interleaves free `("debug", ("vcompare", ...))`
         slots (skipped by the grader) checking node_val and hashed_val of
         every (round, walker) against the reference trace.
@@ -411,6 +432,13 @@ class KernelBuilder:
         assert batch_size % VLEN == 0
         n_groups = batch_size // VLEN
         period = forest_height + 1
+
+        if parity_early is True:
+            pe_levels = set(range(period))
+        elif parity_early:
+            pe_levels = set(parity_early)
+        else:
+            pe_levels = set()
 
         T = tuple(l for l in tournament_levels if l < forest_height)
         assert T == tuple(range(1, len(T) + 1)), "tournament levels must be 1..k"
@@ -495,6 +523,15 @@ class KernelBuilder:
         hc = self._fused_hash_constants()
         hv = {k: bvec(const(hc[k]), k) for k in
               ("k0", "C0", "C1", "sh1", "kp", "ap", "kq", "aq", "k4", "C4", "C5", "sh5")}
+        if pe_levels:
+            # Parity-early constants (see docstring): bit31(c*km + cm) is
+            # bit0 of the final hash, carry-free by construction.
+            M_ = (1 << 32) - 1
+            km = (hc["k4"] * ((1 << 31) + (1 << 15))) & M_
+            cm = (hc["C4"] * ((1 << 31) + (1 << 15)) + ((hc["C5"] & 1) << 31)) & M_
+            hv["km"] = bvec(const(km), "km")
+            hv["cm"] = bvec(const(cm), "cm")
+            hv["c31"] = bvec(const(31), "c31")
 
         # gaddr reconstruction constants: leaving a served round r for a
         # gather round at level Ln needs  fp + 2^Ln - 1  as a vector.
@@ -553,6 +590,13 @@ class KernelBuilder:
         val_vecs = [self.alloc_scratch(f"val{g}", VLEN) for g in range(n_groups)]
         nv_vecs = [self.alloc_scratch(f"nv{g}", VLEN) for g in range(n_groups)]
         TP, CP = pool_sizes
+        if pe_levels and maxT >= 2:
+            # Scratch is full: trade one cond-pool slot (32 words across the
+            # 4 pools) for the 3 parity constant vectors (27 words). Measured
+            # free at the default shape ((17,3) == (17,4) == 1140), unlike
+            # shrinking the t1 pool ((13,4) costs +12).
+            CP -= 1
+            assert CP >= 1, "parity_early needs pool_sizes[1] >= 2"
         t1 = [self.alloc_scratch(None, VLEN) for _ in range(TP)]
 
         if maxT >= 2:
@@ -652,6 +696,8 @@ class KernelBuilder:
                 # Each xor-shift stage uses ONE temp: the shifted copy goes
                 # to t, then val updates in place (same-cycle write-after-
                 # read of val is safe under the bundle semantics).
+                pe = (L in pe_levels and r < rounds - 1
+                      and level(r + 1) != 0)
                 t = t1[s]
                 vec("^", vl, vl, nvsrc)
                 madd(vl, vl, hv["k0"], hv["C0"])
@@ -661,6 +707,14 @@ class KernelBuilder:
                 madd(t, vl, hv["kp"], hv["ap"])
                 madd(vl, vl, hv["kq"], hv["aq"])
                 vec("^", vl, vl, t)
+                if pe:
+                    # Parity-early: bit31(vl*km + cm) == bit0 of the final
+                    # hash (vl holds the pre-stage-4 value c here; see the
+                    # docstring). Runs in parallel with the stage-4 madd;
+                    # nv is dead (node_val already folded in) and is
+                    # rewritten by round r+1's gather/select, so it hosts
+                    # the parity word with no new scratch.
+                    madd(nv, vl, hv["km"], hv["cm"])
                 madd(vl, vl, hv["k4"], hv["C4"])
                 vec(">>", t, vl, hv["sh5"])
                 vec("^", vl, vl, hv["C5"])
@@ -678,24 +732,32 @@ class KernelBuilder:
                 Ln = level(r + 1)
                 if Ln == 0:
                     return  # everyone wraps to the root; state re-seeded there
+                if pe:
+                    # nv holds the parity word m; m>>31 is the clean 0/1
+                    # parity, ready 2 dependency levels before the hash.
+                    par = nv
+                    parity = lambda dst: vec(">>", dst, nv, hv["c31"])
+                else:
+                    par = t1[s]
+                    parity = lambda dst: vec("&", dst, vl, one_vec)
                 if served(r + 1, g):
                     if L == 0:
-                        vec("&", st, vl, one_vec)          # p := b
+                        parity(st)                         # p := b
                     else:
-                        vec("&", t1[s], vl, one_vec)
-                        madd(st, st, two_vec, t1[s])       # p := 2p + b
+                        parity(par)
+                        madd(st, st, two_vec, par)         # p := 2p + b
                 else:
-                    vec("&", t1[s], vl, one_vec)
+                    parity(par)
                     if served(r, g):
                         # leave accumulator mode: gaddr = 2p + b + fp + 2^Ln - 1
                         if L == 0:
-                            vec("+", st, rec_vecs[Ln], t1[s])
+                            vec("+", st, rec_vecs[Ln], par)
                         else:
                             madd(st, st, two_vec, rec_vecs[Ln])
-                            vec("+", st, st, t1[s])
+                            vec("+", st, st, par)
                     else:
                         madd(st, st, two_vec, omf_vec)     # 2*gaddr + 1 - fp
-                        vec("+", st, st, t1[s])
+                        vec("+", st, st, par)
                     for lane in range(VLEN):
                         S.emit("load", ("load", nv + lane, st + lane),
                                (st + lane,), (nv + lane,), mem_read=True)
