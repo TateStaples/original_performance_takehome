@@ -125,3 +125,14 @@ Seeded 2026-07-23 from the 2148->1140 campaign's measured rejections.
   in-tree as a negative control flag.
 - reopen-if: valu drops below ~90% busy while flow locally saturates
   (e.g. after a large op-removal accept).
+
+### G-15 The madd-diet / engine-rebalancing ceiling (H-004+H-018)
+- statement: converting state madds to alu-splittable forms scales to <1000.
+- evidence: exchange rate is 1 valu slot : 16 alu lanes (worst in kernel);
+  equilibrium caps ~68 conversions = floor ~1050, greedy realizes -2..-5
+  (idx_race). Hash kq-madd conversion: +70. Both iter-3 agents converge:
+  alu 93.9%, valu 97.5% -- NO remaining rebalancing wins. Route to <1000 is
+  lane-op REMOVAL (H-016 MITM fusion, load-side gather elimination) plus
+  scheduling-slack harvest (H-021), not engine moves.
+- reopen-if: any accept frees >=8% of alu or valu (re-run idx_race/madd_x2
+  sweeps then; archived patch has the madd_x2 flag ready).

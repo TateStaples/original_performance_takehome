@@ -58,7 +58,7 @@ strain STATE.md and the driver promotes them here.
   and the P-1 C5-commute insight -> promoted as H-015. See G-10.
 - log: 2026-07-23 opened; assigned iter 1; closed iter 1.
 
-### H-004 [strain: op-reduction] [status: open]
+### H-004 [strain: op-reduction] [status: closed (subsumed by idx_race) -> see G-15]
 - statement: Fold the idx/state update `p := 2p + b` (one madd per group-round,
   1,000+ madds) into existing ops — e.g. carry position pre-scaled so the
   gather-address madd absorbs it, or derive position bits directly from saved
@@ -66,8 +66,16 @@ strain STATE.md and the driver promotes them here.
   tournament levels.
 - predicted: -20..-60 cyc (Idx = 8,592 lane-ops total).
 - cost: M. depends: stronger after H-001.
-- result:
-- log: 2026-07-23 opened.
+- result: CLOSED iter 3 (combined with H-018). Agent measured madd_x2
+  (madd -> self-add+add/sub, auto-gated): best -2 on pre-idx_race base;
+  driver did NOT merge — mechanism subsumed by H-019's idx_race (-5 on
+  mainline, same madd families; 7-region semantic conflict for ~0 marginal).
+  Patch archived: scratchpad/iter3_op-reduction.patch. THE REAL RESULT is
+  the arithmetic ceiling: madd->adds trades 1 valu slot for 16 alu lanes;
+  equilibrium 2(6365-x) = 11497+16x caps x~68 (floor -> ~1050); and the
+  hash kq-madd conversion is strongly negative (+70). Engine REBALANCING
+  is measured-exhausted from both directions (H-019 P-7 concurs) -> G-15.
+- log: 2026-07-23 opened; iter 3 closed.
 
 ### H-005 [strain: sweep] [status: testing]
 - statement: Grid-search tunables of build_kernel_scheduled: skew shapes
@@ -211,7 +219,7 @@ strain STATE.md and the driver promotes them here.
   L4 retune confirmed: l4_gmin=(20,29), pools (16,3). 17 words now FREE.
 - log: 2026-07-23 promoted; iter 2 ACCEPTED, dispatch flipped.
 
-### H-018 [strain: flow-balance] [status: open]
+### H-018 [strain: flow-balance] [status: closed (folded into H-004 iter 3)]
 - statement: valu madd diet: hunt the lagged p-fold madds and epoch-exit
   conversion madds (feeds H-004's idx-elimination ideas) now that valu
   throughput (not alu, not latency) is the binding constraint.
