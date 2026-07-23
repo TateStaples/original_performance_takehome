@@ -119,14 +119,17 @@ strain STATE.md and the driver promotes them here.
 - result:
 - log: 2026-07-23 opened.
 
-### H-010 [strain: critical-path] [status: open]
+### H-010 [strain: critical-path] [status: rejected -> graveyard G-13]
 - statement: Parity speculation: on rounds where the next level is served
   from scratch both ways cheaply (levels 0..2), compute BOTH children's
   contributions and select late — removes the parity->select dependency
   entirely on those rounds.
 - predicted: -10..-25 cyc. cost: M. depends: none.
-- result:
-- log: 2026-07-23 opened.
+- result: REJECTED iter 3, honest zero: auto-raced speculation wins only 1-2
+  of 64 sites where status quo was ALREADY zero-valu; hard variants +20..+115;
+  per-site zero-net-valu fails globally (speculated xors displace alu-offload
+  back onto valu at 88% alu busy). spec_fold flag kept in-tree. See G-13.
+- log: 2026-07-23 opened; iter 3 rejected -> strain rotated.
 
 ### H-011 [strain: flow-balance] [status: open]
 - statement: Flow-engine parity extraction (H-001 x H-002 combo): if parity
@@ -233,3 +236,14 @@ strain STATE.md and the driver promotes them here.
 - predicted: -2..-8 cyc. cost: S (background). depends: none.
 - result:
 - log: 2026-07-23 promoted from flow-balance P-5.
+
+### H-021 [strain: scheduler] [status: open]
+- statement: NEW STRAIN (rotated in for critical-path). Close the gap between
+  actual cycles and the valu floor (1087 vs ~1061 = 26 cycles of scheduling
+  friction): ListScheduler lookahead/priority experiments (critical-chain
+  first, slack-aware slot assignment), emission-order search beyond skew
+  (which the (4,3) sweep already optimized), and per-engine tie-break rules.
+  Rust-harness modeling (H-012) to bound what perfect scheduling could give.
+- predicted: -10..-26 cyc (bounded by the floor gap). cost: M.
+- result:
+- log: 2026-07-23 opened at strain rotation.

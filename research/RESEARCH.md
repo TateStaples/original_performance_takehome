@@ -25,7 +25,7 @@
 | strain | charter | status |
 |---|---|---|
 | flow-balance | exploit idle flow engine + load-side tricks | active (iter 2: H-017) |
-| critical-path | gather-path latency/buffering plays | NEARLY TAPPED: G-8/G-9/G-11 all measured-dead; only H-010 live; rotate next dry iter |
+| scheduler | close the actual-vs-valu-floor gap (26 cyc friction) | NEW (rotated in iter 3; critical-path RETIRED: G-8/G-11/G-13) |
 | op-reduction | fewer lane-ops via algebra (hash fusions, idx folds) | active (iter 2: H-015) |
 | sweep | pure-compute parameter grid (no LLM) | active (background, H-005) |
 
@@ -47,3 +47,4 @@ Global: 6 dry iterations -> one cross-pollination iteration. Status report to us
 
 - iter 2 CLOSED | H-014 REJECTED (0 nv-bound gathers) -> G-11; H-017 vsel_auto ACCEPTED (-23) -> 1107, hard flip -> G-12; H-015 c5_prexor ACCEPTED composed (-19) -> 1088 (driver fixed vsel_auto arm-order interaction + composed retune: va=(1,2), gmin=(15,29)); re-sweep negative | best 1088
 - iter 3 (in flight) | sweep phase 3: vsel_auto=(1,3) accepted (-1) -> 1087; H-019/H-004+18/H-010 agents running | best 1087
+- iter 3 | H-010 honest zero -> G-13; critical-path RETIRED, scheduler strain rotated in (H-021). H-019, H-004+18 still running | best 1087

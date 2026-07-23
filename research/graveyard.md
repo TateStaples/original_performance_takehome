@@ -105,3 +105,14 @@ Seeded 2026-07-23 from the 2148->1140 campaign's measured rejections.
   ~2 cycles and serialize on the 1-slot engine. Confirms and sharpens G-4.
 - reopen-if: n/a — superseded by the accepted schedule-aware vsel_auto,
   which subsumes every case where the flip helps.
+
+### G-13 Parity speculation via xor-select distribution (H-010)
+- statement: select-after-speculated-xors shortens the parity chain at zero
+  net valu cost.
+- evidence: auto race (trial emission both forms, external state rollback):
+  0 cycle delta — speculation wins only where the status quo already used
+  zero valu; hard L1/L2/L1+2: +20/+64/+115; valu census UP 17-24 under
+  forced variants (alu displacement at 88% busy). Third consecutive
+  critical-path rejection (G-8, G-11, G-13) -> strain retired.
+- reopen-if: valu AND alu both gain >=8% headroom. Retest hooks kept:
+  parity_early, spec_fold flags (one command each, see H-013).
