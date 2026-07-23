@@ -22,3 +22,7 @@ k=1..5} + curated asymmetric lag lists. Done-set dedupe by config hash.
   the baseline (pool_sizes=(17,3) ties). Defaults are locally optimal on every
   swept axis. Phase 2 (dense: exhaustive 4-block lag lists, l4_gmin incl.
   full-serve 0, dense pools, cross products) launched.
+- iter 1 / phase 2: 828 more configs (978 total), 122s. STILL zero below 1140;
+  ties are aliases of the baseline ((4,3) == [0,3,6,9]). Parameter space of the
+  CURRENT structure is exhausted -> H-005 closed until a structural flag lands
+  (grid re-opens over new flags per charter). Next sweep waits on iter-1 agents.
