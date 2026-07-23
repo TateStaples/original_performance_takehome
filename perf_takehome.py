@@ -368,6 +368,8 @@ class KernelBuilder:
         skew=(4, 3),
         parity_early=False,
         parity_conds: bool = False,
+        vsel_folds=False,
+        vsel_auto=(),
         debug_compares: bool = True,
     ):
         """
@@ -440,6 +442,25 @@ class KernelBuilder:
           path. Saves the newest-bit extraction at L2/L3/L4 plus the L4
           `>>` (b2 lands at bit 0, already 0/1 for the U-combines).
 
+        - `vsel_folds` (H-017): move tournament FIRST-folds -- whose
+          condition is the newest parity, a raw 0/1 vector under
+          `parity_conds` -- from valu multiply_add to flow vselect. The
+          level tables store the odd VALUES instead of (odd - even) diffs
+          for the flipped levels (same vector scratch, minus the setup
+          subtracts and their scalar diff words), and each first fold
+          becomes vselect(b, O[k], E[k]): same dependency depth, one valu
+          slot traded for one flow slot. False (off), True (all levels),
+          or an iterable of levels from {1, 2, 3, 4}, where 4 means the
+          l4-served W-combines. Requires `parity_conds`.
+
+        - `vsel_auto` (H-017/H-007): schedule-aware version of the above
+          for levels from {1, 2, 3} -- each first-fold is placed on flow
+          ONLY when the flow engine's earliest free slot strictly beats
+          valu's (both the diff and the odd-value tables are kept live,
+          funded by trading one cond-pool slot, measured cycle-neutral).
+          Requires `parity_conds`; disjoint from `vsel_folds`. {1, 2} or
+          {3} fit the freed scratch; larger sets overflow the allocator.
+
         `debug_compares` interleaves free `("debug", ("vcompare", ...))`
         slots (skipped by the grader) checking node_val and hashed_val of
         every (round, walker) against the reference trace.
@@ -473,6 +494,25 @@ class KernelBuilder:
         # gather it cannot be prefetched a full round ahead).
         L4 = maxT + 1
         n_groups_ = batch_size // VLEN
+
+        # vsel_folds (H-017) normalization: which levels' first-folds ride
+        # flow vselect instead of valu madd. 4 = the l4-served W-combines.
+        if vsel_folds is True:
+            vf_levels = set(range(1, L4 + 1))
+        elif vsel_folds:
+            vf_levels = ({vsel_folds} if isinstance(vsel_folds, int)
+                         else set(vsel_folds))
+        else:
+            vf_levels = set()
+        vf_levels &= set(range(1, L4 + 1))
+        assert not vf_levels or parity_conds, "vsel_folds requires parity_conds"
+
+        # vsel_auto (H-017/H-007): levels whose first-folds race valu vs
+        # flow at schedule time (needs both diff and odd tables live).
+        va_levels = ({vsel_auto} if isinstance(vsel_auto, int)
+                     else set(vsel_auto)) & set(range(1, maxT + 1))
+        va_levels -= vf_levels
+        assert not va_levels or parity_conds, "vsel_auto requires parity_conds"
 
         def l4_served(r, g):
             if maxT != 3 or L4 >= forest_height or level(r) != L4:
@@ -510,6 +550,23 @@ class KernelBuilder:
         )
         madd = lambda dst, a, b, c: self._sched_madd(S, dst, a, b, c)
         vsel = lambda dst, cond, a, b: self._sched_vsel(S, dst, cond, a, b)
+
+        odd_of = {}  # diff-vector addr -> odd-value vector addr (vsel_auto)
+
+        def dual_fold(dst, cond, dv, ev):
+            # H-017 auto mode: place this first-fold on flow's vselect only
+            # when its slot retires strictly earlier than valu's madd would
+            # (cond is a raw 0/1 parity, so the two forms are equivalent).
+            reads_m = self._v(cond) + self._v(dv) + self._v(ev)
+            writes = self._v(dst)
+            cm = S.find_free("valu", S.ready(reads_m, writes))
+            ov = odd_of[dv]
+            reads_s = self._v(cond) + self._v(ov) + self._v(ev)
+            cs = S.find_free("flow", S.ready(reads_s, writes))
+            if cs < cm:
+                S.put("flow", ("vselect", dst, cond, ov, ev), cs, reads_s, writes)
+            else:
+                S.put("valu", ("multiply_add", dst, cond, dv, ev), cm, reads_m, writes)
 
         # --- header (inp_indices is never read: only values are graded) ---
         for name, hidx in (("forest_values_p", 4), ("inp_values_p", 6)):
@@ -577,10 +634,20 @@ class KernelBuilder:
                 for k in range(2 ** (L - 1)):
                     s0 = lv + (base + 2 * k - 1)
                     s1 = s0 + 1
+                    if L in vf_levels:
+                        # vselect first-fold (H-017): keep the odd VALUE
+                        # as the select arm; no subtract, no diff word.
+                        evens.append(bvec(s0))
+                        diffs.append(bvec(s1))
+                        continue
                     d = self.alloc_scratch()
                     S.emit("alu", ("-", d, s1, s0), (s0, s1), (d,))
                     evens.append(bvec(s0))
                     diffs.append(bvec(d))
+                    if L in va_levels:
+                        # vsel_auto (H-017): odd VALUE kept alongside the
+                        # diff so the fold can go to either engine.
+                        odd_of[diffs[-1]] = bvec(s1)
                 lvl[L] = (evens, diffs)
         if l4_any:
             # Level maxT+1 candidates, indexed by the level-maxT position t:
@@ -591,6 +658,11 @@ class KernelBuilder:
             for t in range(2 ** maxT):
                 s0 = lv + (base + 2 * t - 1)
                 s1 = s0 + 1
+                if 4 in vf_levels:
+                    # vselect W-combine (H-017): odd VALUE, not the diff.
+                    E_vecs.append(bvec(s0))
+                    D_vecs.append(bvec(s1))
+                    continue
                 d = self.alloc_scratch()
                 S.emit("alu", ("-", d, s1, s0), (s0, s1), (d,))
                 E_vecs.append(bvec(s0))
@@ -612,6 +684,11 @@ class KernelBuilder:
             # shrinking the t1 pool ((13,4) costs +12).
             CP -= 1
             assert CP >= 1, "parity_early needs pool_sizes[1] >= 2"
+        if va_levels and maxT >= 2:
+            # vsel_auto's odd tables are funded the same way (one cond-pool
+            # slot = 32 words; (17,3) measured == (17,4) == 1130).
+            CP -= 1
+            assert CP >= 1, "vsel_auto needs pool_sizes[1] >= 2"
         t1 = [self.alloc_scratch(None, VLEN) for _ in range(TP)]
 
         if maxT >= 2:
@@ -646,9 +723,16 @@ class KernelBuilder:
                 elif L in T_set:
                     nvsrc = nv
                     evens, diffs = lvl[L]
+                    # H-017: on vsel_folds levels the first fold rides flow
+                    # (diffs[] holds odd VALUES there; conds are raw 0/1
+                    # parities under parity_conds); on vsel_auto levels it
+                    # goes to whichever engine's slot retires earlier. Same
+                    # arg shape all three ways.
+                    ff = (vsel if L in vf_levels
+                          else dual_fold if L in va_levels else madd)
                     if L == 1:
                         # p is the single parity bit itself.
-                        madd(nv, st, diffs[0], evens[0])
+                        ff(nv, st, diffs[0], evens[0])
                     elif L == 2:
                         if parity_conds:
                             # nv = b1 (raw parity), st = b0 (single bit).
@@ -656,8 +740,8 @@ class KernelBuilder:
                             # pure copy, so it rides the idle flow engine.
                             vsel(condB[j], st, st, st)
                             madd(st, st, two_vec, nv)        # fold b1: st = b0b1
-                            madd(t1[s], nv, diffs[0], evens[0])
-                            madd(tm[j], nv, diffs[1], evens[1])
+                            ff(t1[s], nv, diffs[0], evens[0])
+                            ff(tm[j], nv, diffs[1], evens[1])
                             vsel(nv, condB[j], tm[j], t1[s])
                         else:
                             vec("&", condA[j], st, one_vec)   # newest bit b1
@@ -671,10 +755,10 @@ class KernelBuilder:
                         vec("&", condB[j], st, one_vec)   # b1
                         vec("&", condA[j], st, two_vec)   # b0 mask
                         madd(st, st, two_vec, nv)         # fold b2: st = b0b1b2
-                        madd(t1[s], nv, diffs[0], evens[0])   # m0
-                        madd(tmM[j], nv, diffs[1], evens[1])  # m1
-                        madd(tm[j], nv, diffs[2], evens[2])   # m2
-                        madd(nv, nv, diffs[3], evens[3])      # m3 (b2 dead)
+                        ff(t1[s], nv, diffs[0], evens[0])   # m0
+                        ff(tmM[j], nv, diffs[1], evens[1])  # m1
+                        ff(tm[j], nv, diffs[2], evens[2])   # m2
+                        ff(nv, nv, diffs[3], evens[3])      # m3 (b2 dead)
                         vsel(t1[s], condB[j], tmM[j], t1[s])  # q0 = b1 ? m1 : m0
                         vsel(nv, condB[j], nv, tm[j])         # q1 = b1 ? m3 : m2
                         vsel(nv, condA[j], nv, t1[s])         # b0 ? q1 : q0
@@ -699,23 +783,26 @@ class KernelBuilder:
                     # occupying nv, condA joins the value-temp rotation.
                     nvsrc = nv
                     fold = r != rounds - 1
+                    # H-017: W-combines ride flow when level 4 is flipped
+                    # (D_vecs holds odd VALUES there; nv is the raw parity).
+                    ffW = vsel if 4 in vf_levels else madd
                     vec("&", condB[j], st, one_vec)                 # b2 (0/1)
                     if fold:
                         madd(st, st, two_vec, nv)                   # st=b0b1b2b3
-                    madd(t1[s], nv, D_vecs[0], E_vecs[0])           # W0
-                    madd(tm[j], nv, D_vecs[1], E_vecs[1])           # W1
+                    ffW(t1[s], nv, D_vecs[0], E_vecs[0])            # W0
+                    ffW(tm[j], nv, D_vecs[1], E_vecs[1])            # W1
                     vec("-", tm[j], tm[j], t1[s])                   # W1-W0
                     madd(t1[s], condB[j], tm[j], t1[s])             # U0
-                    madd(tmM[j], nv, D_vecs[2], E_vecs[2])          # W2
-                    madd(tm[j], nv, D_vecs[3], E_vecs[3])           # W3
+                    ffW(tmM[j], nv, D_vecs[2], E_vecs[2])           # W2
+                    ffW(tm[j], nv, D_vecs[3], E_vecs[3])            # W3
                     vec("-", tm[j], tm[j], tmM[j])                  # W3-W2
                     madd(tmM[j], condB[j], tm[j], tmM[j])           # U1
-                    madd(tm[j], nv, D_vecs[4], E_vecs[4])           # W4
-                    madd(condA[j], nv, D_vecs[5], E_vecs[5])        # W5
+                    ffW(tm[j], nv, D_vecs[4], E_vecs[4])            # W4
+                    ffW(condA[j], nv, D_vecs[5], E_vecs[5])         # W5
                     vec("-", condA[j], condA[j], tm[j])             # W5-W4
                     madd(tm[j], condB[j], condA[j], tm[j])          # U2
-                    madd(condA[j], nv, D_vecs[6], E_vecs[6])        # W6
-                    madd(nv, nv, D_vecs[7], E_vecs[7])              # W7 (b3 dead)
+                    ffW(condA[j], nv, D_vecs[6], E_vecs[6])         # W6
+                    ffW(nv, nv, D_vecs[7], E_vecs[7])               # W7 (b3 dead)
                     vec("-", nv, nv, condA[j])                      # W7-W6
                     madd(nv, condB[j], nv, condA[j])                # U3 (b2 dead)
                     vec("&", condA[j], st, four_vec if fold else two_vec)  # b1
