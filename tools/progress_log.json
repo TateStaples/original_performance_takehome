@@ -16,5 +16,65 @@
     "label": "Pipelined, valu-packed\n(pipeline_width=6)",
     "cycles": 4990,
     "note": "Interleaves 6 independent groups' instruction streams per phase so valu's 6 slots/cycle actually get filled (a single group's hash-stage dependency chain only offers 2 independent ops at a time). rust_harness stats: valu fill jumps 17%->43%, load engine (the unavoidable per-lane tree-node gather, no vector gather in this ISA) becomes the clear bottleneck at ~99% packing whenever busy."
+  },
+  {
+    "step": "port_sched",
+    "label": "gaddr+fused hash\npipelined port",
+    "cycles": 2148,
+    "note": "Port of the analysis findings to the grader: gaddr carried instead of idx, cross-stage hash fusion (11 mixing ops), gather-under-compute pipelining, level-0 broadcast. Measured at e66b208."
+  },
+  {
+    "step": "list_sched",
+    "label": "list scheduler",
+    "cycles": 1852,
+    "note": "Dependency-tracking list scheduler replaces wave emitter; wraparound compare/select compiled away. Measured at 4b6a6b8."
+  },
+  {
+    "step": "tourn_l1",
+    "label": "L1 tournament",
+    "cycles": 1707,
+    "note": "Level-1 rounds served from scratch via broadcast madd-select; gathers removed. Measured at 492da6b."
+  },
+  {
+    "step": "tourn_l2",
+    "label": "L2 tournament",
+    "cycles": 1614,
+    "note": "Level-2 tournament folds (cond masks + vselect). Measured at 91c8145."
+  },
+  {
+    "step": "tourn_l3",
+    "label": "L3 tournament",
+    "cycles": 1572,
+    "note": "Level-3 tournament. Measured at 98d630f."
+  },
+  {
+    "step": "alu_offload",
+    "label": "alu offload",
+    "cycles": 1458,
+    "note": "Elementwise vector ops split into 8 scalar alu lanes when they retire earlier; compute throughput toward 7.5 vec-ops/cyc. Measured at 02be4df."
+  },
+  {
+    "step": "hash_1temp",
+    "label": "single-temp hash",
+    "cycles": 1473,
+    "note": "Slight regression that freed 235 scratch words, funding L4 + skew. Measured at b1a6e2b."
+  },
+  {
+    "step": "tourn_l4",
+    "label": "L4 group-split",
+    "cycles": 1431,
+    "note": "Partial level-4 tournament (groups >= l4_gmin per epoch) to avoid stalling the load stream. Measured at 9a3cd9d."
+  },
+  {
+    "step": "pool_retune",
+    "label": "pool retune",
+    "cycles": 1418,
+    "note": "Temp pools retuned with the freed scratch (17 hash temps, 4 cond slots). Measured at 75023d5."
+  },
+  {
+    "step": "skew",
+    "label": "group skewing\n(4 blocks, lag 3)",
+    "cycles": 1140,
+    "note": "Blocks of 8 groups emitted 3 rounds apart: compute-heavy epochs overlap other blocks' load-bound levels. All 9 grader thresholds pass. Measured at 13f4f0c."
   }
 ]
