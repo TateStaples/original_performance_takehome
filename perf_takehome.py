@@ -445,6 +445,8 @@ class KernelBuilder:
         u_race: bool = False,
         sel_race: bool = False,
         idx_race: bool = False,
+        b3_last=(),
+        b3l_race: bool = True,
         emit_order: str = "group",
         flow_consts: bool = False,
         vals_first: bool = False,
@@ -613,6 +615,27 @@ class KernelBuilder:
           over two dependent levels -- raced against the single valu madd.
           All except idx_race require parity_conds; all default off.
 
+        - `b3_last` (H-023): reverse the served-level-4 tournament fold
+          order so the NEWEST parity (b3 = the raw parity riding `nv`,
+          which arrives LAST out of round r-1's hash) selects LAST -- as a
+          single final multiply_add -- instead of first via the 8 W-combine
+          madds. The 16 candidates factor as node_val = E[t] + b3*D[t] with
+          t = b0b1b2 the level-3 winner index (all three older bits already
+          in `st` at round start); since the fold over t is linear and
+          independent of b3, the two broadcast tables are folded SEPARATELY
+          by b0,b1,b2 (`E_winner = E[t*]`, `D_winner = D[t*]`, 7 flow
+          vselects each, depth 3) and combined by one b3-dependent madd
+          (`nv = E_winner + b3*D_winner`), bit-identical to the b3-first
+          tree. The post-parity dependency chain drops from ~4 select levels
+          + hash to 1 madd + hash (~17 -> ~11 levels), directly shrinking
+          the r15 drain staircase (see research/strains/scheduler/STATE.md).
+          No extra scratch: the fold reuses the existing E_vecs/D_vecs
+          tables and the 5 tournament pool temps (masks recomputed off `st`
+          on the idle alu; `st` left intact for the epoch-exit conversion).
+          False/() (off), True (all served level-4 rounds), or an iterable
+          of round numbers. Requires parity_conds; disjoint from a hard
+          level-4 vsel_folds.
+
         - `emit_order` / `flow_consts` / `vals_first` / `tie_break`
           (H-021): pure EMISSION-ORDER / setup-encoding / tie-break
           experiments; none changes the maths. `emit_order="group"`
@@ -777,6 +800,20 @@ class KernelBuilder:
         # vselect vs valu subtract+madd, subtract alu-splittable).
         assert not (u_race or sel_race) or parity_conds, \
             "u_race/sel_race require parity_conds"
+
+        # b3_last (H-023): served-level-4 rounds whose fold order is reversed
+        # so the newest parity (b3=nv) selects LAST (see docstring). True =
+        # all level-4 rounds; iterable = explicit round numbers.
+        if b3_last is True:
+            b3l_rounds = {r for r in range(rounds) if level(r) == L4}
+        elif b3_last:
+            b3l_rounds = set(b3_last)
+        else:
+            b3l_rounds = set()
+        if not l4_any:
+            b3l_rounds = set()
+        assert not b3l_rounds or (parity_conds and 4 not in vf_levels), \
+            "b3_last requires parity_conds and no hard level-4 vsel_folds"
 
         def served(r, g):
             # node_val comes from scratch (no gather) on these rounds
@@ -946,6 +983,74 @@ class KernelBuilder:
                               lambda i: ("+", st_ + i, st_ + i, nv_ + i))
             else:
                 madd(st_, st_, two_vec, nv_)
+
+        def race_leaf(dst, cond, hi, lo, dtmp):
+            # H-023 (b3_last): leaf fold of two BROADCAST tables hi/lo by an
+            # exact 0/1 cond -- flow vselect, or (valu, drain-idle) a
+            # subtract into the dead-scratch dtmp (=hi-lo) then a madd
+            # (cond*dtmp + lo). The subtract is alu-splittable. dtmp must be
+            # a per-slot dead-scratch vector so concurrent leaves don't
+            # serialize through it.
+            rc, rh, rl = self._v(cond), self._v(hi), self._v(lo)
+            rt, wd = self._v(dtmp), self._v(dst)
+            madd_op = ("valu", ("multiply_add", dst, cond, dtmp, lo),
+                       rc + rt + rl, wd)
+            encs = [
+                (("flow", ("vselect", dst, cond, hi, lo), rc + rh + rl, wd),),
+                (("valu", ("-", dtmp, hi, lo), rh + rl, rt), madd_op),
+            ]
+            if alu_offload:
+                encs.append(tuple(
+                    ("alu", ("-", dtmp + i, hi + i, lo + i),
+                     (hi + i, lo + i), (dtmp + i,))
+                    for i in range(VLEN)
+                ) + (madd_op,))
+            S.emit_any(encs)
+
+        def dffold(st_, tabs, r_lo, r_mid, r_hi, r_mask, dst, da=None, db=None):
+            # H-023 (b3_last): depth-first fold of the 8 broadcast tables
+            # tabs[0..7] (indexed by the level-3 winner t = b0b1b2) down to
+            # tabs[t*], by b2 (leaf, st_&1), b1 (mid, st_&2), b0 (root,
+            # st_&4) -- the SAME masks and arm order as the b3-first U/q/
+            # winner selects, so E_vecs and D_vecs each fold to their t*
+            # entry. Masks recompute off st_ (idle alu), leaving st_ intact.
+            # Working set = r_lo,r_mid,r_hi + r_mask; result in dst (may
+            # alias r_lo). Bit-0=b2 always because masks are read BEFORE any
+            # lagged pfold updates st_. The 4 leaf selects have BROADCAST
+            # arms (no dead value to overwrite) so they ride flow; the 3
+            # combining selects have dead-temp arms, so `race_sel`
+            # (u_race's primitive) lets them fall to the drain-idle valu
+            # (sub+madd) instead of serializing on the 1-slot flow engine.
+            comb = race_sel if b3l_race else vsel
+            leaf = ((lambda d, c, hi, lo, dt: race_leaf(d, c, hi, lo, dt))
+                    if (b3l_race and da is not None) else
+                    (lambda d, c, hi, lo, dt: vsel(d, c, hi, lo)))
+            m = r_mask
+
+            def mask(bit):
+                # EXACT 0/1 mask for position bit `bit` of st_ (bit0=b2,
+                # bit1=b1, bit2=b0). Raced selects multiply by the cond, so
+                # 0/2- or 0/4-masks (fine for a bare vselect) are unsound;
+                # shift the bit down to bit0. Idle-alu ops, recomputed per
+                # use so st_ stays intact.
+                if bit == 0:
+                    vec("&", m, st_, one_vec)
+                else:
+                    vec(">>", m, st_, one_vec if bit == 1 else two_vec)
+                    vec("&", m, m, one_vec)
+
+            mask(0)                                   # b2
+            leaf(r_lo, m, tabs[1], tabs[0], da)       # u0
+            leaf(r_mid, m, tabs[3], tabs[2], db)      # u1
+            mask(1)                                   # b1
+            comb(r_lo, m, r_mid, r_lo)                # q0 = b1 ? u1 : u0
+            mask(0)                                   # b2
+            leaf(r_mid, m, tabs[5], tabs[4], da)      # u2
+            leaf(r_hi, m, tabs[7], tabs[6], db)       # u3
+            mask(1)                                   # b1
+            comb(r_mid, m, r_hi, r_mid)               # q1 = b1 ? u3 : u2
+            mask(2)                                   # b0
+            comb(dst, m, r_mid, r_lo)                 # winner = b0 ? q1 : q0
 
         def sched_snap():
             # Snapshot of the scheduler's mutable state (slot tuples inside
@@ -1421,44 +1526,69 @@ class KernelBuilder:
                     # occupying nv, condA joins the value-temp rotation.
                     nvsrc = nv
                     fold = r != rounds - 1
-                    # H-017: W-combines ride flow when level 4 is flipped
-                    # (D_vecs holds odd VALUES there; nv is the raw parity).
-                    # H-019 (l4_race): raced pairs (odd table present in
-                    # odd_of) go to whichever engine retires them earlier.
-                    if 4 in vf_levels:
-                        ffW = vsel
-                    elif lr_pairs:
-                        ffW = lambda dst, cond, dv, ev: (
-                            dual_fold(dst, cond, dv, ev) if dv in odd_of
-                            else madd(dst, cond, dv, ev))
+                    if r in b3l_rounds:
+                        # H-023 (b3_last): fold E_vecs and D_vecs by the
+                        # OLDER bits b0,b1,b2 (in st, ready at round start)
+                        # and defer the newest parity b3 (=nv) to a single
+                        # final madd. node_val = E[t*] + b3*D[t*], the same
+                        # value the b3-first tree below computes, but the
+                        # only b3-dependent op is the last madd (post-parity
+                        # chain 1 madd + hash, not the 4-level select tree).
+                        # E_winner -> condB, D_winner -> tm; the 3 working
+                        # temps + mask reg are the tournament pools, so no
+                        # extra scratch. pfold (epoch-exit position, non-
+                        # final rounds) runs AFTER the folds read st but
+                        # BEFORE the madd clobbers nv (=b3).
+                        # Leaf diff temps: dead `lv` scratch (setup-only);
+                        # distinct slots for the E/D folds so they can run
+                        # concurrently on valu when it is drain-idle.
+                        dffold(st, E_vecs, tm[j], tmM[j], t1[s], condA[j],
+                               condB[j], da=lv, db=lv + VLEN)   # E_win->condB
+                        dffold(st, D_vecs, tm[j], tmM[j], t1[s], condA[j],
+                               tm[j], da=lv + 2 * VLEN,
+                               db=lv + 3 * VLEN)                # D_win->tm
+                        if fold:
+                            pfold(st, nv)               # st=b0b1b2b3 (exit)
+                        madd(nv, nv, tm[j], condB[j])   # node_val = E + b3*D
                     else:
-                        ffW = madd
-                    # H-019 (u_race): each U-combine is dst := b2 ? wa : wb
-                    # with runtime arms and exact 0/1 cond -- race one flow
-                    # vselect against the valu subtract+madd.
-                    uc = race_sel if u_race else (
-                        lambda dst, cond, wa, wb: (
-                            vec("-", wa, wa, wb), madd(dst, cond, wa, wb)))
-                    vec("&", condB[j], st, one_vec)                 # b2 (0/1)
-                    if fold:
-                        pfold(st, nv)                               # st=b0b1b2b3
-                    ffW(t1[s], nv, D_vecs[0], E_vecs[0])            # W0
-                    ffW(tm[j], nv, D_vecs[1], E_vecs[1])            # W1
-                    uc(t1[s], condB[j], tm[j], t1[s])               # U0
-                    ffW(tmM[j], nv, D_vecs[2], E_vecs[2])           # W2
-                    ffW(tm[j], nv, D_vecs[3], E_vecs[3])            # W3
-                    uc(tmM[j], condB[j], tm[j], tmM[j])             # U1
-                    ffW(tm[j], nv, D_vecs[4], E_vecs[4])            # W4
-                    ffW(condA[j], nv, D_vecs[5], E_vecs[5])         # W5
-                    uc(tm[j], condB[j], condA[j], tm[j])            # U2
-                    ffW(condA[j], nv, D_vecs[6], E_vecs[6])         # W6
-                    ffW(nv, nv, D_vecs[7], E_vecs[7])               # W7 (b3 dead)
-                    uc(nv, condB[j], nv, condA[j])                  # U3 (b2 dead)
-                    vec("&", condA[j], st, four_vec if fold else two_vec)  # b1
-                    vsel(t1[s], condA[j], tmM[j], t1[s])            # q0
-                    vsel(nv, condA[j], nv, tm[j])                   # q1
-                    vec("&", condB[j], st, eight_vec if fold else four_vec)  # b0
-                    vsel(nv, condB[j], nv, t1[s])                   # winner
+                        # H-017: W-combines ride flow when level 4 is flipped
+                        # (D_vecs holds odd VALUES there; nv = raw parity).
+                        # H-019 (l4_race): raced pairs (odd table present in
+                        # odd_of) go to whichever engine retires earlier.
+                        if 4 in vf_levels:
+                            ffW = vsel
+                        elif lr_pairs:
+                            ffW = lambda dst, cond, dv, ev: (
+                                dual_fold(dst, cond, dv, ev) if dv in odd_of
+                                else madd(dst, cond, dv, ev))
+                        else:
+                            ffW = madd
+                        # H-019 (u_race): each U-combine is dst := b2 ? wa :
+                        # wb with runtime arms and exact 0/1 cond -- race one
+                        # flow vselect against the valu subtract+madd.
+                        uc = race_sel if u_race else (
+                            lambda dst, cond, wa, wb: (
+                                vec("-", wa, wa, wb), madd(dst, cond, wa, wb)))
+                        vec("&", condB[j], st, one_vec)             # b2 (0/1)
+                        if fold:
+                            pfold(st, nv)                           # b0b1b2b3
+                        ffW(t1[s], nv, D_vecs[0], E_vecs[0])        # W0
+                        ffW(tm[j], nv, D_vecs[1], E_vecs[1])        # W1
+                        uc(t1[s], condB[j], tm[j], t1[s])           # U0
+                        ffW(tmM[j], nv, D_vecs[2], E_vecs[2])       # W2
+                        ffW(tm[j], nv, D_vecs[3], E_vecs[3])        # W3
+                        uc(tmM[j], condB[j], tm[j], tmM[j])         # U1
+                        ffW(tm[j], nv, D_vecs[4], E_vecs[4])        # W4
+                        ffW(condA[j], nv, D_vecs[5], E_vecs[5])     # W5
+                        uc(tm[j], condB[j], condA[j], tm[j])        # U2
+                        ffW(condA[j], nv, D_vecs[6], E_vecs[6])     # W6
+                        ffW(nv, nv, D_vecs[7], E_vecs[7])           # W7 (b3 dead)
+                        uc(nv, condB[j], nv, condA[j])              # U3 (b2 dead)
+                        vec("&", condA[j], st, four_vec if fold else two_vec)  # b1
+                        vsel(t1[s], condA[j], tmM[j], t1[s])        # q0
+                        vsel(nv, condA[j], nv, tm[j])               # q1
+                        vec("&", condB[j], st, eight_vec if fold else four_vec)  # b0
+                        vsel(nv, condB[j], nv, t1[s])               # winner
                 elif l4_served(r, g):
                     # Two-stage level-(maxT+1) select: with t = p>>1 the
                     # level-maxT position and b3 = p&1 the newest parity,

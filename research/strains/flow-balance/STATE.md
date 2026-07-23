@@ -27,6 +27,13 @@ skew=[0,3,6,9] and l4_race=(0,1,7) tie at 1070.
 - H-006 (iter 4): load-side demand reduction, measurement first. DONE:
   REJECTED/closed permanently (honest negative, see iter 4 log). No kernel
   change; measurement tool `tools/measure_gather_dist.py` landed.
+- H-023 (iter 5): b3-last final-round fold reversal. DONE: REJECTED
+  (honest negative, see iter 5 log). Flags `b3_last`/`b3l_race` landed
+  default-off, default stream bit-identical, grader 9/9 @ 1070. The
+  reversed fold shortens the post-parity chain as designed (~17 -> ~11)
+  and is bit-identical in RESULT to the b3-first tree, but it floods the
+  1-slot flow engine (G-4/G-12) and, when raced onto valu, doubles the
+  fold ops (sub+madd) -- the drain GREW (66 -> 113/250 empty valu at r15).
 Queued: H-007 (subsumed in practice by emit_any — driver may close),
 H-009, H-011.
 
@@ -194,6 +201,64 @@ H-009, H-011.
   and that price FALLS with every valu-relief accept, so no new
   mechanism is needed; H-005/H-022 harvest it for free.
 
+- iter 5 (H-023): b3-last final-round fold reversal — REJECTED, honest
+  negative. Flags `b3_last` (False/() off, True = all served-L4 rounds,
+  iterable = round numbers) and `b3l_race` (bool, default True) landed in
+  `build_kernel_scheduled`, default-off, default stream verified
+  BIT-IDENTICAL to HEAD (programmatic kb.instrs compare), grader 9/9 @ 1070.
+  MECHANISM (built exactly as chartered, and it is CORRECT — every variant
+  passes the frozen grader's fresh-seed check): node_val = E[t*] + b3*D[t*]
+  with t* = b0b1b2 the level-3 winner index (all three older bits in `st`
+  at round start, b3 = the raw parity riding `nv`, arriving last). Since
+  the fold over t is linear and b3-independent, E_vecs and D_vecs are
+  folded SEPARATELY by b0,b1,b2 (7 selects each, depth-3 tree) and combined
+  by ONE b3-dependent madd. Post-parity chain drops ~17 -> ~11 as designed,
+  and NO extra scratch is needed (reuses E_vecs/D_vecs + the 5 tournament
+  pool temps; masks recomputed off the idle alu, st left intact for the
+  exit). Result bit-identical to the b3-first tree (winner selection is the
+  same t*, same node_val) — verified by the grader.
+  WHY IT LOSES (the drain did NOT shrink — it GREW):
+  * The 14 b0/b1/b2 fold selects have BROADCAST arms (leaf: E_vecs/D_vecs)
+    or DEAD-TEMP arms (combine), so they spell only as flow vselects (1
+    slot/cyc) or valu sub+madd (2 ops). There is no diff to make them
+    1-op valu madds — the b3-first W-madds get that for free from the
+    precomputed D_vecs, which fold b3 specifically.
+  * Pure flow (`b3l_race=False`): 1104 (+34). The reversed folds of r15's
+    4 served groups (28-31) = 56 vselects PIN the flow engine at 1/cyc for
+    cycles 1043-1099 (a 56-cycle wall) while valu sits idle — 250 empty
+    valu slots at r15 vs the baseline's 66. Textbook G-4/G-12: flow idle
+    is anti-correlated with fold readiness, and a served block's folds
+    become ready in one narrow window and serialize on the 1-slot engine.
+  * Raced (`b3l_race=True`; leaf selects race to valu via a dead-`lv`
+    diff temp + sub+madd, combines via `race_sel`, all masks forced to
+    exact 0/1 so the multiply-by-cond spelling is sound): 1084 (+14).
+    Racing spreads the selects onto the drain-idle valu but each
+    runtime/broadcast-arm select is now sub+madd = 2 valu ops: valu census
+    6262 -> 6309 slots (floor 1044 -> 1052), still 113 empty valu at r15.
+    The "neutral op count (15 vselects vs 8 madds + 7 selects)" premise is
+    FALSE once flow can't absorb them: 15 vselects are neutral only if
+    flow is free; the valu fallback DOUBLES them.
+  * l4_gmin retune under the flag: `b3_last=(15,)`+`l4_gmin=(13,30)` =
+    1078 == the *baseline* (13,30) = 1078 (serving fewer r15 L4 groups
+    costs +8 with OR without b3_last); b3_last never nets below 1070.
+    Sweep: (15,) at gmin r15 in {28,29,30,31} = 1084/1079/1078/1082.
+  * Non-final rounds are worse, as the profile predicted (the staircase
+    only bites at r15): `b3_last=(4,)` = 1112, `(4,15)`/`True` = 1134 —
+    r4 feeds r5 gathers, so deferring b3 delays the epoch-exit gaddr AND
+    floods flow (G-1/G-9 territory).
+  VERDICT: the r15 drain is chain-LATENCY-bound only while the fold rides
+  the 6-slot valu; the moment fold work moves off valu it becomes
+  THROUGHPUT-bound on the 1-slot flow engine, and there is no third engine
+  with tail slack (alu can't vselect/madd) nor free scratch (6 words) to
+  precompute the 8 leaf-diff broadcast tables that would let the b0/b1/b2
+  folds ride valu as 1-op madds. The chartered latency win is real and
+  unusable. Reopen-if: flow gains parallel slots (never), OR an accept
+  frees >=64 scratch words to precompute the leaf-diff tables (then re-cost
+  — but even then it is 16 leaf madds + combines vs the b3-first 8 madds +
+  7 selects, so likely still valu-heavier), OR a large op-removal accept
+  drops valu <90% mid-kernel AND makes the r15 drain the strict binder.
+  Flags kept in-tree as negative controls / sweep dimensions.
+
 ## Proposed hypotheses
 (agent appends; driver promotes to backlog.md)
 - P-1 [-> strengthens H-007, cost S]: madd->vselect flip for tournament
@@ -280,3 +345,38 @@ H-009, H-011.
   the drain tail (~120 cycles at <=90% load/valu) more than by mid-kernel
   friction — shortening the pipeline fill/drain (skew shape, store
   placement) is where the last ~26 cycles over the valu floor sit.
+- P-12 [iter 5, graveyard entry for the driver — proposed G-17 text]:
+  "b3-last final-round fold reversal (H-023): defer the newest parity b3
+  to a single final madd by folding E_vecs and D_vecs separately over the
+  older bits b0,b1,b2 (`b3_last`/`b3l_race` flags, default-off, bit-exact).
+  Post-parity chain shortens ~17 -> ~11 and the result is grader-verified
+  bit-identical, BUT the 14 reversed-fold selects have broadcast/dead-temp
+  arms with no precomputed diff, so they only spell as flow vselects
+  (1-slot, serialize: r15 pins flow 1043-1099, 250 empty valu, +34) or
+  valu sub+madd (2 ops each, +47 valu census, +14). The 'neutral op count'
+  fails: 15 vselects are neutral only if flow is free. l4_gmin retune ties
+  the worse baseline (b3_last=(15,)+(13,30) = 1078 = baseline (13,30));
+  non-final rounds worse ((4,) 1112, True 1134 — delays the epoch exit +
+  floods flow, G-1/G-9). Confirms G-4/G-12 from the drain side: the moment
+  fold work leaves the 6-slot valu it becomes throughput-bound on the
+  1-slot flow, and alu can't vselect/madd. Reopen-if: flow gains parallel
+  slots (never), OR >=64 scratch words free to precompute the 8 leaf-diff
+  tables so the b0/b1/b2 folds ride valu as 1-op madds (re-cost; likely
+  still valu-heavier than the b3-first 8-madd tree), OR a large op-removal
+  accept drops mid-kernel valu <90% AND the r15 drain becomes the strict
+  binder (then the shorter chain pays for the extra valu ops)."
+- P-13 [iter 5 -> scheduler/driver]: the r15 drain (13 cyc, 66 empty
+  valu, the g28->g31 ~5-cyc staircase) is confirmed UNMOVABLE by fold
+  restructuring alone: the last block's served-L4 chains are the binder,
+  and any reshaping that trades valu madds for flow selects hits the
+  1-slot flow wall. The staircase is fundamentally that r15 has no next
+  round to overlap AND its 4 served groups' nv (b3) arrive staggered
+  because upstream is throughput-saturated. Two untried angles that do NOT
+  fight the flow wall: (a) SKEW-SHAPE so the last block ends on a GATHER
+  round (short chain) not served-L4 — but epoch phasing is fixed by
+  rounds=16 (only l4_gmin=(.,32) tests it, +16 on gathers > the 13 saved,
+  H-021 already measured this negative); (b) do NOT serve L4 at r15 at all
+  (l4_gmin=(13,32)) and eat the +16 gather cost — measured worse. So the
+  drain tail is genuinely load-bound-elsewhere; the ONLY lever left on it
+  is a global op-removal accept (H-016) that lowers the valu floor so the
+  whole tail shifts left. No flow-balance mechanism reaches it."
