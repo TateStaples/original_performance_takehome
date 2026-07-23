@@ -2003,6 +2003,9 @@ struct MTarget {
     seed: Vec<u32>,
     shifts: Vec<u32>,
     stretch: bool,
+    /// Run engine C (the chain-DFS whale, ~10-16 min/target). When false the
+    /// runner prints exactly which shapes the negative then covers.
+    engine_c: bool,
     f: Box<TargetFn>,
 }
 
@@ -2091,6 +2094,7 @@ fn mitm_targets() -> Vec<MTarget> {
             seed: vec![C1, KP, AP, KQ, AQ, c1s, c1i, kpc1, kqc1, apk, aqk],
             shifts: vec![19, 5, 9, 13, 14],
             stretch: false,
+            engine_c: true,
             f: Box::new(|x| hs::f23(hs::stage1(x[0]))),
         },
         MTarget {
@@ -2123,6 +2127,7 @@ fn mitm_targets() -> Vec<MTarget> {
             seed: vec![C0, K0, C4, C5, c5s, c5i, k016, k0c4, k0c5, k09],
             shifts: vec![16, 3, 12, 4, 15],
             stretch: false,
+            engine_c: true,
             f: Box::new(|x| hs::stage0(hs::stage5(hs::stage4(x[0])) ^ x[1])),
         },
         MTarget {
@@ -2155,6 +2160,7 @@ fn mitm_targets() -> Vec<MTarget> {
             seed: vec![C0, K0, C4, k016, k0c4, k09],
             shifts: vec![16, 3, 12],
             stretch: false,
+            engine_c: true,
             f: Box::new(|x| hs::stage0(hs::sigma16(hs::stage4(x[0])) ^ x[1])),
         },
         MTarget {
@@ -2179,6 +2185,7 @@ fn mitm_targets() -> Vec<MTarget> {
             seed: vec![C0, K0, C5, c5s, c5i, k016, k0c5],
             shifts: vec![16, 3, 12, 4, 15],
             stretch: false,
+            engine_c: false,
             f: Box::new(|x| hs::stage0(hs::stage5(x[0]) ^ x[1])),
         },
         MTarget {
@@ -2203,6 +2210,7 @@ fn mitm_targets() -> Vec<MTarget> {
             seed: vec![C0, C1, K0, c0s, c1s, c1i, C0 ^ C1],
             shifts: vec![12, 19, 7, 13],
             stretch: false,
+            engine_c: false,
             f: Box::new(|x| hs::stage1(hs::stage0(x[0] ^ x[1]))),
         },
         MTarget {
@@ -2223,6 +2231,7 @@ fn mitm_targets() -> Vec<MTarget> {
             seed: vec![C0, K0, c0s],
             shifts: vec![12, 19, 7, 13],
             stretch: false,
+            engine_c: true,
             f: Box::new(|x| {
                 let b = hs::stage0(x[0] ^ x[1]);
                 b ^ (b >> 19)
@@ -2252,6 +2261,7 @@ fn mitm_targets() -> Vec<MTarget> {
             seed: vec![C1, KP, AP, KQ, AQ, C4, kp9, kq9, ap9, aq9, apk, aqk],
             shifts: vec![5, 9, 3, 14],
             stretch: false,
+            engine_c: false,
             f: Box::new(|x| hs::stage4(hs::f23(x[0] ^ hs::C1))),
         },
         MTarget {
@@ -2278,6 +2288,7 @@ fn mitm_targets() -> Vec<MTarget> {
             seed: vec![C0, C1, K0, KP, AP, KQ, AQ, c1i, kpc1, kqc1, apk, aqk],
             shifts: vec![12, 19, 5, 9],
             stretch: true,
+            engine_c: false,
             f: Box::new(|x| hs::f23(hs::stage1(hs::stage0(x[0])))),
         },
         MTarget {
@@ -2304,6 +2315,7 @@ fn mitm_targets() -> Vec<MTarget> {
             seed: vec![C1, KP, AP, KQ, AQ, C4, c1i, kp9, kq9, ap9, aq9],
             shifts: vec![19, 5, 9, 3],
             stretch: true,
+            engine_c: false,
             f: Box::new(|x| hs::stage4(hs::f23(hs::stage1(x[0])))),
         },
         MTarget {
@@ -2330,6 +2342,7 @@ fn mitm_targets() -> Vec<MTarget> {
             seed: vec![KP, AP, KQ, AQ, C4, C5, c5i, kp9, kq9, ap9, aq9],
             shifts: vec![5, 9, 3, 16],
             stretch: true,
+            engine_c: false,
             f: Box::new(|x| hs::stage5(hs::stage4(hs::f23(x[0])))),
         },
     ]
@@ -2404,6 +2417,14 @@ fn run_mitm_target(tg: &MTarget, threads: usize) {
     drop(bwd_tabs);
 
     // Engine C: suffix-chain DFS x forward-prefix tables.
+    if !tg.engine_c {
+        println!(
+            "   engine C skipped (CPU budget): MITM coverage here = engine B shapes only \
+             (forward<=3 + [solved meet]? + 1..2-op invertible suffix)"
+        );
+        summarize(tg, &ctx_a, &ctx, kmax_use, t_start);
+        return;
+    }
     let fwd_tabs: Vec<FwdTab> = (0..=2).map(|kf| build_fwd_tab(&ctx, kf)).collect();
     let jmax = 5.min(kmax_use);
     println!(
@@ -2421,12 +2442,15 @@ fn run_mitm_target(tg: &MTarget, threads: usize) {
         tc.elapsed().as_secs_f64()
     );
 
+    summarize(tg, &ctx_a, &ctx, kmax_use, t_start);
+}
+
+fn summarize(tg: &MTarget, ctx_a: &Ctx, ctx: &Ctx, kmax_use: usize, t_start: Instant) {
     let finds_a = ctx_a.finds.lock().unwrap().len();
     let finds_bc = ctx.finds.lock().unwrap().len();
     if finds_a + finds_bc == 0 {
         println!(
-            "   RESULT: no program of <= {} ops within the searched MITM space ({:.1}s total)",
-            kmax_use,
+            "   RESULT: no program of <= {kmax_use} ops within the searched MITM space ({:.1}s total)",
             t_start.elapsed().as_secs_f64()
         );
         println!(
