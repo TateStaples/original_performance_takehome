@@ -223,7 +223,7 @@ class KernelBuilder:
             self.build_kernel_scheduled(
                 batch_size, rounds, forest_height,
                 tournament_levels=(1, 2, 3), alu_offload=True,
-                parity_conds=True, c5_prexor=True, vsel_auto=(1, 2),
+                parity_conds=True, c5_prexor=True, vsel_auto=(1, 3),
                 pool_sizes=(17, 4), l4_gmin=(15, 29),
             )
         else:

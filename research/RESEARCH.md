@@ -7,7 +7,7 @@
 
 | cycles | commit | config |
 |---|---|---|
-| 1088 | (iter-2 close) | `tournament_levels=(1,2,3), alu_offload=True, parity_conds=True, c5_prexor=True, vsel_auto=(1,2), pool_sizes=(17,4), l4_gmin=(15,29)` |
+| 1087 | (iter-3 sweep) | `tournament_levels=(1,2,3), alu_offload=True, parity_conds=True, c5_prexor=True, vsel_auto=(1,3), pool_sizes=(17,4), l4_gmin=(15,29)` |
 
 ## Floors (calibrated 2026-07-23, see tools/diagnose_kernel.py)
 
@@ -46,3 +46,4 @@ Global: 6 dry iterations -> one cross-pollination iteration. Status report to us
 - 2026-07-23: iter 2 close -> 1088 (H-015 c5_prexor composed). 88 to target.
 
 - iter 2 CLOSED | H-014 REJECTED (0 nv-bound gathers) -> G-11; H-017 vsel_auto ACCEPTED (-23) -> 1107, hard flip -> G-12; H-015 c5_prexor ACCEPTED composed (-19) -> 1088 (driver fixed vsel_auto arm-order interaction + composed retune: va=(1,2), gmin=(15,29)); re-sweep negative | best 1088
+- iter 3 (in flight) | sweep phase 3: vsel_auto=(1,3) accepted (-1) -> 1087; H-019/H-004+18/H-010 agents running | best 1087

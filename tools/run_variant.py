@@ -36,7 +36,7 @@ BASE_KWARGS = {
     "pool_sizes": (17, 4),
     "skew": (4, 3),
     "parity_conds": True,  # H-001 accepted iter 1 (1140 -> 1130)
-    "vsel_auto": (1, 2),  # H-017 accepted iter 2; shrunk to (1,2) under c5_prexor
+    "vsel_auto": (1, 3),  # H-017 iter 2; retuned to (1,3) by phase-3 sweep @1087
     "c5_prexor": True,  # H-015 accepted iter 2 (composed retune -> 1088)
     "debug_compares": False,  # speed; grader ignores debug slots anyway
 }

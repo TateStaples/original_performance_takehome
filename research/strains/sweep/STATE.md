@@ -31,3 +31,6 @@ k=1..5} + curated asymmetric lag lists. Done-set dedupe by config hash.
   below 1130 — the (4,3)/(22,28)/(17,4) optimum is invariant under H-001's
   structural change; (17,3) still ties (32 words still free). sweep.py
   baseline now read from progress_log.json instead of hardcoded.
+- iter 3 / phase 3 under 1088: 530 flag-combo configs; ONE winner:
+  vsel_auto=(1,3) = 1087 (-1), accepted via full gate. Everything else at or
+  above mainline -- the composed optimum is sharp.
