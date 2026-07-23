@@ -35,6 +35,7 @@ BASE_KWARGS = {
     "l4_gmin": (22, 28),
     "pool_sizes": (17, 4),
     "skew": (4, 3),
+    "parity_conds": True,  # H-001 accepted iter 1 (1140 -> 1130)
     "debug_compares": False,  # speed; grader ignores debug slots anyway
 }
 SHAPE = {"forest_height": 10, "batch_size": 256, "rounds": 16}

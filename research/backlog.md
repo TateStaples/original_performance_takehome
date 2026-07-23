@@ -6,7 +6,7 @@ rejected | blocked(H-x) | superseded(H-x), result (measured @ commit), log.
 IDs never reused. Driver-only writes; agents propose follow-ups in their
 strain STATE.md and the driver promotes them here.
 
-### H-001 [strain: flow-balance] [status: testing]
+### H-001 [strain: flow-balance] [status: accepted]
 - statement: Eliminate/offload tournament condition-extraction ops (`& one_vec`,
   `& 2^k`, `>>`) from valu/alu. Prime variant: keep the last k per-group parity
   VECTORS alive (they are already computed each round for the state update)
@@ -16,8 +16,12 @@ strain STATE.md and the driver promotes them here.
   every 60 removed ~= 1 cycle; also shortens tournament dep chains.
 - cost: M. depends: none. CAUTION: scratch is FULL (1535/1536) — parity rings
   must be traded against pool_sizes/cond pools, not added.
-- result:
-- log: 2026-07-23 opened; assigned iter 1.
+- result: ACCEPTED iter 1: 1130 (-10) via zero-scratch reformulation (parity
+  rides dead nv; p-fold lags one round; L4 >> dies). Prime variant (parity
+  rings) infeasible (needs 848+ words). Gain under prediction because alu
+  slack absorbed most removed ops; valu is now the binding floor (6634/6 =
+  1106 cycle-equivalents vs 1130 actual). Mainline flipped; grader 9/9.
+- log: 2026-07-23 opened; assigned iter 1; ACCEPTED iter 1, dispatch flipped.
 
 ### H-002 [strain: critical-path] [status: rejected -> graveyard G-8]
 - statement: Parity-early — produce bit0 of the hashed value (the only bit the
@@ -177,3 +181,23 @@ strain STATE.md and the driver promotes them here.
 - predicted: uncertain; each hit -68 cyc. cost: S-M. depends: none.
 - result:
 - log: 2026-07-23 promoted from op-reduction P-3.
+
+### H-017 [strain: flow-balance] [status: open]
+- statement: madd->vselect flip of tournament FIRST-folds, nearly free under
+  parity_conds (H-001's P-1): store odd-value vectors O_vecs at setup (same
+  scratch as D_vecs), conds are raw parities, first fold becomes
+  vselect(b, O, E) on flow instead of madd(b, D, E) on valu. L4 alone moves
+  112 slots off valu (~19 cycle-equivalents); L1-L3 more.
+- predicted: -10..-30 cyc (valu now the binding floor at ~1106). cost: S-M.
+- depends: parity_conds (in mainline). Watch G-4: only first-folds, chain
+  length unchanged (vselect replaces madd at the same depth).
+- result:
+- log: 2026-07-23 promoted from flow-balance P-1; queued iter 2.
+
+### H-018 [strain: flow-balance] [status: open]
+- statement: valu madd diet: hunt the lagged p-fold madds and epoch-exit
+  conversion madds (feeds H-004's idx-elimination ideas) now that valu
+  throughput (not alu, not latency) is the binding constraint.
+- predicted: -5..-20 cyc. cost: M. depends: H-001 (in mainline).
+- result:
+- log: 2026-07-23 promoted from flow-balance P-2.

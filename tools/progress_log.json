@@ -76,5 +76,11 @@
     "label": "group skewing\n(4 blocks, lag 3)",
     "cycles": 1140,
     "note": "Blocks of 8 groups emitted 3 rounds apart: compute-heavy epochs overlap other blocks' load-bound levels. All 9 grader thresholds pass. Measured at 13f4f0c."
+  },
+  {
+    "step": "parity_conds",
+    "label": "parity conds\n(H-001)",
+    "cycles": 1130,
+    "note": "Tournament conditions from raw parity vectors riding the dead nv buffer; cond-extraction masks eliminated (alu 94.6->87.0%). First research-loop accept."
   }
 ]
