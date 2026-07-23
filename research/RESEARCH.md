@@ -57,3 +57,4 @@ Global: 6 dry iterations -> one cross-pollination iteration. Status report to us
 - iter 4 | H-021 honest zero, friction mapped (13 drain latency + 9 setup load + 4 seams), strain retired with successors H-023/H-024; H-016 MITM still running | best 1070
 - iter 4 CLOSED | H-016 MITM comprehensive negative (2.36T candidates; fusion dead at every cut; G-10 hardened); iter-4 tally: 4 investigations, 4 high-value negatives, mainline 1070 unchanged. Iter 5 in flight: H-023 drain fix, H-024 setup ramp; H-025 (CEGIS) queued | best 1070
 - iter 5 (in flight) | H-024 ACCEPTED 1064 (-6): setup consts on alu + va addrs off flow; H-023 drain fix still running | best 1064
+- iter 5 CLOSED | H-024 ACCEPTED (-6) -> 1064; H-023 REJECTED -> G-17 (drain unreachable by restructure). Iter 6: cross-pollination + H-025 CEGIS | best 1064

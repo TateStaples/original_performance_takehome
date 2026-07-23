@@ -152,3 +152,15 @@ Seeded 2026-07-23 from the 2148->1140 campaign's measured rejections.
 - reopen-if: valu frees >=10% mid-kernel (then l4_gmin slides via standing
   sweep, zero new code), or target drops below ~960 (re-cost L5 at
   then-current exchange rates).
+
+### G-17 b3-last final-round fold reversal (H-023)
+- statement: reversing the served-L4 fold order shrinks the r15 drain.
+- evidence: post-parity chain 17->11 achieved, but r15 empty-valu slots
+  66 -> 250 (pure flow) / 113 (raced, +47 valu slots): broadcast-arm
+  selects have no 1-op valu spelling and flow is 1-wide. 1084 best vs
+  1070. Non-final rounds strictly worse (1112-1134). The drain is
+  unreachable by fold restructuring; only a global op-removal accept
+  (lower valu floor) shifts the tail left (P-13).
+- reopen-if: >=64 scratch words free for leaf-diff tables (then re-cost:
+  likely still valu-heavier), or mid-kernel valu <90% with r15 the strict
+  binder.

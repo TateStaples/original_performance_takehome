@@ -282,7 +282,7 @@ strain STATE.md and the driver promotes them here.
 - result:
 - log: 2026-07-23 promoted from flow-balance P-8.
 
-### H-023 [strain: flow-balance] [status: open]
+### H-023 [strain: flow-balance] [status: rejected -> graveyard G-17]
 - statement: b3-last final-round L4 tournament (H-021's lead): reverse the
   served-L4 fold order so the newest parity (r14's, arriving last) selects
   LAST instead of first -- post-parity chain drops ~17 -> ~11 levels,
@@ -291,8 +291,12 @@ strain STATE.md and the driver promotes them here.
   (scratch: only 6 words free -- fund by dropping l4_race odd tables on
   non-final rounds or trading a pool slot; measure).
 - predicted: -5..-8 cyc. cost: M. depends: none.
-- result:
-- log: 2026-07-23 promoted from scheduler follow-up 1.
+- result: REJECTED iter 5: chain shortened 17->11 as predicted but the
+  staircase GREW (66 -> 113-250 empty slots): the 14 b0/b1/b2 folds have
+  broadcast/dead-temp arms spelling only as flow-serial (1-slot) or
+  valu-double (sub+madd); no engine has tail slack. Best raced form 1084.
+  Premise "neutral op count" fails without ~64 words of leaf-diff tables.
+- log: 2026-07-23 promoted; iter 5 rejected.
 
 ### H-024 [strain: scheduler->sweep] [status: accepted]
 - statement: setup load-slot removal: derive hash-constant scalars from each
