@@ -7,12 +7,17 @@ waits on the full 12-op hash today. Owns code regions: hash emission block,
 state-update block, gather prefetch logic in emit_group_round.
 
 ## Frontier
-mainline 1140 (flags: tournament_levels=(1,2,3), alu_offload=True,
-l4_gmin=(22,28), pool_sizes=(17,4), skew=(4,3)). No strain flag improves on
-it; `parity_early` exists as a correct, flag-gated negative (see log).
+mainline 1130 (flags: tournament_levels=(1,2,3), alu_offload=True,
+l4_gmin=(22,28), pool_sizes=(17,4), skew=(4,3), parity_conds=True). No
+strain flag improves on it; `parity_early` exists as a correct, flag-gated
+negative (see log). The 32 free words (pool_sizes=(17,3)) remain unspent —
+this strain has no use for them (H-014 closed); hand them to H-006.
 
 ## Assigned
 - H-002 (iter 1): parity-early (cheap bit0-of-hash chain). DONE: rejected.
+- H-014 (iter 2): nv double-buffering. DONE: closed negative by direct
+  measurement — the nv WAR/WAW edge binds ZERO of 1936 gather loads (see
+  log); no kernel change made (none can win).
 Queued: H-010 (parity speculation). H-008 re-closed with H-002 (see log).
 
 ## Iteration log
@@ -46,6 +51,47 @@ Queued: H-010 (parity speculation). H-008 re-closed with H-002 (see log).
   to flow, or H-003 shortens the hash) -- then +1 madd is cheap and the
   2-level earliness may pay; the flag is ready to re-measure in one run.
 
+- iter 2 / H-014 nv double-buffering: CLOSED NEGATIVE (measurement-only; no
+  kernel change made — none can win). Method: instrumented
+  ListScheduler.emit to decompose every scalar gather load's ready() into
+  its constraint components: c_raw = last_write[st+lane]+1 (address RAW),
+  c_nv = max(last_write[nv+lane]+1, last_read[nv+lane]) (the WAW/WAR edge a
+  double-buffer would remove), c_mem; then compared real placement against
+  the counterfactual placement with the nv terms deleted.
+  MEASURED (default 1130 config, debug_compares both True and False): of
+  1936 gather loads (count audited: 176 @ r4 g<22 + 6x256 @ r5..r10 + 224 @
+  r15 g<28), the nv hazard exceeds the address RAW for ZERO loads; the
+  no-nv counterfactual moves ZERO loads earlier. Double-buffering cannot
+  change a single placement — the default schedule IS the double-buffered
+  schedule.
+  Root cause is structural, not scheduling luck: nv's last read in round r
+  is the hash's opening `val ^= nv` xor at depth 0 of the round (the debug
+  vcompare lands no later — 64 debug slots/cyc), while the gather address
+  st+lane is written only after the full hash + parity + gaddr conversion,
+  ~12 dependency levels later. RAW-on-st strictly dominates WAR-on-nv for
+  every gather, always, in every round shape (tournament exit, gather
+  chain, L4 split).
+  Robustness (nv-binding = 0 in ALL of): pool_sizes=(17,3); skew (4,2),
+  (8,2), (8,1); l4_gmin=(0,0) (1536 gathers) and (32,32) (2048);
+  parity_early=True (nv hosts the parity word and is read LATE by the >>31
+  — still zero, since st is written later still); tournament_levels=()
+  (3584 gathers).
+  Second layer of the same negative: gathers are placed on average ~33 cyc
+  AFTER their ready cycle (64,440 total slot-contention delay cycles over
+  1936 loads; 1932/1936 contention-delayed) — the load engine runs a deep
+  backlog of already-ready loads, so even a few cycles of WAR excess would
+  vanish under the queue. Address earliness is ABUNDANT on the gather path;
+  only load-slot DEMAND reduction can help the load engine now.
+  Verification: default untouched (zero diffs to perf_takehome.py, so
+  bit-identity is trivial); grader 9/9 at 1130. Reproduce: methodology
+  above, script kept at scratchpad/measure_nv_war.py (iter-2 session).
+  Reopen-if: an accepted change makes the gather address available BEFORE
+  round r's nv consumers finish reading nv — i.e. gaddr computed from
+  something earlier than round r's full hash (the H-002 family, itself
+  closed G-8). Under the current address recurrence that inversion is
+  impossible; treat H-014 as permanently closed unless the recurrence
+  changes structurally.
+
 ## Proposed hypotheses
 (agent appends; driver promotes to backlog.md)
 
@@ -61,3 +107,16 @@ Queued: H-010 (parity speculation). H-008 re-closed with H-002 (see log).
   compute both children's fold contributions and select late. Note from
   this iter: it must ADD ZERO net valu ops to pay; design the select as a
   reuse of the existing tournament madd, not an extra one.
+- P-cp-4 (iter 2, supersedes P-cp-2): the 32 free words have NO load-side
+  buffering use (H-014: the nv WAR edge never binds; addresses carry ~33
+  cyc of average slack into a contention queue). Redirect the freed-words
+  budget to H-006's vload-batch (fewer load SLOTS, the only load-engine
+  lever left) — first measure how often a group's 8 gather addresses are
+  contiguous/coincident; the same instrumentation hook works.
+- P-cp-5 (strain redirect): with G-8, G-9 and H-014 all measured, every
+  earliness/latency/buffering play on the gather path is dead: the gather
+  stream is bounded ONLY by address RAW (already ~33 cyc slack) + load-slot
+  supply, and the kernel overall by valu throughput (~1106 cyc-equiv floor
+  at 1130). Critical-path's only live idea is H-010 under the zero-net-valu
+  constraint; otherwise the strain should stay dormant until another strain
+  lands a valu-relief accept (then re-run the G-8 flag per H-013).
