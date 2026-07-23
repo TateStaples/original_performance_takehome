@@ -145,7 +145,32 @@ def phase4_grid():
                 yield {"skew": [0, a, bb, c]}
 
 
-PHASES = {1: phase1_grid, 2: phase2_grid, 3: phase3_grid, 4: phase4_grid}
+def phase5_grid():
+    """Under the 1053 mainline (cross-pollination stack landed): the new
+    flag dimensions x the drifted tunables."""
+    for mp in ((), (5,), (5, 6), (6,)):
+        for sp in (True, False):
+            yield {"mem_prime": mp, "store_pair": sp}
+    for b3 in ((), (15,), (4, 15)):
+        for bd in (True, False):
+            yield {"b3_last": b3, "b3l_diffs": bd}
+    for a in range(8, 17):
+        for b in range(26, 33):
+            yield {"l4_gmin": (a, b)}
+    for va in ((1, 2), (1, 3), (1, 2, 3), (2,)):
+        for gmin in ((12, 30), (12, 28), (10, 30), (14, 30)):
+            yield {"vsel_auto": va, "l4_gmin": gmin}
+    for tp in range(14, 19):
+        for cp in (3, 4, 5):
+            yield {"pool_sizes": (tp, cp)}
+    for lr in (0, 1, 2, 3, 4, True):
+        yield {"l4_race": lr}
+    for blocks, lag in ((4, 2), (4, 3), (4, 4), (8, 1), (8, 2)):
+        yield {"skew": (blocks, lag)}
+
+
+PHASES = {1: phase1_grid, 2: phase2_grid, 3: phase3_grid, 4: phase4_grid,
+          5: phase5_grid}
 
 
 def main():
