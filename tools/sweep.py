@@ -94,7 +94,34 @@ def phase2_grid():
         yield {"skew": skew, "l4_gmin": gmin, "pool_sizes": pools}
 
 
-PHASES = {1: phase1_grid, 2: phase2_grid}
+def phase3_grid():
+    """Under the 1088 mainline (parity_conds + c5_prexor + vsel_auto):
+    flag-combo dimensions the structural accepts opened up."""
+    # vsel_auto subsets x l4_gmin dense around (15,29)
+    for va in ((1, 2), (1, 2, 3), (1,), (2,), (3,), (1, 3), (2, 3), ()):
+        for gmin in ((15, 29), (13, 29), (15, 28), (17, 29), (11, 29), (15, 31)):
+            yield {"vsel_auto": va, "l4_gmin": gmin}
+    # gmin fully dense both epochs under the composed flags
+    for a in range(9, 22):
+        for b in range(25, 33):
+            yield {"l4_gmin": (a, b)}
+    # pools under the double cond-trade
+    for tp in range(14, 20):
+        for cp in (4, 5, 6):
+            yield {"pool_sizes": (tp, cp)}
+    # skew under the new balance
+    for blocks, lag in ((2, 1), (2, 2), (4, 1), (4, 2), (4, 3), (4, 4), (8, 1), (8, 2)):
+        yield {"skew": (blocks, lag)}
+    for a in range(1, 11):
+        for bb in range(a, 12):
+            for c in range(bb, 13):
+                yield {"skew": [0, a, bb, c]}
+    # tournament_levels sanity under composed flags
+    for tl in ((1, 2), (1, 2, 3)):
+        yield {"tournament_levels": tl}
+
+
+PHASES = {1: phase1_grid, 2: phase2_grid, 3: phase3_grid}
 
 
 def main():
