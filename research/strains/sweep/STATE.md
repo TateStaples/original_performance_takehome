@@ -37,3 +37,7 @@ k=1..5} + curated asymmetric lag lists. Done-set dedupe by config hash.
 - iter 4 / phase 4 under 1070: 493 configs (race-flag subsets, gmin dense,
   va x gmin, pools, skews incl. exhaustive short lag-lists): ZERO below 1070.
   The composed optimum is sharp after every accept. H-020/H-022 done.
+- iter 6 / phase 5 under 1053: flag-combo grid (mem_prime x store_pair x
+  b3 flags x dense epoch-1 gmin x pools x l4_race): 0 below 1053. The
+  cross-pollination optimum is sharp on every tunable axis. Results
+  archived to results-archive/base-1053/.
