@@ -366,6 +366,7 @@ class KernelBuilder:
         pool_sizes=(17, 4),
         skew=(4, 3),
         parity_early=False,
+        parity_conds: bool = False,
         debug_compares: bool = True,
     ):
         """
@@ -424,6 +425,19 @@ class KernelBuilder:
           4 hash-temp slots since scratch is full. `parity_early` is False
           (off), True (all rounds), or an iterable of CURRENT-round levels
           at which to apply it (e.g. (3,) = only rounds feeding level 4).
+
+        - `parity_conds` (H-001): tournament conditions from raw parity
+          vectors instead of mask-extracting them from the accumulator.
+          The newest parity rides the group's `nv` vector (dead between
+          served rounds -- no gather in flight), so the round's madd
+          conditions need no `& 1`; the accumulator update `p := 2p + b`
+          LAGS one round, folded inside the next tournament block
+          (`madd(st, st, two, nv)`) before `nv` is clobbered, so the
+          remaining vselect conditions extract from an `st` that is ready
+          at round START (off the tournament's critical path) and the
+          epoch-exit gaddr conversions see the same `st` as the default
+          path. Saves the newest-bit extraction at L2/L3/L4 plus the L4
+          `>>` (b2 lands at bit 0, already 0/1 for the U-combines).
 
         `debug_compares` interleaves free `("debug", ("vcompare", ...))`
         slots (skipped by the grader) checking node_val and hashed_val of
@@ -635,11 +649,34 @@ class KernelBuilder:
                         # p is the single parity bit itself.
                         madd(nv, st, diffs[0], evens[0])
                     elif L == 2:
-                        vec("&", condA[j], st, one_vec)   # newest bit b1
-                        vec("&", condB[j], st, two_vec)   # mask for b0
-                        madd(t1[s], condA[j], diffs[0], evens[0])
-                        madd(tm[j], condA[j], diffs[1], evens[1])
-                        vsel(nv, condB[j], tm[j], t1[s])
+                        if parity_conds:
+                            # nv = b1 (raw parity), st = b0 (single bit).
+                            # b0 copy (st folds next); vselect(c,a,a,a) is a
+                            # pure copy, so it rides the idle flow engine.
+                            vsel(condB[j], st, st, st)
+                            madd(st, st, two_vec, nv)        # fold b1: st = b0b1
+                            madd(t1[s], nv, diffs[0], evens[0])
+                            madd(tm[j], nv, diffs[1], evens[1])
+                            vsel(nv, condB[j], tm[j], t1[s])
+                        else:
+                            vec("&", condA[j], st, one_vec)   # newest bit b1
+                            vec("&", condB[j], st, two_vec)   # mask for b0
+                            madd(t1[s], condA[j], diffs[0], evens[0])
+                            madd(tm[j], condA[j], diffs[1], evens[1])
+                            vsel(nv, condB[j], tm[j], t1[s])
+                    elif parity_conds:  # L == 3
+                        # nv = b2 (raw parity), st = b0b1 (bit1=b0, bit0=b1);
+                        # both conds extract from st at round START.
+                        vec("&", condB[j], st, one_vec)   # b1
+                        vec("&", condA[j], st, two_vec)   # b0 mask
+                        madd(st, st, two_vec, nv)         # fold b2: st = b0b1b2
+                        madd(t1[s], nv, diffs[0], evens[0])   # m0
+                        madd(tmM[j], nv, diffs[1], evens[1])  # m1
+                        madd(tm[j], nv, diffs[2], evens[2])   # m2
+                        madd(nv, nv, diffs[3], evens[3])      # m3 (b2 dead)
+                        vsel(t1[s], condB[j], tmM[j], t1[s])  # q0 = b1 ? m1 : m0
+                        vsel(nv, condB[j], nv, tm[j])         # q1 = b1 ? m3 : m2
+                        vsel(nv, condA[j], nv, t1[s])         # b0 ? q1 : q0
                     else:  # L == 3
                         vec("&", condA[j], st, one_vec)   # newest bit b2
                         vec("&", condB[j], st, two_vec)   # mask for b1
@@ -652,6 +689,39 @@ class KernelBuilder:
                         vsel(t1[s], condB[j], tmM[j], t1[s])  # q0 = b1 ? m1 : m0
                         vsel(nv, condB[j], nv, tm[j])         # q1 = b1 ? m3 : m2
                         vsel(nv, condA[j], nv, t1[s])         # b0 ? q1 : q0
+                elif l4_served(r, g) and parity_conds:
+                    # Same two-stage select as below, but b3 = nv (raw
+                    # parity, no extraction) and t = st = b0b1b2 (bit0=b2,
+                    # already 0/1 for the U-combines -- no shift). st folds
+                    # to b0b1b2b3 for the epoch-exit gaddr unless this is
+                    # the last round (nothing reads st after). With b3
+                    # occupying nv, condA joins the value-temp rotation.
+                    nvsrc = nv
+                    fold = r != rounds - 1
+                    vec("&", condB[j], st, one_vec)                 # b2 (0/1)
+                    if fold:
+                        madd(st, st, two_vec, nv)                   # st=b0b1b2b3
+                    madd(t1[s], nv, D_vecs[0], E_vecs[0])           # W0
+                    madd(tm[j], nv, D_vecs[1], E_vecs[1])           # W1
+                    vec("-", tm[j], tm[j], t1[s])                   # W1-W0
+                    madd(t1[s], condB[j], tm[j], t1[s])             # U0
+                    madd(tmM[j], nv, D_vecs[2], E_vecs[2])          # W2
+                    madd(tm[j], nv, D_vecs[3], E_vecs[3])           # W3
+                    vec("-", tm[j], tm[j], tmM[j])                  # W3-W2
+                    madd(tmM[j], condB[j], tm[j], tmM[j])           # U1
+                    madd(tm[j], nv, D_vecs[4], E_vecs[4])           # W4
+                    madd(condA[j], nv, D_vecs[5], E_vecs[5])        # W5
+                    vec("-", condA[j], condA[j], tm[j])             # W5-W4
+                    madd(tm[j], condB[j], condA[j], tm[j])          # U2
+                    madd(condA[j], nv, D_vecs[6], E_vecs[6])        # W6
+                    madd(nv, nv, D_vecs[7], E_vecs[7])              # W7 (b3 dead)
+                    vec("-", nv, nv, condA[j])                      # W7-W6
+                    madd(nv, condB[j], nv, condA[j])                # U3 (b2 dead)
+                    vec("&", condA[j], st, four_vec if fold else two_vec)  # b1
+                    vsel(t1[s], condA[j], tmM[j], t1[s])            # q0
+                    vsel(nv, condA[j], nv, tm[j])                   # q1
+                    vec("&", condB[j], st, eight_vec if fold else four_vec)  # b0
+                    vsel(nv, condB[j], nv, t1[s])                   # winner
                 elif l4_served(r, g):
                     # Two-stage level-(maxT+1) select: with t = p>>1 the
                     # level-maxT position and b3 = p&1 the newest parity,
@@ -743,6 +813,10 @@ class KernelBuilder:
                 if served(r + 1, g):
                     if L == 0:
                         parity(st)                         # p := b
+                    elif parity_conds:
+                        # Newest parity rides nv into the next tournament
+                        # round; the p-fold lags into that round's block.
+                        parity(nv)
                     else:
                         parity(par)
                         madd(st, st, two_vec, par)         # p := 2p + b
