@@ -163,7 +163,7 @@ strain STATE.md and the driver promotes them here.
   is slot-contention-bound (~33 cyc avg backlog). See G-11.
 - log: 2026-07-23 promoted; iter 2 measured and rejected.
 
-### H-015 [strain: op-reduction] [status: open] [PRIORITY: mainline candidate]
+### H-015 [strain: op-reduction] [status: accepted]
 - statement: C5-pre-xor value domain (H-003's P-1): pre-xor all 2047 tree
   values with C5 once (~256 vload+vxor+vstore hidden in the gather-free early
   rounds on the 1.4%-busy store engine; tournament E/D tables derived from
@@ -173,8 +173,15 @@ strain STATE.md and the driver promotes them here.
   Last round emits true val (+32 vxors).
 - predicted: -4096 lane-ops gross ≈ -68 cyc; net -45..-60 cyc -> ~1080-1095.
 - cost: M. depends: none. Touches preload + tournament constants + store path.
-- result:
-- log: 2026-07-23 promoted from op-reduction P-1; queued iter 2.
+- result: ACCEPTED iter 2, composed at 1088 (-19 vs 1107). Agent's design
+  beat the sketch: NO whole-tree preprocessing (load-floor arithmetic: +254
+  vloads -> >=1115 hard floor; only already-loaded sources primed, L4 tree
+  words rewritten in mem from primed scratch), parity closed at ZERO ops via
+  table REVERSAL. 9/16 rounds elide ^C5 (288 vec xors). Driver fixed a
+  vsel_auto arm-order interaction (swapped select arms under the reversed
+  tables) and re-tuned composed: va shrinks to (1,2), l4_gmin drifts to
+  (15,29) (freed valu funds more L4 service), pools back to (17,4).
+- log: 2026-07-23 promoted; iter 2 ACCEPTED composed, dispatch flipped.
 
 ### H-016 [strain: op-reduction] [status: open]
 - statement: Extend fusion_search with meet-in-the-middle (forward-2

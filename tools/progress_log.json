@@ -88,5 +88,11 @@
     "label": "schedule-aware\nfold placement (H-017)",
     "cycles": 1107,
     "note": "First tournament folds race flow-vselect vs valu-madd at emission (243/448 flip); L4 service retuned to (20,29), pools (16,3). Hard flip rejected per G-4; valu floor now 1073 cyc-equiv."
+  },
+  {
+    "step": "c5_prexor",
+    "label": "C5-pre-xor domain\n(H-015 composed)",
+    "cycles": 1088,
+    "note": "Tree/table values pre-xored with C5; 9 of 16 rounds drop the ^C5 op (parity closed via table reversal, zero extra ops). Composed retune with vsel_auto: va=(1,2), l4_gmin=(15,29), pools (17,4)."
   }
 ]

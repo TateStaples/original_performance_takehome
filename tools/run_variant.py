@@ -32,11 +32,12 @@ sys.path.insert(0, os.path.join(REPO_ROOT, "tests"))
 BASE_KWARGS = {
     "tournament_levels": (1, 2, 3),
     "alu_offload": True,
-    "l4_gmin": (20, 29),
-    "pool_sizes": (16, 3),
+    "l4_gmin": (15, 29),
+    "pool_sizes": (17, 4),
     "skew": (4, 3),
     "parity_conds": True,  # H-001 accepted iter 1 (1140 -> 1130)
-    "vsel_auto": (1, 2, 3),  # H-017 accepted iter 2 (1130 -> 1107)
+    "vsel_auto": (1, 2),  # H-017 accepted iter 2; shrunk to (1,2) under c5_prexor
+    "c5_prexor": True,  # H-015 accepted iter 2 (composed retune -> 1088)
     "debug_compares": False,  # speed; grader ignores debug slots anyway
 }
 SHAPE = {"forest_height": 10, "batch_size": 256, "rounds": 16}

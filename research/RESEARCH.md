@@ -7,7 +7,7 @@
 
 | cycles | commit | config |
 |---|---|---|
-| 1107 | (iter-2) | `tournament_levels=(1,2,3), alu_offload=True, parity_conds=True, vsel_auto=(1,2,3), pool_sizes=(16,3), l4_gmin=(20,29)` |
+| 1088 | (iter-2 close) | `tournament_levels=(1,2,3), alu_offload=True, parity_conds=True, c5_prexor=True, vsel_auto=(1,2), pool_sizes=(17,4), l4_gmin=(15,29)` |
 
 ## Floors (calibrated 2026-07-23, see tools/diagnose_kernel.py)
 
@@ -43,5 +43,6 @@ Global: 6 dry iterations -> one cross-pollination iteration. Status report to us
 - 2026-07-23: loop initialized at 1140 (commit b68a302). Target 1000.
 - 2026-07-23: iter 1 -> 1130 (H-001 parity_conds). First loop accept.
 - 2026-07-23: iter 2 -> 1107 (H-017 vsel_auto). Crossed 1111 (the old op-mix floor).
+- 2026-07-23: iter 2 close -> 1088 (H-015 c5_prexor composed). 88 to target.
 
-- iter 2 (in flight) | H-014 REJECTED (0 nv-bound gathers) -> G-11; H-017 vsel_auto ACCEPTED 1107 (-23), hard flip -> G-12, dispatch flipped; H-015 still running; re-sweep negative | best 1107
+- iter 2 CLOSED | H-014 REJECTED (0 nv-bound gathers) -> G-11; H-017 vsel_auto ACCEPTED (-23) -> 1107, hard flip -> G-12; H-015 c5_prexor ACCEPTED composed (-19) -> 1088 (driver fixed vsel_auto arm-order interaction + composed retune: va=(1,2), gmin=(15,29)); re-sweep negative | best 1088

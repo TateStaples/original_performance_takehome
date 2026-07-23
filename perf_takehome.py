@@ -223,8 +223,8 @@ class KernelBuilder:
             self.build_kernel_scheduled(
                 batch_size, rounds, forest_height,
                 tournament_levels=(1, 2, 3), alu_offload=True,
-                parity_conds=True, vsel_auto=(1, 2, 3),
-                pool_sizes=(16, 3), l4_gmin=(20, 29),
+                parity_conds=True, c5_prexor=True, vsel_auto=(1, 2),
+                pool_sizes=(17, 4), l4_gmin=(15, 29),
             )
         else:
             self.build_kernel_pipelined(
@@ -729,10 +729,11 @@ class KernelBuilder:
                     s0 = lv + (base + 2 * kk - 1)
                     s1 = s0 + 1
                     if L in vf_levels:
-                        # vselect first-fold (H-017): keep the odd VALUE
-                        # as the select arm; no subtract, no diff word.
-                        evens.append(bvec(s0))
-                        diffs.append(bvec(s1))
+                        # vselect first-fold (H-017): keep the non-base
+                        # VALUE as the select arm; no subtract, no diff
+                        # word. Arms swap under c5_prexor (inverted bit).
+                        evens.append(bvec(s1 if c5_prexor else s0))
+                        diffs.append(bvec(s0 if c5_prexor else s1))
                         continue
                     d = self.alloc_scratch()
                     if c5_prexor:
@@ -743,9 +744,12 @@ class KernelBuilder:
                         evens.append(bvec(s0))
                     diffs.append(bvec(d))
                     if L in va_levels:
-                        # vsel_auto (H-017): odd VALUE kept alongside the
-                        # diff so the fold can go to either engine.
-                        odd_of[diffs[-1]] = bvec(s1)
+                        # vsel_auto (H-017): the non-base VALUE kept
+                        # alongside the diff so the fold can go to either
+                        # engine. c5_prexor bases on the odd word, so the
+                        # select arm is the EVEN word there (arms swap with
+                        # the inverted condition).
+                        odd_of[diffs[-1]] = bvec(s0 if c5_prexor else s1)
                 lvl[L] = (evens, diffs)
         if l4_any:
             # Level maxT+1 candidates, indexed by the level-maxT position t:
@@ -759,9 +763,10 @@ class KernelBuilder:
                 s0 = lv + (base + 2 * tt - 1)
                 s1 = s0 + 1
                 if 4 in vf_levels:
-                    # vselect W-combine (H-017): odd VALUE, not the diff.
-                    E_vecs.append(bvec(s0))
-                    D_vecs.append(bvec(s1))
+                    # vselect W-combine (H-017): non-base VALUE, not the
+                    # diff; arms swap under c5_prexor (inverted bit).
+                    E_vecs.append(bvec(s1 if c5_prexor else s0))
+                    D_vecs.append(bvec(s0 if c5_prexor else s1))
                     continue
                 d = self.alloc_scratch()
                 if c5_prexor:
