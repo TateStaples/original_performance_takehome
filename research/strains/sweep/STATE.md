@@ -34,3 +34,6 @@ k=1..5} + curated asymmetric lag lists. Done-set dedupe by config hash.
 - iter 3 / phase 3 under 1088: 530 flag-combo configs; ONE winner:
   vsel_auto=(1,3) = 1087 (-1), accepted via full gate. Everything else at or
   above mainline -- the composed optimum is sharp.
+- iter 4 / phase 4 under 1070: 493 configs (race-flag subsets, gmin dense,
+  va x gmin, pools, skews incl. exhaustive short lag-lists): ZERO below 1070.
+  The composed optimum is sharp after every accept. H-020/H-022 done.
