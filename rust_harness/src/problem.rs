@@ -40,6 +40,99 @@ pub fn myhash(mut a: u32) -> u32 {
     a
 }
 
+/// Segment functions of the 11-mixing-op fused hash form (the shape the
+/// kernel actually emits, see `dag.rs::emit_hash` and perf_takehome.py's
+/// `_fused_hash_constants`), exposed so the fusion-search superoptimizer
+/// (`bin/fusion_search.rs`) and the minimality tests below can name each
+/// inter-op cut point:
+///
+///   a --stage0--> b --stage1--> c --f23--> d --stage4--> e --stage5--> out
+///    1 madd        shr,xor,xor    2 madd     1 madd        xor,shr,xor
+///                                 + 1 xor
+///
+/// = 11 ops (12 with the `val ^ node_val` fold-in, 13 with `out & 1`).
+pub mod hashseg {
+    /// stage0 multiplier `1 + 2^12`.
+    pub const K0: u32 = 4097;
+    pub const C0: u32 = 0x7ED5_5D16;
+    pub const C1: u32 = 0xC761_C23C;
+    pub const SH1: u32 = 19;
+    /// stage2 multiplier `1 + 2^5`.
+    pub const KP: u32 = 33;
+    /// `C2 + C3` (stage2+3 fusion's p-branch constant).
+    pub const AP: u32 = 0xE9F8_CC1D;
+    /// `33 * 2^9` (stage3's `<<9` folded into the q-branch multiplier).
+    pub const KQ: u32 = 16896;
+    /// `C2 << 9` (mod 2^32).
+    pub const AQ: u32 = 0xACCF_6200;
+    /// stage4 multiplier `1 + 2^3`.
+    pub const K4: u32 = 9;
+    pub const C4: u32 = 0xFD70_46C5;
+    pub const C5: u32 = 0xB55A_4F09;
+    pub const SH5: u32 = 16;
+
+    pub fn stage0(a: u32) -> u32 {
+        a.wrapping_mul(K0).wrapping_add(C0)
+    }
+    pub fn stage1(b: u32) -> u32 {
+        (b ^ C1) ^ (b >> SH1)
+    }
+    /// Fused stages 2+3: `p ^ q` with both branches affine in the input.
+    pub fn f23(c: u32) -> u32 {
+        let p = c.wrapping_mul(KP).wrapping_add(AP);
+        let q = c.wrapping_mul(KQ).wrapping_add(AQ);
+        p ^ q
+    }
+    pub fn stage4(d: u32) -> u32 {
+        d.wrapping_mul(K4).wrapping_add(C4)
+    }
+    pub fn stage5(e: u32) -> u32 {
+        (e ^ C5) ^ (e >> SH5)
+    }
+    /// The C5-less xor-shift `x ^ (x >> 16)` — stage 5 as it appears in the
+    /// `c5_prexor` primed value domain (H-015), where the `^ C5` is absorbed
+    /// into the tree values. Used by the MITM search's primed-domain
+    /// cross-round targets (H-016).
+    pub fn sigma16(x: u32) -> u32 {
+        x ^ (x >> SH5)
+    }
+    /// The full 11-op composition; equals `myhash` bit-for-bit (tested).
+    pub fn fused_hash(a: u32) -> u32 {
+        stage5(stage4(f23(stage1(stage0(a)))))
+    }
+
+    // ---- 2-op parity extraction (found analytically, confirmed by the
+    // fusion search; see `parity_from_d_is_bit_exact`) ----
+    //
+    // The only bit the idx update needs is `out & 1 = e0 ^ e16 ^ 1` (C5 is
+    // odd). A multiply_add can pack XOR-of-two-bits into bit 31: for
+    // `t = x*(2^31 + 2^j) + C` mod 2^32 the `2^31*x` term contributes only
+    // `x0 << 31`, the `2^j*x` term contributes `x_{31-j}` to bit 31 with no
+    // carry INTO bit 31 from the other term, and any constant 2^31 in `C`
+    // flips it. So bit31(t) = x0 ^ x_{31-j} ^ C31 exactly, and one `>> 31`
+    // extracts it.
+
+    /// `2^31 + 9*2^15`: parity-from-d multiplier (j=15 lifts bit16 of
+    /// `9d + C4` to bit 31 after the `*2^15` scaling of stage4's madd).
+    pub const PAR_D_K: u32 = 0x8004_8000;
+    /// `(C4 << 15) mod 2^32` (no 2^31 term: e0 = d0 ^ 1 and C5_0 = 1 cancel).
+    pub const PAR_D_C: u32 = 0x2362_8000;
+    /// Bit0 of the final hash, computed from the f23 output `d` in 2 ops
+    /// (madd + shr) instead of via stage4+stage5+`&1` (5 ops from `d`).
+    pub fn parity_from_d(d: u32) -> u32 {
+        d.wrapping_mul(PAR_D_K).wrapping_add(PAR_D_C) >> 31
+    }
+
+    /// `2^31 + 2^15`: parity-from-e multiplier.
+    pub const PAR_E_K: u32 = 0x8000_8000;
+    /// `2^31`: accounts for C5's odd bit0.
+    pub const PAR_E_C: u32 = 0x8000_0000;
+    /// Bit0 of the final hash from the stage4 output `e` in 2 ops.
+    pub fn parity_from_e(e: u32) -> u32 {
+        e.wrapping_mul(PAR_E_K).wrapping_add(PAR_E_C) >> 31
+    }
+}
+
 /// Minimal, dependency-free PRNG (SplitMix64) for generating synthetic test
 /// trees/inputs in pure-Rust unit tests. Not related to Python's RNG.
 pub struct Rng(u64);
@@ -512,6 +605,87 @@ mod tests {
                 !two_op_program_exists(idx, &probes),
                 "unexpected <=2-op program for non-affine stage {idx}; \
                  the per-stage 3-op bound must be revisited"
+            );
+        }
+    }
+
+    /// The `hashseg` segment decomposition (stage0 .. stage5 as separate
+    /// functions with the fused-form constants) recomposes to `myhash`
+    /// bit-for-bit — every cut point the fusion search enumerates over is a
+    /// true boundary of the real function.
+    #[test]
+    fn hashseg_composition_matches_myhash() {
+        let mut x = 0xA5A5_A5A5u32;
+        for i in 0..300_000u32 {
+            let a = if i < 8 { i } else { x };
+            x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            assert_eq!(
+                hashseg::fused_hash(a),
+                myhash(a),
+                "hashseg composition diverged at a={a:#010x}"
+            );
+        }
+        assert_eq!(hashseg::fused_hash(0xFFFF_FFFF), myhash(0xFFFF_FFFF));
+    }
+
+    /// H-003 find: the hash's parity bit (`myhash(a) & 1`, the only bit the
+    /// idx update consumes) is computable from the *f23 output* `d` in 2 ops
+    /// (one multiply_add + one shr) instead of the 5 ops the value chain
+    /// spends from `d` (stage4 madd, stage5's xor/shr/xor, `&1`):
+    ///
+    ///   parity = (d * 0x80048000 + 0x23628000) >> 31
+    ///
+    /// Why it must hold universally (not just on sampled inputs): with
+    /// e = 9d + C4, parity = e0 ^ e16 ^ C5_0 and e0 = d0 ^ C4_0 = d0 ^ 1, so
+    /// parity = d0 ^ e16 (the two odd constants cancel). In
+    /// t = d*(2^31 + 9*2^15) + (C4*2^15) mod 2^32, the 2^15-scaled term is
+    /// exactly (9d + C4)*2^15 mod 2^32 whose bit31 is e16 (a power-of-two
+    /// scaling moves bits without carries), and the 2^31*d term is d0<<31,
+    /// which adds into bit 31 with no possible carry from lower bits. Hence
+    /// bit31(t) = e16 ^ d0 = parity for EVERY d.
+    #[test]
+    fn parity_from_d_is_bit_exact() {
+        let mut x = 0x1357_9BDFu32;
+        for i in 0..1_000_000u32 {
+            let a = if i < 16 {
+                0x0101_0101u32.wrapping_mul(i)
+            } else {
+                x
+            };
+            x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            // d as it occurs in the real chain, plus arbitrary d values.
+            let d_real = hashseg::f23(hashseg::stage1(hashseg::stage0(a)));
+            assert_eq!(
+                hashseg::parity_from_d(d_real),
+                myhash(a) & 1,
+                "parity_from_d diverged vs myhash at a={a:#010x}"
+            );
+            let d_any = a;
+            assert_eq!(
+                hashseg::parity_from_d(d_any),
+                hashseg::stage5(hashseg::stage4(d_any)) & 1,
+                "parity_from_d diverged at d={d_any:#010x}"
+            );
+        }
+    }
+
+    /// Same trick one stage later: parity from the stage4 output `e` in
+    /// 2 ops, `(e * 0x80008000 + 0x80000000) >> 31` (here the constant 2^31
+    /// supplies the C5_0 = 1 flip: parity = e0 ^ e16 ^ 1).
+    #[test]
+    fn parity_from_e_is_bit_exact() {
+        let mut x = 0xFEED_F00Du32;
+        for i in 0..1_000_000u32 {
+            let e = if i < 16 {
+                i.wrapping_mul(0x0001_0001)
+            } else {
+                x
+            };
+            x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            assert_eq!(
+                hashseg::parity_from_e(e),
+                hashseg::stage5(e) & 1,
+                "parity_from_e diverged at e={e:#010x}"
             );
         }
     }

@@ -1,0 +1,373 @@
+\documentclass[11pt]{article}
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{xcolor}
+
+\newcommand{\Z}{\mathbb{Z}}
+\newcommand{\md}{\bmod\ 2^{32}}
+\newcommand{\code}[1]{\texttt{#1}}
+
+% Lightweight dependency-free pseudocode block.
+\newenvironment{pseudo}
+  {\begin{quote}\ttfamily\begin{tabbing}
+   \hspace{2em}\=\hspace{2em}\=\hspace{2em}\=\kill}
+  {\end{tabbing}\end{quote}}
+
+\title{\vspace{-1.5em}The Tree--Walk Hashing Kernel\\[0.3em]
+       \large Reference algorithm and optimized implementation}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+\vspace{-3em}
+
+\noindent\textbf{Part I} states the algorithm exactly as the grader's
+reference implements it. \textbf{Part II} explains how the optimized kernel
+runs the same computation in \textbf{1{,}053} simulated cycles instead of the
+shipped baseline's \textbf{147{,}734} (a $140\times$ reduction), broken into
+three independent concerns: \emph{algorithmic} changes (what is computed),
+\emph{slot allocation} (how operations are packed onto the machine's
+parallel engines each cycle), and \emph{memory allocation} (how the
+1{,}536-word scratch space is used).
+
+\begin{center}\rule{0.4\linewidth}{0.4pt}\end{center}
+\section*{\centering Part I --- The reference (naive) algorithm}
+
+\section{Overview}
+
+The workload is a fixed-length, data-dependent walk over a static binary
+tree, run independently for a batch of walkers. Each walker repeatedly reads
+the value at its current tree node, mixes it into its running state with a
+32-bit hash, and uses one bit of the new state to choose which child to
+descend to. All arithmetic is over the ring $\Z_{2^{32}}$: every operation is
+reduced modulo $2^{32}$.
+
+\section{Data}
+
+\paragraph{Tree.} An implicit perfect binary tree of height $H$, stored as a
+flat array $T[0\,\dots\,N-1]$ of $N = 2^{\,H+1}-1$ node values. Node $x$ has
+children $2x+1$ (left) and $2x+2$ (right); the root is index $0$. Each
+$T[x]$ is a fixed value in $[0,\,2^{30}-1]$.
+
+\paragraph{Walkers.} A batch of $B$ walkers, each with an index
+$I[i]\in\{0,\dots,N-1\}$ and a state value $V[i]\in\Z_{2^{32}}$. Initially
+every walker sits at the root, $I[i]=0$, and $V[i]$ is a fixed value in
+$[0,\,2^{30}-1]$. The walk runs for $R$ rounds.
+
+\section{The hash function}
+
+$\mathrm{myhash}:\Z_{2^{32}}\to\Z_{2^{32}}$ is applied in six stages. Writing
+$a$ for the value entering a stage, each stage recomputes
+\[
+  a \;\leftarrow\; \bigl((a \mathbin{\square_1} v_1)\ \square_2\ (a \mathbin{\square_3} v_3)\bigr)\ \md,
+\]
+where the two half-expressions are each reduced modulo $2^{32}$ before being
+combined by $\square_2$. The operators $\square$ are add ($+$), xor
+($\oplus$), left shift ($\ll$), or right shift ($\gg$). The six stages use:
+
+\begin{center}
+\begin{tabular}{cccccc}
+\toprule
+stage & $\square_1$ & $v_1$ & $\square_2$ & $\square_3$ & $v_3$ \\
+\midrule
+1 & $+$      & \code{0x7ED55D16} & $+$      & $\ll$ & $12$ \\
+2 & $\oplus$ & \code{0xC761C23C} & $\oplus$ & $\gg$ & $19$ \\
+3 & $+$      & \code{0x165667B1} & $+$      & $\ll$ & $5$  \\
+4 & $+$      & \code{0xD3A2646C} & $\oplus$ & $\ll$ & $9$  \\
+5 & $+$      & \code{0xFD7046C5} & $+$      & $\ll$ & $3$  \\
+6 & $\oplus$ & \code{0xB55A4F09} & $\oplus$ & $\gg$ & $16$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Explicitly, with $C_k$ the constant of stage $k$ (both halves read the same
+input $a$; the update is not sequential within a stage):
+\begin{align*}
+  a &\leftarrow (a + C_1) + (a \ll 12), &
+  a &\leftarrow (a \oplus C_2) \oplus (a \gg 19), &
+  a &\leftarrow (a + C_3) + (a \ll 5), \\
+  a &\leftarrow (a + C_4) \oplus (a \ll 9), &
+  a &\leftarrow (a + C_5) + (a \ll 3), &
+  a &\leftarrow (a \oplus C_6) \oplus (a \gg 16).
+\end{align*}
+
+\section{The per-round update and full algorithm}
+
+For a single walker with index $x$, value $v$, one round reads $n=T[x]$, sets
+$v \leftarrow \mathrm{myhash}(v \oplus n)$, descends
+$x \leftarrow 2x + 1 + (v \bmod 2)$ (left child if $v$ even, right if odd),
+and wraps $x \leftarrow 0$ if $x \ge N$. The reference iterates rounds outside,
+walkers inside:
+
+\begin{pseudo}
+\textbf{for} $h \leftarrow 1$ \textbf{to} $R$: \\
+\> \textbf{for} $i \leftarrow 1$ \textbf{to} $B$: \\
+\> \> $n \leftarrow T[\,I[i]\,]$ \\
+\> \> $V[i] \leftarrow \mathrm{myhash}\bigl(V[i] \oplus n\bigr)$ \\
+\> \> $I[i] \leftarrow 2\,I[i] + 1 + (V[i] \bmod 2)$ \\
+\> \> \textbf{if } $I[i] \ge N$ \textbf{ then } $I[i] \leftarrow 0$ \\
+\end{pseudo}
+
+\noindent The graded output is the final value array $V[0\,\dots\,B-1]$; the
+indices are internal bookkeeping. The benchmark instance is $H=10$
+($N=2047$), $B=256$, $R=16$ --- $B\cdot R = 4096$ hash evaluations. The tree
+has 11 levels; a walker at level $\ell$ moves to level $\ell+1$ each round
+(wrapping from the bottom), so over 16 rounds it visits levels
+$0,1,\dots,10,0,1,2,3,4$.
+
+\begin{center}\rule{0.4\linewidth}{0.4pt}\end{center}
+\section*{\centering Part II --- The optimized implementation}
+
+\section{The target machine}
+
+The kernel is scored on a single-core VLIW/SIMD simulator. Each cycle issues
+one \emph{bundle} of \emph{slots} spread across six engines, up to a
+per-engine limit; the cycle count is the number of non-trivial bundles.
+Vector ops act on \code{VLEN}${}=8$ lanes at once. Scratch is a flat
+1{,}536-word array that serves as \emph{both} the register file and working
+memory --- there is no separate register space; \code{mem} is a large
+separate array reached only through the load/store engines.
+
+\begin{center}
+\begin{tabular}{lcp{0.60\linewidth}}
+\toprule
+engine & slots/cyc & what it does \\
+\midrule
+\code{alu}   & 12 & scalar integer ops (one lane each) \\
+\code{valu}  & 6  & vector ops, 8 lanes/slot; \textbf{the only engine with fused \code{multiply\_add}} ($a\!\cdot\!b+c$) \\
+\code{load}  & 2  & \code{mem} read: scalar gather \code{mem[scratch[addr]]}, or \code{vload} of 8 contiguous words \\
+\code{store} & 2  & \code{mem} write (scalar or 8-wide \code{vstore}) \\
+\code{flow}  & 1  & \code{select}/\code{vselect} (8-lane mux) and \code{add\_imm} only --- no arithmetic \\
+\code{debug} & 64 & correctness compares; free (never counted in cycles) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent We measure work in two units: a \emph{slot} is one engine
+issue-slot in one cycle; a \emph{lane-op} is one scalar-equivalent operation
+(a \code{valu} slot does 8 lane-ops, an \code{alu} slot does 1). The peak
+arithmetic throughput is $12 + 6\!\cdot\!8 = 60$ lane-ops/cycle across
+\code{alu}${}+{}$\code{valu}.
+
+\section{Result and where the cycles go}
+
+\begin{center}
+\begin{tabular}{rl}
+\toprule
+cycles & milestone \\
+\midrule
+147{,}734 & shipped scalar baseline (1 op/bundle) \\
+12{,}414  & vectorize: 8 walkers per \code{valu} op \\
+4{,}990   & software-pipeline the phases \\
+2{,}148   & fused hash + carry gather address + gather-under-compute \\
+1{,}572   & tournament routing of tree levels 1--3 (fewer gathers) \\
+1{,}140   & group skewing (overlap compute- and load-heavy blocks) \\
+1{,}053   & \textbf{current} (constant commuting, engine racing, drain/ramp fixes) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+At 1{,}053 cycles the two arithmetic engines are jointly saturated and the
+schedule is within $1.7\%$ of the binding resource floor:
+
+\begin{center}
+\begin{tabular}{lrrr}
+\toprule
+engine & slots used & utilization & lane-ops \\
+\midrule
+\code{valu}  & 6{,}209 & 98.3\% (floor $6209/6 = 1035$ cyc) & --- \\
+\code{alu}   & 12{,}169 & 96.3\% & --- \\
+\code{load}  & 1{,}924 & 91.4\% (1{,}875 gathers) & --- \\
+\code{flow}  & 637 & 60.5\% & --- \\
+\code{store} & 38 & 1.8\% & --- \\
+\midrule
+\multicolumn{4}{l}{\emph{work by purpose (lane-ops, \% of total 68{,}801):}}\\
+Hash    & & & 46{,}656 \ (67.8\%) \\
+Routing & & & 12{,}409 \ (18.0\%) \\
+Index   & & & \phantom{0}9{,}144 \ (13.3\%) \\
+Setup/Store & & & \phantom{00}592 \ (0.9\%) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The binding engine is \code{valu} (its fused multiply-add has no scalar
+substitute), so the optimizations below are ultimately judged by how many
+\code{valu} slots they remove or how well they keep all six engines busy in
+the same cycle.
+
+\section{Algorithmic improvements}
+
+These change \emph{what} is computed --- the operation count and data-flow
+structure --- while leaving the graded output bit-identical.
+
+\paragraph{1. Exploit walker independence (vectorize).} Within a round the
+$B=256$ walkers are mutually independent, so they pack 8-to-a-lane onto
+\code{valu}: 256 walkers become 32 \emph{groups} of 8. Only the 16 rounds are
+sequential. This alone is the $147\text{k}\!\to\!12\text{k}$ step and is the
+foundation everything else builds on.
+
+\paragraph{2. Hash fusion.} Three of the six stages ($1,3,5$) have the affine
+shape $(a+C)+(a\ll s) = a\,(1+2^s)+C$, which is exactly one
+\code{multiply\_add}. Better, stages $2$ and $3$ \emph{compose} across their
+boundary: both branches of stage $3$ are affine in stage $2$'s input, so the
+pair collapses to two multiply-adds plus one xor rather than four ops. The
+6-stage hash reduces from a naive $\sim$18 operations to \textbf{11 mixing
+operations} per evaluation. An exhaustive machine search (adjacent-segment
+plus meet-in-the-middle, ${\sim}2.4\times10^{12}$ candidates with constants
+solved over all $2^{32}$) found no shorter form at any cut point; 11 is very
+likely minimal for this composition, though not proven globally.
+
+\paragraph{3. Commute a constant across the round boundary.} Stage 6's
+constant xor $\oplus C_6$ can be pushed out of the per-round hash by
+pre-transforming the tree once: if the stored node values carry $C_6$
+already, the fold-in $v \oplus n$ absorbs the elided $\oplus C_6$ from the
+previous round. This removes one operation per evaluation on $9$ of the $16$
+rounds. Parity flips by $C_6\bmod 2$ but is corrected for free by reversing
+the routing tables and adjusting compile-time offset constants.
+
+\paragraph{4. Tournament routing (the load$\to$arithmetic trade).} The naive
+gather $T[I[i]]$ is a data-dependent \code{load}; with one per walker per
+round that is $4096/2 = 2048$ load-cycles --- the original wall. But the
+\emph{shallow} tree levels are tiny and shared: level $d$ has only $2^d$
+distinct nodes, identical for all walkers. Those levels are pre-broadcast
+into scratch once, and each walker selects its node with a \emph{tournament}
+of $2^d\!-\!1$ multiplexes driven by its accumulated branch-parity bits,
+running on \code{valu}/\code{flow} instead of \code{load}. Levels 1--4 are
+served this way (a partial fifth level too); levels 5--10 still gather. This
+cuts gathers from 4096 to $\sim$1875 and moves the bottleneck off the 2-wide
+\code{load} engine onto the arithmetic engines --- the decisive
+$2148\!\to\!{\sim}1400$ structural change. A walker's position within a level
+is the $d$-bit number formed by its last $d$ parity bits (oldest = most
+significant).
+
+\paragraph{5. Position-accumulator index recurrence.} Rather than recompute a
+full tree address each round, a walker on tournament levels carries a compact
+position $p \leftarrow 2p + b$ (one multiply-add; $b$ is the new parity bit),
+and only materializes a real gather address $g = 2p + b + (\text{base} +
+2^{L}-1)$ at the boundary where it leaves tournament levels for gather levels.
+The ``$+1$'' of $2x{+}1$ and the tree base pointer fold into compile-time
+constants. The whole index recurrence costs ${\sim}2.2$ lane-ops per
+evaluation --- below the naive 3-op recurrence.
+
+\paragraph{6. Deterministic wraparound.} Because every walker advances exactly
+one level per round in lockstep, the ``\,if $x\ge N$ wrap to $0$\,'' branch
+fires on the same known rounds for all lanes at once. It is compiled away
+entirely --- there is no per-walker compare or select for wraparound; the
+position state is simply re-seeded from the root on those rounds.
+
+\section{Slot allocation}
+
+These do not change the computation; they decide \emph{which engine and which
+cycle} each operation issues on, to keep the six parallel engines full.
+
+\paragraph{The list scheduler.} Operations are emitted as an unordered pool
+and placed greedily at the earliest cycle with (a) all inputs ready and (b) a
+free slot on a capable engine, tracking read/write hazards per scratch
+address. This replaced a fixed ``wave of six'' hand-schedule and is what lets
+the following placement tricks compose.
+
+\paragraph{Multi-encoding engine racing.} Many operations have more than one
+legal encoding, and the scheduler places each on whichever engine retires it
+soonest:
+\begin{itemize}\itemsep2pt
+  \item An 8-wide elementwise vector op costs \emph{one} \code{valu} slot or
+    \emph{eight} scalar \code{alu} slots. When \code{valu} is backed up and
+    \code{alu} has idle lanes, the split wins --- ``\code{alu} offload''
+    raising effective throughput toward $60$ lane-ops/cycle.
+  \item A tournament fold is either a \code{valu} multiply-add or a
+    \code{flow} \code{vselect} (the parity is a raw $0/1$ condition). Each
+    fold races the two; ${\sim}\,54\%$ move to the otherwise-idle \code{flow}
+    engine, but only where they do not serialize on its single slot.
+  \item The index multiply-by-2 recurrence spells either as one \code{valu}
+    multiply-add or as \code{shift}${+}$\code{add} across 8 \code{alu} lanes,
+    chosen per site.
+\end{itemize}
+A hard, unconditional version of any of these \emph{loses} (measured): the
+\code{flow} engine is 1-wide and its idle time is anti-correlated with when
+folds are ready, so blind offloading serializes. Only the per-site race wins.
+
+\paragraph{Cut the operation, not just its placement.} Tournament select
+conditions are taken directly from the raw parity vectors (which already
+exist for the index update, and ride an otherwise-dead buffer) instead of
+being re-extracted with mask-and-shift ops --- eliminating those extractions
+from \code{alu}/\code{valu} at zero scratch cost.
+
+\paragraph{Group skewing (software pipeline across blocks).} The 32 groups
+are emitted in 4 blocks staggered 3 rounds apart. A round that is
+compute-heavy (a tournament level, no gathers) for one block then overlaps a
+round that is load-heavy (a deep gather level) for another, so
+\code{load} and \code{valu} stay busy in the same cycles instead of taking
+turns. This was the single largest scheduling win
+($1418\!\to\!1140$).
+
+\paragraph{Setup and drain scheduling.} The startup ramp and final-round
+drain are where engines idle. Setup constants are computed on the idle
+\code{alu} (e.g. one constant is another shifted) instead of consuming
+\code{load} slots; the 32 base-address adds are moved off the 1-wide
+\code{flow} engine into parallel \code{alu} chains; disjoint final stores are
+paired to use both \code{store} slots; and the last round's tournament fold
+is reordered so the last-arriving parity bit selects last, shortening the
+drain's critical path.
+
+\section{Memory allocation}
+
+Scratch is only 1{,}536 words and doubles as the register file, so every live
+value competes for it. The kernel runs at \textbf{1{,}535/1{,}536} words ---
+essentially full --- which is only possible because of the following.
+
+\paragraph{Two tiers.} \code{alu}/\code{valu}/\code{flow} operate directly on
+scratch; the large \code{mem} array is reachable only via load/store. Values
+that must persist live in scratch; anything that can be recomputed or streamed
+from \code{mem} need not.
+
+\paragraph{Persistent state vs.\ reused temp pools.} Each of the 32 groups
+keeps exactly three live 8-word vectors across the whole run: its hash state,
+its node-value buffer, and its position/address accumulator ($32\times3\times
+8 = 768$ words). Everything else --- hash intermediates, tournament condition
+vectors --- comes from a small \emph{shared pool} of temporaries (sizes
+$(16,4)$) that is reused group-to-group and wave-to-wave, rather than
+allocated per group. Pool sizing is a direct scratch-vs-parallelism knob:
+too small serializes on write-after-write hazards, too large overflows.
+
+\paragraph{Constant coalescing.} The register-pressure analysis initially read
+a peak of ${\sim}2300$ live words --- but ${\sim}2048$ of those were redundant
+per-walker copies of a handful of \emph{compile-time constants} (gather-base
+offsets, the reset position). Coalescing identical constants to one shared
+broadcast word each --- what a real vectorized kernel does --- collapses the
+genuine working set to ${\sim}780$ words, which is what makes the whole design
+fit without spilling.
+
+\paragraph{Shared tournament tables and in-\code{mem} priming.} The tree is
+static, so each served level's value/difference tables are built into scratch
+\emph{once} at setup and shared by all groups. For the constant-commuting
+transform, the deep-level tree values are pre-xored with $C_6$ directly in
+\code{mem} at setup (using the near-idle \code{store} engine during the ramp),
+so no per-round scratch or work is spent maintaining the transformed domain.
+
+\paragraph{Dead-register mining.} On the final round, 52 vectors are provably
+dead (the position accumulators of groups that no longer gather, and the
+node-value buffers of already-finished blocks). The drain-shortening
+optimization reuses exactly those dead words to hold its extra tables, funding
+a genuine improvement with \emph{zero} net scratch --- the only reason it fits
+at 1{,}535/1{,}536.
+
+\section{Lower bounds and the remaining gap}
+
+The hash must be evaluated 4096 times; that work alone, on the 60-lane-op/cyc
+\code{alu}${+}$\code{valu} pair, is a hard floor of ${\sim}\,780$ cycles.
+Adding the index recurrence gives ${\sim}\,930$; adding the routing folds that
+cannot fit on the 1-wide \code{flow} engine gives the realized \code{valu}
+floor of ${\sim}\,1035$, and the kernel runs at 1{,}053 --- $1.7\%$ above it.
+The gap from 930 to 1035 is an irreducible ``routing tax'' imposed by the
+ISA: \code{flow} has only one slot per cycle, so the selects that would
+otherwise offload from the saturated arithmetic engines serialize instead.
+Going below 1{,}000 would require removing ${\sim}215$ \code{valu} slots of
+real arithmetic --- i.e.\ a hash shorter than 11 operations (searched to
+$2.4\times10^{12}$ candidates without a hit) or a structurally cheaper
+routing scheme --- not better scheduling, which is already essentially
+optimal.
+
+\end{document}

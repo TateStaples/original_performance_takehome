@@ -1,0 +1,1 @@
+{"config": {"skew": "[0, 3, 6, 9]", "l4_gmin": "(20, 26)", "pool_sizes": "(17, 4)"}, "cycles": 1137, "correct": true, "baseline": 1140}

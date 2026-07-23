@@ -1,0 +1,1 @@
+{"config": {"vsel_auto": "(2, 3)", "l4_gmin": "(13, 28)"}, "cycles": -1, "correct": false, "baseline": 1064, "error": "AssertionError('Out of scratch space')"}

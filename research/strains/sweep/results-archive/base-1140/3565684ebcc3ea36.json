@@ -1,0 +1,1 @@
+{"config": {"pool_sizes": "(17, 6)"}, "cycles": -1, "correct": false, "baseline": 1140, "error": "AssertionError('Out of scratch space')"}
