@@ -152,6 +152,59 @@ class ListScheduler:
         self.put(engine, slot, c, reads, writes, mem_read, mem_write)
         return c
 
+    def emit_any(self, encodings):
+        """
+        H-019: place ONE of several alternative ENCODINGS of the same
+        computation -- whichever retires EARLIEST; ties go to the
+        earliest-listed encoding. Each encoding is a sequence of micro-ops
+        (engine, slot, reads, writes) placed greedily in listed order;
+        micro-ops within an encoding may depend on each other (trial-local
+        RAW/WAW/WAR tracking on top of the global state) and compete for
+        the same engine's slots (trial-local occupancy), so an encoding's
+        retire time is the max of its micro-ops' placements. This is the
+        one mechanism behind both the H-017 valu-madd-vs-flow-vselect fold
+        race (1-op encodings on two engines) and the alu-offload split race
+        (1 valu op vs 8 scalar alu lane ops); `dual_fold` and `_sched_vec`
+        route through it, and any op with several equivalent spellings can
+        race the same way.
+        """
+        best = None
+        for enc in encodings:
+            extra = {}
+            t_lw = {}
+            t_lr = {}
+            placements = []
+            retire = -1
+            for engine, slot, reads, writes in enc:
+                c = self.ready(reads, writes)
+                for a in reads:
+                    t = t_lw.get(a, -1) + 1
+                    if t > c:
+                        c = t
+                for a in writes:
+                    t = t_lw.get(a, -1) + 1
+                    if t > c:
+                        c = t
+                    t = t_lr.get(a, -1)
+                    if t > c:
+                        c = t
+                c = self.find_free(engine, c, extra.setdefault(engine, {}))
+                extra[engine][c] = extra[engine].get(c, 0) + 1
+                placements.append(c)
+                if c > retire:
+                    retire = c
+                for a in reads:
+                    if t_lr.get(a, -1) < c:
+                        t_lr[a] = c
+                for a in writes:
+                    t_lw[a] = c
+            if best is None or retire < best[0]:
+                best = (retire, enc, placements)
+        retire, enc, placements = best
+        for (engine, slot, reads, writes), c in zip(enc, placements):
+            self.put(engine, slot, c, reads, writes)
+        return retire
+
 
 class KernelBuilder:
     def __init__(self):
@@ -322,28 +375,25 @@ class KernelBuilder:
         """
         reads = self._v(a) + self._v(b)
         writes = self._v(dest)
-        c0 = S.ready(reads, writes)
-        cv = None
-        if not force_alu:
+        if op in _SCALARIZABLE and (force_alu or allow_alu):
+            alu_enc = tuple(
+                ("alu", (op, dest + i, a + i, b + i), (a + i, b + i), (dest + i,))
+                for i in range(VLEN)
+            )
+            if force_alu:
+                return S.emit_any((alu_enc,))
+            c0 = S.ready(reads, writes)
             cv = S.find_free("valu", c0)
-        if op in _SCALARIZABLE and (force_alu or (allow_alu and cv > c0)):
-            extra = {}
-            lanes = []
-            worst = -1
-            for i in range(VLEN):
-                ci = S.ready((a + i, b + i), (dest + i,))
-                ci = S.find_free("alu", ci, extra)
-                lanes.append(ci)
-                extra[ci] = extra.get(ci, 0) + 1
-                if ci > worst:
-                    worst = ci
-            if force_alu or worst <= cv:
-                for i in range(VLEN):
-                    S.put("alu", (op, dest + i, a + i, b + i), lanes[i],
-                          (a + i, b + i), (dest + i,))
-                return worst
-        if cv is None:
-            cv = S.find_free("valu", c0)
+            if cv > c0:
+                # valu is backed up: race the split. alu listed first so it
+                # keeps retire-time ties (the historical `worst <= cv` rule).
+                return S.emit_any((
+                    alu_enc,
+                    (("valu", (op, dest, a, b), reads, writes),),
+                ))
+            S.put("valu", (op, dest, a, b), cv, reads, writes)
+            return cv
+        cv = S.find_free("valu", S.ready(reads, writes))
         S.put("valu", (op, dest, a, b), cv, reads, writes)
         return cv
 
@@ -375,6 +425,10 @@ class KernelBuilder:
         vsel_auto=(),
         c5_prexor: bool = False,
         spec_fold=(),
+        l4_race=(),
+        u_race: bool = False,
+        sel_race: bool = False,
+        idx_race: bool = False,
         debug_compares: bool = True,
     ):
         """
@@ -516,6 +570,26 @@ class KernelBuilder:
           already keeps these sites pointwise optimal, and the extra
           speculated xor displaces alu-offloaded ops back onto valu.
 
+        - `l4_race` / `u_race` / `sel_race` (H-019): `emit_any` races
+          beyond the vsel_auto first-folds. `l4_race` gives the served
+          level-4 W-combines dual valu-madd/flow-vselect encodings for the
+          listed pair indices (True = all; int N = the first N pairs),
+          each raced pair funded by one extra odd-value broadcast (VLEN
+          words of free scratch; the select arm is the EVEN word under
+          c5_prexor, exactly like vsel_auto's tables). `u_race` gives each
+          level-4 U-combine (dst := b2 ? Wa : Wb, runtime arms, exact 0/1
+          cond) a 1-op flow-vselect encoding racing the 2-op valu
+          subtract+madd (subtract alu-splittable), clobbering the dead Wa
+          on the valu path. `sel_race` is the symmetric reverse race: the
+          L2 b0-copy and final select and L3's q0/q1 (the vselects whose
+          conds are exact 0/1) may fall BACK to valu subtract+madd (or alu
+          splits) when flow is the local constraint. `idx_race` gives the
+          Idx-madd family (`p := 2p + b` lagged folds, epoch-exit gaddr
+          conversions, gather-mode `2*gaddr + omf` updates) an alu
+          spelling -- per-lane shift then add/subtract, 16 scalar slots
+          over two dependent levels -- raced against the single valu madd.
+          All except idx_race require parity_conds; all default off.
+
         `debug_compares` interleaves free `("debug", ("vcompare", ...))`
         slots (skipped by the grader) checking node_val and hashed_val of
         every (round, walker) against the reference trace. Under
@@ -614,6 +688,30 @@ class KernelBuilder:
             l4_served(r, g) for r in range(rounds) for g in (0, n_groups_ - 1)
         )
 
+        # l4_race (H-019): served-level-4 W-combine pairs whose fold races
+        # valu madd vs flow vselect at schedule time, exactly like
+        # vsel_auto's first-folds. True = all pairs; int N = the first N
+        # pair (table) indices; iterable = explicit pair indices. Each
+        # raced pair funds one extra odd-value broadcast (VLEN words) out
+        # of free scratch.
+        if l4_race is True:
+            lr_pairs = set(range(2 ** maxT))
+        elif isinstance(l4_race, int):
+            lr_pairs = set(range(l4_race))
+        else:
+            lr_pairs = set(l4_race)
+        lr_pairs &= set(range(2 ** maxT)) if maxT else set()
+        if not l4_any:
+            lr_pairs = set()
+        assert not lr_pairs or (parity_conds and 4 not in vf_levels), \
+            "l4_race requires parity_conds and no hard level-4 vsel_folds"
+        # u_race / sel_race (H-019): symmetric emit_any races at the served
+        # level-4 U-combines (valu subtract+madd vs one flow vselect) and
+        # the L2/L3 vselects whose conds are exact 0/1 vectors (flow
+        # vselect vs valu subtract+madd, subtract alu-splittable).
+        assert not (u_race or sel_race) or parity_conds, \
+            "u_race/sel_race require parity_conds"
+
         def served(r, g):
             # node_val comes from scratch (no gather) on these rounds
             lv_ = level(r)
@@ -678,19 +776,86 @@ class KernelBuilder:
         odd_of = {}  # diff-vector addr -> odd-value vector addr (vsel_auto)
 
         def dual_fold(dst, cond, dv, ev):
-            # H-017 auto mode: place this first-fold on flow's vselect only
-            # when its slot retires strictly earlier than valu's madd would
-            # (cond is a raw 0/1 parity, so the two forms are equivalent).
-            reads_m = self._v(cond) + self._v(dv) + self._v(ev)
-            writes = self._v(dst)
-            cm = S.find_free("valu", S.ready(reads_m, writes))
+            # H-017 auto mode via emit_any (H-019): place this first-fold on
+            # flow's vselect only when its slot retires strictly earlier
+            # than valu's madd would (valu listed first keeps ties; cond is
+            # a raw 0/1 parity, so the two forms are equivalent).
             ov = odd_of[dv]
-            reads_s = self._v(cond) + self._v(ov) + self._v(ev)
-            cs = S.find_free("flow", S.ready(reads_s, writes))
-            if cs < cm:
-                S.put("flow", ("vselect", dst, cond, ov, ev), cs, reads_s, writes)
+            writes = self._v(dst)
+            S.emit_any((
+                (("valu", ("multiply_add", dst, cond, dv, ev),
+                  self._v(cond) + self._v(dv) + self._v(ev), writes),),
+                (("flow", ("vselect", dst, cond, ov, ev),
+                  self._v(cond) + self._v(ov) + self._v(ev), writes),),
+            ))
+
+        def race_sel(dst, cond, wa, wb):
+            # H-019 (u_race/sel_race): dst := cond ? wa : wb where the arms
+            # are RUNTIME values and cond is an exact 0/1 vector, so the op
+            # has equivalent spellings on both engines: one flow vselect,
+            # or a valu subtract (diff into wa, which must be dead) + valu
+            # madd, with the subtract alu-splittable under alu_offload.
+            # Greedy: earliest retire wins; flow listed first so ties stay
+            # off the binding valu engine.
+            rc, ra, rb = self._v(cond), self._v(wa), self._v(wb)
+            wd = self._v(dst)
+            madd_op = ("valu", ("multiply_add", dst, cond, wa, wb),
+                       rc + ra + rb, wd)
+            encs = [
+                (("flow", ("vselect", dst, cond, wa, wb), rc + ra + rb, wd),),
+                (("valu", ("-", wa, wa, wb), ra + rb, ra), madd_op),
+            ]
+            if alu_offload:
+                encs.append(tuple(
+                    ("alu", ("-", wa + i, wa + i, wb + i),
+                     (wa + i, wb + i), (wa + i,))
+                    for i in range(VLEN)
+                ) + (madd_op,))
+            S.emit_any(encs)
+
+        def race_copy(dst, src):
+            # H-019 (sel_race): pure vector copy -- flow vselect(c, a, a),
+            # valu bitwise-or with itself, or 8 scalar alu ors.
+            rd, wd = self._v(src), self._v(dst)
+            encs = [
+                (("flow", ("vselect", dst, src, src, src), rd, wd),),
+                (("valu", ("|", dst, src, src), rd, wd),),
+            ]
+            if alu_offload:
+                encs.append(tuple(
+                    ("alu", ("|", dst + i, src + i, src + i),
+                     (src + i,), (dst + i,))
+                    for i in range(VLEN)
+                ))
+            S.emit_any(encs)
+
+        def race_idx_madd(st_, bv, cv, lane2):
+            # H-019 (idx_race): an Idx update of the form
+            #   st := st * <bv> + <cv>   (bv = +/-2 broadcast)
+            # has an alu spelling: per-lane  st <<= 1  then lane2(i) --
+            # ("+", st+i, st+i, addend) for 2p+b / 2p+omf forms, or
+            # ("-", st+i, K, st+i) for the c5_prexor exit's K - 2p'. 16
+            # scalar slots over two dependent levels, raced against the
+            # single valu madd (listed first: ties keep the madd).
+            enc_m = (("valu", ("multiply_add", st_, st_, bv, cv),
+                      self._v(st_) + self._v(bv) + self._v(cv),
+                      self._v(st_)),)
+            enc_a = tuple(
+                ("alu", ("<<", st_ + i, st_ + i, one_c),
+                 (st_ + i, one_c), (st_ + i,)) for i in range(VLEN)
+            ) + tuple(
+                ("alu", lane2(i), (lane2(i)[2], lane2(i)[3]), (lane2(i)[1],))
+                for i in range(VLEN)
+            )
+            S.emit_any((enc_m, enc_a))
+
+        def pfold(st_, nv_):
+            # The lagged position fold p := 2p + b (b = raw 0/1 parity).
+            if idx_race:
+                race_idx_madd(st_, two_vec, nv_,
+                              lambda i: ("+", st_ + i, st_ + i, nv_ + i))
             else:
-                S.put("valu", ("multiply_add", dst, cond, dv, ev), cm, reads_m, writes)
+                madd(st_, st_, two_vec, nv_)
 
         def sched_snap():
             # Snapshot of the scheduler's mutable state (slot tuples inside
@@ -768,11 +933,13 @@ class KernelBuilder:
         else:
             rec_needed = sorted({level(r + 1) for r, g in rec_exits})
         rec_vecs = {}
+        rec_scalar = {}  # idx_race: the scalar sources double as alu operands
         for key in rec_needed:
             rs = self.alloc_scratch()
             off = key if c5_prexor else 2 ** key - 1
             S.emit("flow", ("add_imm", rs, fp, off), (fp,), (rs,))
             rec_vecs[key] = bvec(rs, f"rec{key}")
+            rec_scalar[key] = rs
 
         # --- tournament level values: load tree[1..], broadcast each
         # pair's even element and its (odd-even) diff ---
@@ -849,6 +1016,13 @@ class KernelBuilder:
                     S.emit("alu", ("-", d, s1, s0), (s0, s1), (d,))
                     E_vecs.append(bvec(s0))
                 D_vecs.append(bvec(d))
+                if t in lr_pairs:
+                    # l4_race (H-019): odd-value select arm kept alongside
+                    # the diff so this W-combine can go to either engine.
+                    # c5_prexor bases on the odd word, so the select arm is
+                    # the EVEN word there (arms swap with the inverted
+                    # condition), exactly like vsel_auto's tables.
+                    odd_of[D_vecs[-1]] = bvec(s0 if c5_prexor else s1)
             four_vec = bvec(const(4), "four_vec")
             eight_vec = bvec(const(8), "eight_vec")
 
@@ -989,11 +1163,19 @@ class KernelBuilder:
                             # nv = b1 (raw parity), st = b0 (single bit).
                             # b0 copy (st folds next); vselect(c,a,a,a) is a
                             # pure copy, so it rides the idle flow engine.
-                            vsel(condB[j], st, st, st)
-                            madd(st, st, two_vec, nv)        # fold b1: st = b0b1
+                            # H-019 (sel_race): both the copy and the final
+                            # select (cond b0 is exact 0/1) race engines.
+                            if sel_race:
+                                race_copy(condB[j], st)
+                            else:
+                                vsel(condB[j], st, st, st)
+                            pfold(st, nv)                    # fold b1: st = b0b1
                             ff(t1[s], nv, diffs[0], evens[0])
                             ff(tm[j], nv, diffs[1], evens[1])
-                            vsel(nv, condB[j], tm[j], t1[s])
+                            if sel_race:
+                                race_sel(nv, condB[j], tm[j], t1[s])
+                            else:
+                                vsel(nv, condB[j], tm[j], t1[s])
                         else:
                             vec("&", condA[j], st, one_vec)   # newest bit b1
                             vec("&", condB[j], st, two_vec)   # mask for b0
@@ -1005,13 +1187,20 @@ class KernelBuilder:
                         # both conds extract from st at round START.
                         vec("&", condB[j], st, one_vec)   # b1
                         vec("&", condA[j], st, two_vec)   # b0 mask
-                        madd(st, st, two_vec, nv)         # fold b2: st = b0b1b2
+                        pfold(st, nv)                     # fold b2: st = b0b1b2
                         ff(t1[s], nv, diffs[0], evens[0])   # m0
                         ff(tmM[j], nv, diffs[1], evens[1])  # m1
                         ff(tm[j], nv, diffs[2], evens[2])   # m2
                         ff(nv, nv, diffs[3], evens[3])      # m3 (b2 dead)
-                        vsel(t1[s], condB[j], tmM[j], t1[s])  # q0 = b1 ? m1 : m0
-                        vsel(nv, condB[j], nv, tm[j])         # q1 = b1 ? m3 : m2
+                        # H-019 (sel_race): q0/q1's cond b1 is exact 0/1, so
+                        # they race back to valu; the b0 winner's cond is a
+                        # 0/2 mask, so it stays a flow vselect.
+                        if sel_race:
+                            race_sel(t1[s], condB[j], tmM[j], t1[s])  # q0
+                            race_sel(nv, condB[j], nv, tm[j])         # q1
+                        else:
+                            vsel(t1[s], condB[j], tmM[j], t1[s])  # q0 = b1 ? m1 : m0
+                            vsel(nv, condB[j], nv, tm[j])         # q1 = b1 ? m3 : m2
                         vsel(nv, condA[j], nv, t1[s])         # b0 ? q1 : q0
                     else:  # L == 3
                         vec("&", condA[j], st, one_vec)   # newest bit b2
@@ -1036,26 +1225,37 @@ class KernelBuilder:
                     fold = r != rounds - 1
                     # H-017: W-combines ride flow when level 4 is flipped
                     # (D_vecs holds odd VALUES there; nv is the raw parity).
-                    ffW = vsel if 4 in vf_levels else madd
+                    # H-019 (l4_race): raced pairs (odd table present in
+                    # odd_of) go to whichever engine retires them earlier.
+                    if 4 in vf_levels:
+                        ffW = vsel
+                    elif lr_pairs:
+                        ffW = lambda dst, cond, dv, ev: (
+                            dual_fold(dst, cond, dv, ev) if dv in odd_of
+                            else madd(dst, cond, dv, ev))
+                    else:
+                        ffW = madd
+                    # H-019 (u_race): each U-combine is dst := b2 ? wa : wb
+                    # with runtime arms and exact 0/1 cond -- race one flow
+                    # vselect against the valu subtract+madd.
+                    uc = race_sel if u_race else (
+                        lambda dst, cond, wa, wb: (
+                            vec("-", wa, wa, wb), madd(dst, cond, wa, wb)))
                     vec("&", condB[j], st, one_vec)                 # b2 (0/1)
                     if fold:
-                        madd(st, st, two_vec, nv)                   # st=b0b1b2b3
+                        pfold(st, nv)                               # st=b0b1b2b3
                     ffW(t1[s], nv, D_vecs[0], E_vecs[0])            # W0
                     ffW(tm[j], nv, D_vecs[1], E_vecs[1])            # W1
-                    vec("-", tm[j], tm[j], t1[s])                   # W1-W0
-                    madd(t1[s], condB[j], tm[j], t1[s])             # U0
+                    uc(t1[s], condB[j], tm[j], t1[s])               # U0
                     ffW(tmM[j], nv, D_vecs[2], E_vecs[2])           # W2
                     ffW(tm[j], nv, D_vecs[3], E_vecs[3])            # W3
-                    vec("-", tm[j], tm[j], tmM[j])                  # W3-W2
-                    madd(tmM[j], condB[j], tm[j], tmM[j])           # U1
+                    uc(tmM[j], condB[j], tm[j], tmM[j])             # U1
                     ffW(tm[j], nv, D_vecs[4], E_vecs[4])            # W4
                     ffW(condA[j], nv, D_vecs[5], E_vecs[5])         # W5
-                    vec("-", condA[j], condA[j], tm[j])             # W5-W4
-                    madd(tm[j], condB[j], condA[j], tm[j])          # U2
+                    uc(tm[j], condB[j], condA[j], tm[j])            # U2
                     ffW(condA[j], nv, D_vecs[6], E_vecs[6])         # W6
                     ffW(nv, nv, D_vecs[7], E_vecs[7])               # W7 (b3 dead)
-                    vec("-", nv, nv, condA[j])                      # W7-W6
-                    madd(nv, condB[j], nv, condA[j])                # U3 (b2 dead)
+                    uc(nv, condB[j], nv, condA[j])                  # U3 (b2 dead)
                     vec("&", condA[j], st, four_vec if fold else two_vec)  # b1
                     vsel(t1[s], condA[j], tmM[j], t1[s])            # q0
                     vsel(nv, condA[j], nv, tm[j])                   # q1
@@ -1172,14 +1372,33 @@ class KernelBuilder:
                         elif c5_prexor:
                             # st is the complement position; par inverted
                             # iff this round elided (see rec_off).
-                            madd(st, st, negtwo_vec, rec_vecs[rec_off(r, g)])
+                            key = rec_off(r, g)
+                            if idx_race:
+                                race_idx_madd(
+                                    st, negtwo_vec, rec_vecs[key],
+                                    lambda i: ("-", st + i,
+                                               rec_scalar[key], st + i))
+                            else:
+                                madd(st, st, negtwo_vec, rec_vecs[key])
                             vec("-" if elide(r, g) else "+", st, st, par)
                         else:
-                            madd(st, st, two_vec, rec_vecs[Ln])
+                            if idx_race:
+                                race_idx_madd(
+                                    st, two_vec, rec_vecs[Ln],
+                                    lambda i: ("+", st + i, st + i,
+                                               rec_scalar[Ln]))
+                            else:
+                                madd(st, st, two_vec, rec_vecs[Ln])
                             vec("+", st, st, par)
                     else:
                         assert not elide(r, g)  # gather rounds never elide
-                        madd(st, st, two_vec, omf_vec)     # 2*gaddr + 1 - fp
+                        if idx_race:
+                            # 2*gaddr + 1 - fp
+                            race_idx_madd(st, two_vec, omf_vec,
+                                          lambda i: ("+", st + i, st + i,
+                                                     omf_s))
+                        else:
+                            madd(st, st, two_vec, omf_vec)  # 2*gaddr + 1 - fp
                         vec("+", st, st, par)
                     for lane in range(VLEN):
                         S.emit("load", ("load", nv + lane, st + lane),
