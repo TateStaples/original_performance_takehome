@@ -27,7 +27,7 @@
 | strain | charter | status |
 |---|---|---|
 | flow-balance | exploit idle flow engine + load-side tricks | active (iter 2: H-017) |
-| scheduler | close the actual-vs-valu-floor gap (26 cyc friction) | NEW (rotated in iter 3; critical-path RETIRED: G-8/G-11/G-13) |
+| scheduler | (retired iter 4: charter measured-complete -- the 26-cyc gap is latency/throughput-bound, not order-fixable; successors H-023/H-024) | RETIRED |
 | op-reduction | fewer lane-ops via algebra (hash fusions, idx folds) | active (iter 2: H-015) |
 | sweep | pure-compute parameter grid (no LLM) | active (background, H-005) |
 
@@ -54,3 +54,4 @@ Global: 6 dry iterations -> one cross-pollination iteration. Status report to us
 - iter 3 CLOSED | accepts: H-019 emit_any (-17) + sweep va13 (-1); H-010 -> G-13 (strain rotated); H-004+18 -> G-15 (rebalancing exhausted; code subsumed by idx_race). Best 1140->1070 in 3 iterations. Route to <1000: op REMOVAL (H-016) + slack harvest (H-021) + endgame load-side (H-006) | best 1070
 - iter 4 (in flight) | sweep phase 4: 0/493 below 1070 (optimum sharp); H-016/H-021/H-006 agents running | best 1070
 - iter 4 | H-006 CLOSED permanently -> G-16 (0% contiguity, no scratch-indexed reads, L4-full +75, triple-saturated middle). H-016/H-021 still running | best 1070
+- iter 4 | H-021 honest zero, friction mapped (13 drain latency + 9 setup load + 4 seams), strain retired with successors H-023/H-024; H-016 MITM still running | best 1070

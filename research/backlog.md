@@ -252,7 +252,7 @@ strain STATE.md and the driver promotes them here.
 - result:
 - log: 2026-07-23 promoted from flow-balance P-5.
 
-### H-021 [strain: scheduler] [status: open]
+### H-021 [strain: scheduler] [status: closed (charter measured-complete)]
 - statement: NEW STRAIN (rotated in for critical-path). Close the gap between
   actual cycles and the valu floor (1087 vs ~1061 = 26 cycles of scheduling
   friction): ListScheduler lookahead/priority experiments (critical-chain
@@ -260,8 +260,15 @@ strain STATE.md and the driver promotes them here.
   (which the (4,3) sweep already optimized), and per-engine tie-break rules.
   Rust-harness modeling (H-012) to bound what perfect scheduling could give.
 - predicted: -10..-26 cyc (bounded by the floor gap). cost: M.
-- result:
-- log: 2026-07-23 opened at strain rotation.
+- result: CLOSED iter 4, honest zero with full map: the 26-cycle gap is
+  13 cyc latency-bound drain (last block's L4-served groups, ~17-level
+  post-parity chain staircase), 9 cyc load-throughput-bound setup ramp,
+  4 cyc seams. RAW 141/158 gap-binding hazards; pools fine. NOT scheduling
+  friction: emission-order/tie-break/reordering variants all >= 1070
+  (stage 1092, stage_all 1161 -- G-5 confirmed at op granularity). Trace
+  hook + tools/sched_profile.py landed for future profiling. Successors
+  promoted: H-023 (b3-last), H-024 (setup const derivation).
+- log: 2026-07-23 opened; iter 4 closed; strain retired (charter done).
 
 ### H-022 [strain: sweep] [status: open]
 - statement: grid additions from H-019's P-8: u_race x l4_race subsets x
@@ -269,3 +276,24 @@ strain STATE.md and the driver promotes them here.
 - predicted: -1..-5. cost: S. depends: none.
 - result:
 - log: 2026-07-23 promoted from flow-balance P-8.
+
+### H-023 [strain: flow-balance] [status: open]
+- statement: b3-last final-round L4 tournament (H-021's lead): reverse the
+  served-L4 fold order so the newest parity (r14's, arriving last) selects
+  LAST instead of first -- post-parity chain drops ~17 -> ~11 levels,
+  attacking the measured 13-cycle drain staircase directly. Cost-neutral op
+  count (15 selects vs 8 madds + 7 selects) but needs all-8 odd tables
+  (scratch: only 6 words free -- fund by dropping l4_race odd tables on
+  non-final rounds or trading a pool slot; measure).
+- predicted: -5..-8 cyc. cost: M. depends: none.
+- result:
+- log: 2026-07-23 promoted from scheduler follow-up 1.
+
+### H-024 [strain: scheduler->sweep] [status: open]
+- statement: setup load-slot removal: derive hash-constant scalars from each
+  other on alu (kq = kp<<9, aq from ap, etc.) instead of load:const slots;
+  frees ~load slots during the 2/2-saturated 20-cycle setup ramp where
+  vbroadcasts wait on lv vloads.
+- predicted: -3..-9 cyc. cost: S. depends: none.
+- result:
+- log: 2026-07-23 promoted from scheduler follow-up 2.
