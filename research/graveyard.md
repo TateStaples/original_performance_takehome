@@ -74,3 +74,13 @@ Seeded 2026-07-23 from the 2148->1140 campaign's measured rejections.
   not parity arrival. Supersedes G-1's reopen-if (tested and still negative).
 - reopen-if: valu AND flow both gain >=10% headroom, or the L4 fold chain
   shortens structurally (e.g. H-003 finds a shorter select form).
+
+### G-10 Shorter hash forms via segment fusion search (H-003)
+- statement: a <11-op hash (or <12 w/ fold-in, <13 w/ parity) exists.
+- evidence: exhaustive per-segment search, ~400B candidates: every adjacent
+  cut of the chain at depth current-1, fold-in head 5->4 (130.6B),
+  cross-round tail 5->4 (126.3B), parity-from-c <=4 (66.2B) — all negative.
+  Searcher self-test rediscovers the known stage2∘3 fusion. NOT a global
+  minimality proof (global space ~10^28).
+- reopen-if: H-016 (MITM 6->5) finds a hit, or HASH_STAGES changes, or a
+  non-adjacent/algebraic (non-compositional) identity is conjectured.

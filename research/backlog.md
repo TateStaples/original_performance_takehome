@@ -36,7 +36,7 @@ strain STATE.md and the driver promotes them here.
   kernel is valu-THROUGHPUT-bound: all variants 1145-1198 vs 1140. See G-8.
 - log: 2026-07-23 opened; assigned iter 1; rejected iter 1.
 
-### H-003 [strain: op-reduction] [status: testing]
+### H-003 [strain: op-reduction] [status: rejected -> graveyard G-10]
 - statement: Machine-search for further hash fusions: extend
   rust_harness/src/problem.rs with a searcher over op-sequences
   (multiply_add/xor/shift/add compositions) equivalent to (a) the 6-stage hash
@@ -47,8 +47,12 @@ strain STATE.md and the driver promotes them here.
 - predicted: -68 cyc per saved op/eval. Uncertain (may prove 11 minimal —
   that negative result is valuable too: closes the strain's biggest unknown).
 - cost: M. depends: none.
-- result:
-- log: 2026-07-23 opened; assigned iter 1.
+- result: CLOSED iter 1 (negative, high-value). ~400B candidates over every
+  adjacent-segment cut of the 11-op chain (+fold-in head, cross-round tail,
+  parity): NO shorter form (inexhaustive at global scale, exhaustive per
+  segment). Byproducts: 2-op parity extractors (hashseg::PAR_D_*/PAR_E_*),
+  and the P-1 C5-commute insight -> promoted as H-015. See G-10.
+- log: 2026-07-23 opened; assigned iter 1; closed iter 1.
 
 ### H-004 [strain: op-reduction] [status: open]
 - statement: Fold the idx/state update `p := 2p + b` (one madd per group-round,
@@ -151,3 +155,25 @@ strain STATE.md and the driver promotes them here.
 - predicted: -5..-20 cyc. cost: S-M. depends: none (words available now).
 - result:
 - log: 2026-07-23 promoted from critical-path follow-ups.
+
+### H-015 [strain: op-reduction] [status: open] [PRIORITY: mainline candidate]
+- statement: C5-pre-xor value domain (H-003's P-1): pre-xor all 2047 tree
+  values with C5 once (~256 vload+vxor+vstore hidden in the gather-free early
+  rounds on the 1.4%-busy store engine; tournament E/D tables derived from
+  pre-xored values at preload; initial vals pre-xored at load), then every
+  round's stage 5 drops `^C5`: val' = e ^ (e>>16) ^ n' — 3 ops instead of 4.
+  Parity flips by C5&1: absorb into omf/rec offset constants (0 extra ops).
+  Last round emits true val (+32 vxors).
+- predicted: -4096 lane-ops gross ≈ -68 cyc; net -45..-60 cyc -> ~1080-1095.
+- cost: M. depends: none. Touches preload + tournament constants + store path.
+- result:
+- log: 2026-07-23 promoted from op-reduction P-1; queued iter 2.
+
+### H-016 [strain: op-reduction] [status: open]
+- statement: Extend fusion_search with meet-in-the-middle (forward-2
+  signatures x invertible-backward-2) to push the two 5->4 boundary
+  questions to 6->5 (stage1∘f23 span, b2d) and cross-round to depth 5 —
+  the only remaining unsearched shortening candidates below global scale.
+- predicted: uncertain; each hit -68 cyc. cost: S-M. depends: none.
+- result:
+- log: 2026-07-23 promoted from op-reduction P-3.
