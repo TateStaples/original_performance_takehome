@@ -1994,7 +1994,10 @@ struct MTarget {
     current_ops: usize,
     /// Engine A (forward-only exhaustive) depth; 0 = already closed in H-003.
     lean_kmax: usize,
-    /// Forward pool: engines A/B DFS and engine C's prefix tables.
+    /// Engine A pool override (empty = use `pool`). Two-input k=4 runs need a
+    /// leaner pool than the MITM engines to stay within a CPU budget.
+    lean: Vec<(&'static str, u32)>,
+    /// Forward pool: engines B DFS and engine C's prefix tables.
     pool: Vec<(&'static str, u32)>,
     /// Seeds for the link-constant pool (enriched + capped).
     seed: Vec<u32>,
@@ -2072,6 +2075,7 @@ fn mitm_targets() -> Vec<MTarget> {
             n_inputs: 1,
             current_ops: 6,
             lean_kmax: 4,
+            lean: vec![],
             pool: mk(&[
                 ("C1", C1),
                 ("KP", KP),
@@ -2095,6 +2099,15 @@ fn mitm_targets() -> Vec<MTarget> {
             n_inputs: 2,
             current_ops: 6,
             lean_kmax: 4,
+            lean: mk(&[
+                ("C0", C0),
+                ("K0", K0),
+                ("C4", C4),
+                ("C5", C5),
+                ("C5i", c5i),
+                ("s16", 16),
+                ("s3", 3),
+            ]),
             pool: mk(&[
                 ("C0", C0),
                 ("K0", K0),
@@ -2119,6 +2132,14 @@ fn mitm_targets() -> Vec<MTarget> {
             n_inputs: 2,
             current_ops: 5,
             lean_kmax: 4,
+            lean: mk(&[
+                ("C0", C0),
+                ("K0", K0),
+                ("C4", C4),
+                ("K4", 9),
+                ("s16", 16),
+                ("s3", 3),
+            ]),
             pool: mk(&[
                 ("C0", C0),
                 ("K0", K0),
@@ -2141,7 +2162,8 @@ fn mitm_targets() -> Vec<MTarget> {
             desc: "cross-round from e (H-003 xr4, richer pool): stage0(stage5(e) ^ n)",
             n_inputs: 2,
             current_ops: 5,
-            lean_kmax: 4,
+            lean_kmax: 0,
+            lean: vec![],
             pool: mk(&[
                 ("C0", C0),
                 ("C5", C5),
@@ -2164,7 +2186,8 @@ fn mitm_targets() -> Vec<MTarget> {
             desc: "fold-in head (H-003 head3, richer pool): stage1(stage0(v ^ n))",
             n_inputs: 2,
             current_ops: 5,
-            lean_kmax: 4,
+            lean_kmax: 0,
+            lean: vec![],
             pool: mk(&[
                 ("C0", C0),
                 ("C1", C1),
@@ -2188,6 +2211,7 @@ fn mitm_targets() -> Vec<MTarget> {
             n_inputs: 2,
             current_ops: 4,
             lean_kmax: 3,
+            lean: vec![],
             pool: mk(&[
                 ("C0", C0),
                 ("K0", K0),
@@ -2209,7 +2233,8 @@ fn mitm_targets() -> Vec<MTarget> {
             desc: "stage1-tail through stage4 (H-003 u2e, richer pool): stage4(f23(u ^ C1))",
             n_inputs: 1,
             current_ops: 5,
-            lean_kmax: 4,
+            lean_kmax: 0,
+            lean: vec![],
             pool: mk(&[
                 ("C1", C1),
                 ("KP", KP),
@@ -2234,7 +2259,8 @@ fn mitm_targets() -> Vec<MTarget> {
             desc: "interior 7-op span: f23(stage1(stage0(a)))",
             n_inputs: 1,
             current_ops: 7,
-            lean_kmax: 4,
+            lean_kmax: 3,
+            lean: vec![],
             pool: mk(&[
                 ("C0", C0),
                 ("C1", C1),
@@ -2259,7 +2285,8 @@ fn mitm_targets() -> Vec<MTarget> {
             desc: "interior 7-op span: stage4(f23(stage1(b)))",
             n_inputs: 1,
             current_ops: 7,
-            lean_kmax: 4,
+            lean_kmax: 3,
+            lean: vec![],
             pool: mk(&[
                 ("C1", C1),
                 ("KP", KP),
@@ -2284,7 +2311,8 @@ fn mitm_targets() -> Vec<MTarget> {
             desc: "interior 7-op span: stage5(stage4(f23(c)))",
             n_inputs: 1,
             current_ops: 7,
-            lean_kmax: 4,
+            lean_kmax: 3,
+            lean: vec![],
             pool: mk(&[
                 ("KP", KP),
                 ("AP", AP),
@@ -2316,8 +2344,14 @@ fn run_mitm_target(tg: &MTarget, threads: usize) {
     );
     let t_start = Instant::now();
 
-    // Engine A: forward-only exhaustive over the pool (full coverage k <= lean_kmax).
-    let ctx_a = build_ctx(tg.n_inputs, &tg.pool, &*tg.f);
+    // Engine A: forward-only exhaustive (full j=0 coverage at k <= lean_kmax)
+    // over the target's engine-A pool.
+    let pool_a = if tg.lean.is_empty() {
+        &tg.pool
+    } else {
+        &tg.lean
+    };
+    let ctx_a = build_ctx(tg.n_inputs, pool_a, &*tg.f);
     if tg.lean_kmax > 0 {
         println!(
             "   engine A (forward exhaustive, k <= {}): pool [{}]",
