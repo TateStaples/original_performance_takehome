@@ -82,5 +82,11 @@
     "label": "parity conds\n(H-001)",
     "cycles": 1130,
     "note": "Tournament conditions from raw parity vectors riding the dead nv buffer; cond-extraction masks eliminated (alu 94.6->87.0%). First research-loop accept."
+  },
+  {
+    "step": "vsel_auto",
+    "label": "schedule-aware\nfold placement (H-017)",
+    "cycles": 1107,
+    "note": "First tournament folds race flow-vselect vs valu-madd at emission (243/448 flip); L4 service retuned to (20,29), pools (16,3). Hard flip rejected per G-4; valu floor now 1073 cyc-equiv."
   }
 ]

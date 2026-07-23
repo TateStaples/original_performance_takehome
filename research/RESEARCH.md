@@ -7,12 +7,13 @@
 
 | cycles | commit | config |
 |---|---|---|
-| 1130 | (iter-1 close) | `build_kernel_scheduled(tournament_levels=(1,2,3), alu_offload=True, parity_conds=True)` + tuned defaults |
+| 1107 | (iter-2) | `tournament_levels=(1,2,3), alu_offload=True, parity_conds=True, vsel_auto=(1,2,3), pool_sizes=(16,3), l4_gmin=(20,29)` |
 
 ## Floors (calibrated 2026-07-23, see tools/diagnose_kernel.py)
 
-- Op-mix floor: valu is now THE binding engine: 6634 valu slots / 6 = ~1106
-  cycle-equivalents at 1130 actual (alu relieved to 87.0% by H-001).
+- Op-mix floor: valu still binding: 6439 slots / 6 = ~1073 cycle-equivalents
+  at 1107 actual (34 cyc scheduling slack). flow 58.3%, alu 87.6%, load 89.6%.
+- Scratch: 1519/1536 -- 17 words FREE (first headroom since iter 0).
 - Flow-offload ceiling: floor -> ~962 if routing/idx arithmetic moves to flow (29.6% used)
 - Load floor: 1,936 gathers / 2 per cyc = 968 (load 87.4% busy)
 - Hash-only absolute floor: 49,152 lane-ops / 60 per cyc = 819
@@ -41,5 +42,6 @@ Global: 6 dry iterations -> one cross-pollination iteration. Status report to us
 
 - 2026-07-23: loop initialized at 1140 (commit b68a302). Target 1000.
 - 2026-07-23: iter 1 -> 1130 (H-001 parity_conds). First loop accept.
+- 2026-07-23: iter 2 -> 1107 (H-017 vsel_auto). Crossed 1111 (the old op-mix floor).
 
-- iter 2 (in flight) | H-014 REJECTED by measurement (0 nv-bound gathers; load slot-contention-bound) -> G-11. H-015, H-017 running; re-sweep negative | best 1130
+- iter 2 (in flight) | H-014 REJECTED (0 nv-bound gathers) -> G-11; H-017 vsel_auto ACCEPTED 1107 (-23), hard flip -> G-12, dispatch flipped; H-015 still running; re-sweep negative | best 1107

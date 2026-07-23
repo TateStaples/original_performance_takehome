@@ -185,7 +185,7 @@ strain STATE.md and the driver promotes them here.
 - result:
 - log: 2026-07-23 promoted from op-reduction P-3.
 
-### H-017 [strain: flow-balance] [status: open]
+### H-017 [strain: flow-balance] [status: accepted]
 - statement: madd->vselect flip of tournament FIRST-folds, nearly free under
   parity_conds (H-001's P-1): store odd-value vectors O_vecs at setup (same
   scratch as D_vecs), conds are raw parities, first fold becomes
@@ -194,8 +194,12 @@ strain STATE.md and the driver promotes them here.
 - predicted: -10..-30 cyc (valu now the binding floor at ~1106). cost: S-M.
 - depends: parity_conds (in mainline). Watch G-4: only first-folds, chain
   length unchanged (vselect replaces madd at the same depth).
-- result:
-- log: 2026-07-23 promoted from flow-balance P-1; queued iter 2.
+- result: ACCEPTED iter 2: 1107 (-23) via `vsel_auto` schedule-aware racing
+  (flow vselect iff its slot strictly beats valu's; 243/448 folds flip; dual
+  D+O tables funded by one cond slot). Hard flip REJECTED all 15 subsets
+  (1136-1196): flow idle is anti-correlated with fold windows -> G-12.
+  L4 retune confirmed: l4_gmin=(20,29), pools (16,3). 17 words now FREE.
+- log: 2026-07-23 promoted; iter 2 ACCEPTED, dispatch flipped.
 
 ### H-018 [strain: flow-balance] [status: open]
 - statement: valu madd diet: hunt the lagged p-fold madds and epoch-exit
@@ -204,3 +208,21 @@ strain STATE.md and the driver promotes them here.
 - predicted: -5..-20 cyc. cost: M. depends: H-001 (in mainline).
 - result:
 - log: 2026-07-23 promoted from flow-balance P-2.
+
+### H-019 [strain: flow-balance] [status: open]
+- statement: Generalize dual placement (H-017's P-4): partial-L4 vsel_auto
+  (17 free words fund 2 of 8 W-pair odd tables) and a ListScheduler
+  `emit_any(encodings)` primitive unifying the fold race with the alu-split
+  race — every multi-encoding op placed wherever it retires earliest.
+- predicted: -5..-15 cyc (valu floor 1073 vs 1107 actual = 34 cyc of slack
+  to harvest). cost: M. depends: H-017 (in mainline).
+- result:
+- log: 2026-07-23 promoted from flow-balance P-4.
+
+### H-020 [strain: sweep] [status: open]
+- statement: pool-shape x vsel_auto interaction sweep ((16,3) beat (17,3) by
+  2): re-run full grid under the 1107 mainline; add vsel_auto level subsets
+  and partial-L4 variants to the grid as they land.
+- predicted: -2..-8 cyc. cost: S (background). depends: none.
+- result:
+- log: 2026-07-23 promoted from flow-balance P-5.

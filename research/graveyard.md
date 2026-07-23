@@ -96,3 +96,12 @@ Seeded 2026-07-23 from the 2148->1140 campaign's measured rejections.
 - reopen-if: an accepted change makes gaddr available BEFORE round r's nv
   reads complete (impossible under the current address recurrence; the
   H-002 earliness family is itself G-8-closed).
+
+### G-12 Hard madd->vselect first-fold flip (H-017 hard variant)
+- statement: unconditionally moving tournament first-folds to flow wins.
+- evidence: all 15 level subsets lose (1136-1196 vs 1130). Windowed profile:
+  flow idle is ANTI-correlated with fold readiness (66-92% busy in fold
+  windows, ~0% in gather stretches); a skew block's 8 groups' folds ready in
+  ~2 cycles and serialize on the 1-slot engine. Confirms and sharpens G-4.
+- reopen-if: n/a — superseded by the accepted schedule-aware vsel_auto,
+  which subsumes every case where the flip helps.
