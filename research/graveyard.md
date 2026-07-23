@@ -84,3 +84,15 @@ Seeded 2026-07-23 from the 2148->1140 campaign's measured rejections.
   minimality proof (global space ~10^28).
 - reopen-if: H-016 (MITM 6->5) finds a hit, or HASH_STAGES changes, or a
   non-adjacent/algebraic (non-compositional) identity is conjectured.
+
+### G-11 nv double-buffering (H-014)
+- statement: removing the gather->nv WAR edge lets the load engine run ahead.
+- evidence: instrumented ListScheduler.ready() decomposition over all 1,936
+  gathers: nv hazard binds ZERO loads; counterfactual (nv terms deleted)
+  moves zero. Structural: nv's last read is the round's first hash op while
+  the gather address st is written ~12 dependency levels later — RAW-on-st
+  strictly dominates. Loads are slot-contention-bound (64,440 queue-cycles).
+  Robust across pools/skews/l4_gmin/parity_early/no-tournament configs.
+- reopen-if: an accepted change makes gaddr available BEFORE round r's nv
+  reads complete (impossible under the current address recurrence; the
+  H-002 earliness family is itself G-8-closed).

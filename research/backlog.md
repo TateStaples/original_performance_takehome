@@ -81,9 +81,10 @@ strain STATE.md and the driver promotes them here.
 
 ### H-006 [strain: flow-balance] [status: open]
 - statement: Load-side tricks: vload-batch gathers when 8 walkers' addresses
-  are coincidentally contiguous (measure frequency first); revisit pair-gather
-  (both children fetched a round early) IF scratch is freed and load is no
-  longer the binding engine on the target rounds (see graveyard G-3).
+  are coincidentally contiguous (measure frequency first — the nv-WAR
+  instrumentation hook from H-014 measures contiguity too); revisit
+  pair-gather IF load stops binding on target rounds (G-3). H-014's result
+  says slot DEMAND reduction is the only live load-engine lever.
 - predicted: -10..-40 cyc. cost: M. depends: scratch relief — NOTE: 32 words
   now known freeable at zero cost via pool_sizes=(17,3) (H-002 side finding).
 - result:
@@ -152,13 +153,15 @@ strain STATE.md and the driver promotes them here.
 - result:
 - log: 2026-07-23 promoted from critical-path follow-ups.
 
-### H-014 [strain: critical-path] [status: open]
+### H-014 [strain: critical-path] [status: rejected -> graveyard G-11]
 - statement: Spend the 32 freed words (pool_sizes=(17,3)) on load-side state:
   nv double-buffering so gathers for round r+1 never wait on round r's nv
   consumption (today nv is reused; check ListScheduler WAR stalls on nv+lane).
 - predicted: -5..-20 cyc. cost: S-M. depends: none (words available now).
-- result:
-- log: 2026-07-23 promoted from critical-path follow-ups.
+- result: REJECTED iter 2 by direct measurement: 0/1,936 gathers nv-bound
+  (instrumented ready() decomposition; counterfactual moves 0 loads). Load
+  is slot-contention-bound (~33 cyc avg backlog). See G-11.
+- log: 2026-07-23 promoted; iter 2 measured and rejected.
 
 ### H-015 [strain: op-reduction] [status: open] [PRIORITY: mainline candidate]
 - statement: C5-pre-xor value domain (H-003's P-1): pre-xor all 2047 tree

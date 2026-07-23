@@ -23,9 +23,9 @@
 
 | strain | charter | status |
 |---|---|---|
-| flow-balance | exploit idle flow engine + load-side tricks | active (iter 1: H-001) |
-| critical-path | cut the dependency chain stalling the load stream | active (iter 1: H-002) |
-| op-reduction | fewer lane-ops via algebra (hash fusions, idx folds) | active (iter 1: H-003) |
+| flow-balance | exploit idle flow engine + load-side tricks | active (iter 2: H-017) |
+| critical-path | gather-path latency/buffering plays | NEARLY TAPPED: G-8/G-9/G-11 all measured-dead; only H-010 live; rotate next dry iter |
+| op-reduction | fewer lane-ops via algebra (hash fusions, idx folds) | active (iter 2: H-015) |
 | sweep | pure-compute parameter grid (no LLM) | active (background, H-005) |
 
 Retirement: 3 consecutive dry iterations -> retire, promote from backlog/graveyard (reopen-if satisfied).
@@ -41,3 +41,5 @@ Global: 6 dry iterations -> one cross-pollination iteration. Status report to us
 
 - 2026-07-23: loop initialized at 1140 (commit b68a302). Target 1000.
 - 2026-07-23: iter 1 -> 1130 (H-001 parity_conds). First loop accept.
+
+- iter 2 (in flight) | H-014 REJECTED by measurement (0 nv-bound gathers; load slot-contention-bound) -> G-11. H-015, H-017 running; re-sweep negative | best 1130
