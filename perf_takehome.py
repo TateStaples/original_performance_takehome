@@ -2083,14 +2083,35 @@ class KernelBuilder:
         # overlap another block's load-bound gather levels and both engines
         # stay busy. skew = (block_count, rounds_of_lag_per_block), or an
         # explicit per-block lag list for an asymmetric diagonal.
-        if isinstance(skew, list):
+        # External-repo comparison (2026-07-23): they skew 32 tiles into 13
+        # UNEVEN blocks (stagger 2) rather than our 4 EQUAL blocks (stagger
+        # 3) -- ceil(32/13) sized ranges via integer-division cut points,
+        # same partition shape as Python's range-splitting. Support that as
+        # a third skew form: a list of (lag, group_iterable) pairs, so
+        # blocks need not be equal-sized or contiguous by a fixed stride.
+        if isinstance(skew, list) and skew and isinstance(skew[0], tuple):
+            block_specs = skew  # [(lag, group_range), ...] directly
+            # bs_ elsewhere means "size of the LAST skew block" (H-023's
+            # dead-register timing, H-027's early-death groups) -- with
+            # uneven blocks there's no single block size, so use the
+            # last block's actual size, which is what those call sites
+            # actually care about.
+            bs_ = len(list(block_specs[-1][1]))
+        elif isinstance(skew, list):
             lags = skew
+            if n_groups % len(lags) != 0:
+                lags = [0]  # degenerate shapes: no skew
+            bs_ = n_groups // len(lags)
+            block_specs = [(lg, range(b * bs_, (b + 1) * bs_))
+                           for b, lg in enumerate(lags)]
         else:
             n_blocks, lag = skew
-            lags = [lag * b for b in range(n_blocks)]
-        if n_groups % len(lags) != 0:
-            lags = [0]  # degenerate shapes: no skew
-        bs_ = n_groups // len(lags)
+            if n_groups % n_blocks != 0:
+                n_blocks, lag = 1, 0
+            bs_ = n_groups // n_blocks
+            block_specs = [(lag * b, range(b * bs_, (b + 1) * bs_))
+                           for b in range(n_blocks)]
+        lags = [lg for lg, _ in block_specs]
         n_steps = rounds + max(lags)
         # "stage_tail:N": group order in the saturated middle, per-block
         # stage interleave only on the last N diagonal steps (the drain,
@@ -2107,10 +2128,10 @@ class KernelBuilder:
             order = "group"
         for t in range(n_steps):
             waves = []  # (round, group-range) active at this diagonal step
-            for b, lb in enumerate(lags):
+            for lb, gs_ in block_specs:
                 r = t - lb
                 if 0 <= r < rounds:
-                    waves.append((r, range(b * bs_, (b + 1) * bs_)))
+                    waves.append((r, gs_))
             step_order = tail_mode if t >= tail_from else order
             if step_order == "group":
                 for r, gs in waves:

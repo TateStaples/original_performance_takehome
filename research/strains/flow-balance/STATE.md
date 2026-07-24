@@ -596,14 +596,46 @@ H-009, H-011.
     contiguous threshold for THIS kernel's structure — but the search
     was small (a handful of hand-picked swaps, not a real search), so
     "not found yet" rather than "ruled out."
-  - status: OPEN, gap not closed. What's NOT yet checked: their
-    finer-grained skew (13 groups/stagger 2 vs our 4/stagger 3) and
-    their critical-path-priority scheduler — both bigger, riskier
-    structural changes than anything tried this pass, flagged as the
-    most likely remaining sources of the 125-slot gap since the cheaper
-    hypotheses (constant-commuting scope, simple L4 set swaps) were
-    checked and didn't pan out. Recommend a dedicated session to
-    (a) do a REAL non-contiguous L4 search (not hand-picked swaps) once
-    the idx_select crash is root-caused enough to bound it safely, and
-    (b) prototype the finer skew shape, before concluding the gap is
-    scheduler-bound.
+  - SKEW-SHAPE PROTOTYPED 2026-07-23 (the "b" follow-up from the note
+    below): generalized `skew` to accept a third form — a list of
+    `(lag, group_iterable)` tuples directly, not just equal-sized blocks
+    at a fixed stride — so uneven partitions like the external repo's
+    32-tiles-into-13-groups (via the same `g*n/k .. (g+1)*n/k` cut
+    points Python's range-splitting uses) are expressible. Verified
+    bit-identical for the existing tuple/int skew forms (default still
+    1053). Swept ~20 shapes at idx_select+l4_gmin=(9,30): their exact
+    shape (13 groups, stagger 2) measured 1077 — WORSE than our 1043.
+    Tried neighboring group-counts (6,8,10,13,16,32) x staggers (1-4)
+    and a few uneven-group-size variants; the ONLY shape that even TIED
+    mainline was 8 equal blocks of 4 at stagger 2 (1043, a genuinely
+    different shape from mainline's 4-blocks-of-8/stagger-3 that
+    happens to reach the same floor) — nothing BEAT it. Conclusion:
+    skew shape is not where the remaining gap lives, at least not
+    findable by direct search in this pass.
+  - status: GAP NOT CLOSED (1043 vs 1026, 17 cyc). Both cheaper-tier
+    hypotheses now checked and ruled out this session: constant-
+    commuting scope (refuted — narrowing it is a net loss) and skew
+    shape (swept ~20 variants, none beat 1043). What's left unexamined
+    is their scheduler architecture: they build a full task list with
+    explicit dependency/anti-dependency edges up front, compute a
+    priority per task (1 + max priority of dependents — i.e. longest
+    path to a sink, classic critical-path list-scheduling), and THEN
+    schedule greedily by that priority. Our ListScheduler is a
+    streaming/immediate-placement design — `_egr_stages` emits ops as
+    Python control flow executes and each op is placed greedily at its
+    earliest feasible slot the moment it's emitted, with `emit_any`
+    racing multi-encoding ops at emission time. These are genuinely
+    different architectures, not a tunable — converting ours to
+    collect-then-schedule-by-priority would touch the coroutine-based
+    round-emission core across the whole file, is high-risk to a
+    kernel that already works well, and its payoff is unproven (our
+    racing mechanisms already reach comparable engine utilization
+    numbers; the gap might be scheduling-order-sensitive in a way
+    priority-based selection helps with, or might not). Recommend
+    treating this as its own dedicated, isolated experiment (e.g.
+    prototype priority-based tie-breaking as a lighter-weight change —
+    sort ready ops by estimated downstream depth before feeding them to
+    the existing greedy placer, rather than a full task-graph rewrite —
+    before committing to the larger architecture change) rather than
+    continuing ad hoc searches in this pass; the cheap and medium levers
+    are exhausted.
