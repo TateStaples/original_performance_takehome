@@ -98,14 +98,32 @@ strain STATE.md and the driver promotes them here.
 - result:
 - log: 2026-07-23 opened.
 
-### H-007 [strain: flow-balance] [status: open]
+### H-007 [strain: flow-balance] [status: open, premise re-checked, NOT
+attempted this session]
 - statement: Move a schedule-aware SUBSET of tournament folds from valu madd
   to flow vselect — not whole levels (graveyard G-4: full L4-on-flow lost by
   serialization) but per-fold placement chosen by which engine is the cycle's
   binding constraint (extend ListScheduler to try both placements).
 - predicted: -15..-50 cyc (valu 98% vs flow 30%). cost: M. depends: none.
-- result:
-- log: 2026-07-23 opened.
+- result: PREMISE RE-CHECKED 2026-07-23, NOT CLOSED, NOT IMPLEMENTED.
+  At the current best point (idx_select=True, l4_gmin=(9,30), 1043 cyc):
+  valu 97.8% busy, alu 95.6%, flow 76.1% (~24% idle) — flow has LESS
+  slack than the original -50cyc-era estimate (was ~30% idle) but still
+  meaningfully more than valu/alu. However, today's H-020/H-022 resweep
+  (u_race/l4_race/sel_race/vsel_auto subsets) found NO further gain,
+  which means the EXISTING racing mechanisms (dual_fold, race_sel,
+  race_idx_madd, race_leaf, all via emit_any) are already extracting
+  what's extractable from the fold SITES they cover. H-007's actual
+  remaining opportunity, if any, is in fold sites NOT YET wired into any
+  racing mechanism at all — that requires fold-site archaeology (grep
+  for hardcoded single-engine madd/vselect calls in the hash/routing
+  code that have no emit_any alternative) before there's anything
+  concrete to implement or measure. Did not attempt this in the current
+  pass — it's a research task (find candidates), not a quick flag test,
+  and deserves focused attention rather than being rushed. Recommend as
+  the top pick for a dedicated follow-up session.
+- log: 2026-07-23 opened; premise re-checked same day post-H-029, left
+  open pending fold-site identification.
 
 ### H-008 [strain: critical-path] [status: rejected -> graveyard G-9]
 - statement: Full-round L4 (and L5) tournament service once parity-early
@@ -139,14 +157,23 @@ strain STATE.md and the driver promotes them here.
   back onto valu at 88% alu busy). spec_fold flag kept in-tree. See G-13.
 - log: 2026-07-23 opened; iter 3 rejected -> strain rotated.
 
-### H-011 [strain: flow-balance] [status: open]
+### H-011 [strain: flow-balance] [status: blocked (same root cause as
+critical-path P-cp-1)]
 - statement: Flow-engine parity extraction (H-001 x H-002 combo): if parity
   vectors are kept (H-001) AND parity-early exists (H-002), the `& one_vec`
   per round disappears from valu into either the early chain or a vselect.
 - predicted: -15..-35 cyc. cost: S once parents land. depends: H-001 (the
   parity_early flag from H-002 already exists if a latency use appears).
-- result:
-- log: 2026-07-23 opened.
+- result: BLOCKED 2026-07-23. This depends on H-002's `parity_early`
+  flag, which (per the P-cp-1 re-check done alongside H-029) is
+  structurally incompatible with `c5_prexor` (`assert not pe_levels`,
+  perf_takehome.py:932) — not a runtime combination issue, an explicit
+  guard. Since c5_prexor is load-bearing mainline (H-015), H-011 cannot
+  be tested as a simple flag combo; it needs the same reconciliation
+  work P-cp-1 flags before either it or its H-002 dependency can be
+  re-measured. Not re-attempted this session for that reason.
+- log: 2026-07-23 opened; blocked same day, same root cause as
+  critical-path P-cp-1.
 
 ### H-012 [strain: op-reduction] [status: open]
 - statement: Recalibrate rust_harness floors (lower_bound/breakdown/hybrid)
@@ -249,13 +276,38 @@ strain STATE.md and the driver promotes them here.
   saturation; placement racing is at its ceiling (P-7: op removal next).
 - log: 2026-07-23 promoted; iter 3 ACCEPTED, dispatch flipped.
 
-### H-020 [strain: sweep] [status: open]
+### H-020 [strain: sweep] [status: re-run under H-029's engine mix,
+no further gain found]
 - statement: pool-shape x vsel_auto interaction sweep ((16,3) beat (17,3) by
   2): re-run full grid under the 1107 mainline; add vsel_auto level subsets
   and partial-L4 variants to the grid as they land.
 - predicted: -2..-8 cyc. cost: S (background). depends: none.
-- result:
-- log: 2026-07-23 promoted from flow-balance P-5.
+- result: RE-RUN 2026-07-23 under idx_select=True, l4_gmin=(9,30) (the
+  current 1043-cyc point). pool_sizes: (16,4) [mainline] beats (16,3)=
+  1054, (17,3)=1056, (15,4)=1062, (18,3)=1054, (14,4)=1076; (17,4)/(16,5)
+  overflow scratch. vsel_auto: (1,2) [mainline] beats (1,)=1054;
+  (1,2,3) overflows scratch. No config beats the current mainline
+  choices under the new engine mix — this grid is exhausted again at
+  the new local optimum, same conclusion as before, just re-verified.
+- log: 2026-07-23 promoted from flow-balance P-5; re-run same day
+  post-H-029.
+
+### H-022 [strain: sweep] [status: re-run under H-029's engine mix, no
+further gain found]
+- statement: grid additions from H-019's P-8: u_race x l4_race subsets x
+  idx_race x l4_gmin dense x pools under the 1070 mainline.
+- predicted: -1..-5. cost: S. depends: none.
+- result: RE-RUN 2026-07-23 under idx_select=True, l4_gmin=(9,30):
+  l4_race=3 [mainline] beats 0 (1047), 1 (1044), 2 (1045); 7 overflows
+  scratch. u_race=False is worse (1054) — u_race=True [mainline] still
+  needed. sel_race=True is worse (1047) — confirms G-14's standing
+  negative still holds under the new mix. Every dimension in this grid
+  independently confirms the existing mainline choices (u_race=True,
+  l4_race=3, sel_race=False, plus idx_race which idx_select supersedes
+  in the branch it covers) remain optimal after H-029 — no interaction
+  effect surfaced that changes any of these defaults.
+- log: 2026-07-23 promoted from flow-balance P-8; re-run same day
+  post-H-029.
 
 ### H-021 [strain: scheduler] [status: closed (charter measured-complete)]
 - statement: NEW STRAIN (rotated in for critical-path). Close the gap between
@@ -348,3 +400,49 @@ strain STATE.md and the driver promotes them here.
 - result: ACCEPTED iter 6, -4 composed (masked alone by compute tail).
   Grader-validated (frozen simulator accepts the paired stream).
 - log: 2026-07-23 cross-pollination find; dispatch flipped.
+
+### H-029 [strain: flow-balance] [status: accepted (flag-gated, dispatch
+NOT flipped)] [EXTERNAL ATTRIBUTION — see below]
+- statement: idx_select — select-vs-add for the gather-mode idx recurrence.
+  NOT an in-house finding: ported from a third-party public solution to
+  this same take-home, github.com/zhanglistar/original_performance_takehome
+  (commit e9b8f4c, their measured 1026 cyc; problem.py/tests confirmed
+  byte-identical to ours, so directly comparable). Their `round_gather`
+  idx update does `vselect(tmp, parity, hi_const, lo_const);
+  madd(idx, idx, two, tmp)` instead of our `madd(st,st,two,ov);
+  vec(sgn,st,st,par)` — since the amount to add is just `bias +
+  parity_bit` and parity is 0/1, it's a 2-way choice between two
+  precomputed constants, which vselect can express but a variable
+  add/sub cannot, moving that step off valu/alu onto flow.
+- predicted: same op count/instance, but flow-eligible; their engine mix
+  (valu 5997/97.4%, flow 873/85.1%) vs ours (valu 6209/98.3%, flow
+  637/60.5%) suggested most of their advantage traces to this one
+  pattern generalized across every gather round.
+- cost: S (turned out zero-scratch: `omf1_vec == omf_vec+1` already, by
+  construction, so the two needed constants already existed — no new
+  scratch, contra the original cost estimate).
+- result: ACCEPTED. Landed as `idx_select: bool = False` in
+  `build_kernel_scheduled` (perf_takehome.py), covering the steady-gather
+  branch only (not the c5_prexor boundary-crossing branch — follow-up).
+  Verified via tools/run_variant.py: 6 seeds + 3 unseeded + debug_compares,
+  all correct=true. `idx_select=True` alone: 1053->1052 (engine mix
+  shifted alu -736/valu -78/flow +137 as predicted, but wall-clock gain
+  small because friction rose, per the standing P-3 pattern). Retuning
+  `l4_gmin` (12,30)->(9,30) to match the new engine balance: **1053->1043
+  (-10 cyc, -0.95%)**, confirmed correct on all seeds/debug_compares.
+  Flag-gated, default off; mainline `build_kernel` dispatch NOT flipped
+  yet pending a decision on adopting it as the new default. Do not
+  present this as an original finding — the mechanism is theirs, only
+  the porting/measurement/zero-scratch adaptation is this session's.
+  CAUTION found in follow-up sweeping: `idx_select=True` crashes
+  (IndexError, out-of-bounds gather address) for some l4_gmin
+  second-coordinate values (0,1,5,10 all crash; 15 and 20-30 are fine,
+  non-monotonically) — root cause not yet found, does not affect the
+  accepted (9,30) point, but any future l4_gmin sweep under idx_select
+  MUST check `correct` at each point, not just cycles. pool_sizes/skew
+  re-swept against the new (9,30) point: no improvement, mainline's
+  (16,4)/(4,3) already optimal. See flow-balance/STATE.md P-14 for detail.
+- log: 2026-07-23 external-repo comparative investigation (user-directed)
+  -> ported as flow-balance P-14 -> implemented and measured same
+  session, -10 cyc verified. See flow-balance/STATE.md P-14 for full
+  detail (mechanism, engine census at each step, follow-ups).

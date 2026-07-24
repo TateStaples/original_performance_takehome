@@ -231,6 +231,19 @@ Queued: H-012 (floor recalibration).
   slots drop below ~1850 (e.g. L5 tournament serving or batched gathers),
   then re-cost; the c5_prexor plumbing (primed_nv/elide) already supports
   it by flipping primed_nv for gather levels + an omf sign variant.
+  RE-CHECKED 2026-07-23 after H-029/idx_select + l4_gmin=(9,30) retune
+  (load now 1900, down from 1961; valu 6122, floor 1021): reopen
+  threshold still NOT met (1900 > ~1850), and redoing the same
+  arithmetic with today's numbers confirms it's still a clear reject,
+  not just "close": load_after = 1900+254 = 2154 -> floor 1077; valu_after
+  = 6122-192 = 5930 -> floor 989. Load would become the binding
+  constraint at 1077 — WORSE than the 1043 cycles already achieved
+  today, let alone the 989 valu-only floor. The gap actually widened in
+  relative terms (load's post-change floor now exceeds achieved cycles,
+  not just the valu floor). Stays closed; would need load slots reduced
+  by ~180 more (to ~1720) before this is worth even a partial re-cost,
+  which is a much bigger ask than the reopen note implied — updating
+  the threshold language for future reopen-checks.
 - P-5 [sweep handoff, iter-2]: l4_gmin retunes under c5_prexor —
   (18,28) is -13 vs the frozen (22,28); add c5_prexor=True x l4_gmin
   {16..22} x {26..30} to the sweep grid (H-005/H-013). skew/pool_sizes
@@ -260,3 +273,78 @@ Queued: H-012 (floor recalibration).
   also close the reopen-if clause of G-10 ("H-016 finds a hit") — G-10
   can be marked fully closed; the graveyard reopen trigger shifts to
   P-8-class global attacks or a HASH_STAGES change.
+- P-10 [op-reduction, unassigned, own derivation from a conversational
+  design-review session (not yet a driver-run iteration) — NOT from an
+  external source; contrast with flow-balance's P-14, which IS ported
+  from a third-party repo]: 1-indexed tree addressing to kill
+  the idx recurrence's redundant additive term. Diagnosis: the interior
+  tournament recurrence `p := 2p+b` (perf_takehome.py's `madd(st,st,
+  two_vec,par)`, ~line 1942) is already 1 op/round because it never
+  carries a level bias. But the boundary-crossing AND steady-state
+  GATHER recurrences (same function, ~lines 1950-1987) cost 2 ops/round
+  beyond the parity extraction (a madd for `2x + bias` PLUS a separate
+  vec add/sub for `+/-par`), because standard 0-indexed heap addressing
+  (`child = 2x+1+b`) has two additive terms competing for multiply_add's
+  single `+c` slot. Re-basing the tree to 1-indexed heap addressing
+  (root=1, `child = 2x+b`, no constant bias at ANY level) would let the
+  gather-mode recurrence collapse to the same 1-op `madd(st,st,two,par)`
+  shape the tournament recurrence already gets, since there is no more
+  bias term to fight the parity bit for the `+c` slot.
+  - predicted: ~1,872-1,875 walker-rounds currently pay the extra op
+    (every boundary-crossing + steady-gather round under mainline
+    l4_gmin=(12,30), counted by tracing served(r,g)/served(r+1,g) across
+    both tournament epochs — matches the measured 1,875 gathers almost
+    exactly, as expected since both counts key off the same walker-round
+    set). That's ~1,875 lane-ops removable (~20% of Idx's 9,144, ~2.7%
+    of the kernel's 68,801 total) — ENCODING-INDEPENDENT (true whether
+    the removed op currently rides valu 8-wide or alu scalar). Cycle
+    impact is NOT encoding-independent, though: only the fraction
+    currently valu-encoded lowers the binding floor. Idx's overall split
+    (1,064 alu-slots vs 1,010 valu-slots, i.e. 1,064 vs 8,080 LANE-ops)
+    suggests most Idx work defaults to valu (idx_race only diverts to
+    alu when timing favors it), so a plausible range is -15..-30 cyc
+    (best case ~-30 if the removed step is mostly valu-encoded, worst
+    case near 0 if idx_race happens to already park most of it on alu).
+  - cost: M. Requires re-deriving every compile-time offset constant
+    keyed to the current 0-indexed layout: rec_vecs (boundary base
+    offsets), the tournament tables' base addresses (evens/diffs/E_vecs/
+    D_vecs), and the mem-priming addresses (l4_mem_primed/mem_prime).
+    Mechanical but touches setup broadly.
+  - depends: none structurally, BUT interacts with c5_prexor's
+    complement-position bookkeeping (`negtwo_vec`, the elide(r,g)-gated
+    sign flip on `par`, `omf_vec`/`omf1_vec`) — that scheme ALREADY
+    injects a second term into this same update for its own reasons
+    (tracking the bitwise complement of position on elided rounds).
+    Whether 1-indexing cleanly collapses THAT combined algebra to one
+    term, or just relocates the second term, is unverified — needs a
+    by-hand re-derivation of the c5_prexor boundary/gather formulas
+    under 1-indexed addressing before costing this for real, not just
+    the plain (non-c5_prexor) case argued above.
+  - status: RECONSIDERED 2026-07-23, LIKELY REJECTED ON PREMISE (not
+    fully implemented/measured — this is a by-hand re-derivation, not a
+    ground-truth test, so treat as strong-but-not-final). While
+    implementing and shipping H-029/idx_select (which targets exactly
+    this steady-gather update), it became clear the "1 extra op" this
+    proposal blames on the 0-indexed heap's `+1` bias is not actually
+    caused by that bias. The real formula is
+    `madd(st,st,two,ov); vec(sgn,st,st,par)` where `ov` (`omf_vec` or
+    `omf1_vec`, or `rec_vecs[key]` at the boundary) is a LEVEL-TRANSITION
+    CONSTANT already folding in far more than a bare "+1" (base pointer,
+    epoch offsets, the c5_prexor complement adjustment). Re-basing to
+    1-indexed addressing changes what `ov` numerically equals, but
+    `madd`'s `+c` slot is occupied by `ov` either way, and `par` (a
+    genuine per-lane RUNTIME value, not a compile-time bias) still needs
+    a separate combining step regardless of `ov`'s value — the 2-additive-
+    terms problem this proposal set out to fix isn't actually about
+    which indexing scheme is used, it's inherent to combining a
+    compile-time constant and a runtime per-lane bit in one madd. H-029
+    solves the SAME problem a different way (select between two
+    already/cheaply-precomputed constants, when the two possible `ov+par`
+    outcomes are each expressible as a fixed vector) — with NO indexing
+    change needed. This suggests P-10's predicted -15..-30 cyc would
+    NOT materialize even if fully implemented, because the op count
+    doesn't actually drop; 1-indexing was solving the wrong culprit.
+    Recommend closing this proposal without implementing it UNLESS
+    someone finds a flaw in this re-derivation — the risk (re-deriving
+    every tree-layout constant, uncertain c5_prexor interaction) is not
+    worth spending against a benefit that no longer looks real.

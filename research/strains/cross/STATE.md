@@ -144,10 +144,24 @@ at ~1 cyc/group (P-3 pattern held twice more this iteration).
 - P-c3 [op-reduction]: H-025 (CEGIS) unchanged as the only open
   op-removal lever; this iteration's -11 came from setup/drain/model
   slack, which is now largely harvested.
-- P-c4 [scheduler, small]: the store-drain tail (~5 cyc) could shrink
-  if the LAST block's stores paired tighter with its hash completions
-  (emission-order of the final store loop, last-finishing groups
-  first); bounded by ~3-4 cyc, zero risk to try in a sweep-class run.
+- P-c4 [scheduler, small] [TESTED 2026-07-23, REJECTED]: the store-drain
+  tail (~5 cyc) could shrink if the LAST block's stores paired tighter
+  with its hash completions (emission-order of the final store loop,
+  last-finishing groups first); bounded by ~3-4 cyc, zero risk to try in
+  a sweep-class run. RESULT: landed a `store_order` flag
+  (perf_takehome.py, default "group" = unchanged natural order) with two
+  variants — "rev" (fully reverse emission order) and "tail_first" (only
+  move the last 4 groups, matching H-021's known g28-g31 staircase, to
+  the front). BOTH measured WORSE, not better: mainline 1053 -> 1064
+  (either variant); idx_select+l4_gmin=(9,30) 1043 -> 1054 (either
+  variant) — a clean, consistent +11 cyc regression in both engine
+  contexts. The natural group emission order is already tuned (likely an
+  artifact of b3_last=(15,)'s own fold-order optimization interacting
+  with which groups the scheduler favors) — reordering it blind, even
+  targeting only the known-late groups, breaks something that already
+  worked. Flags kept in-tree as negative controls, default off/unchanged.
+  Closing this proposal; the store-drain tail does not respond to
+  emission-order tricks the way the premise assumed.
 - P-c5 [graveyard hygiene]: G-17's reopen-if is satisfied and
   harvested (b3l_diffs); rewrite the entry to point at H-027's
   mechanism and the bl_last L2/L3 negative (flow flood confirmed a

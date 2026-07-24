@@ -147,6 +147,19 @@ H-008 re-closed with H-002 (see log).
   valu is the binding engine; re-run `parity_early` (one command) after any
   accepted valu-offload/op-reduction change (H-003/H-007/H-001). Suggest
   the driver add pe combos to the sweep grid so this re-test is free.
+  RE-CHECKED 2026-07-23 after H-029/idx_select (a valu-relief accept,
+  -78 valu slots at the flag level): NOT a one-command re-test anymore.
+  `build_kernel_scheduled` has an explicit `assert not pe_levels,
+  "c5_prexor is incompatible with parity_early"` (perf_takehome.py:932) —
+  parity_early and c5_prexor cannot coexist as currently implemented, and
+  c5_prexor is a load-bearing accepted stack (H-015). Testing parity_early
+  standalone (c5_prexor=False, mem_prime=()) would compare against a
+  worse, non-mainline baseline and answer the wrong question. Reopening
+  this needs someone to reconcile parity_early's bit-extraction scheme
+  with c5_prexor's own domain-shifted parity bookkeeping first — real
+  engineering, not a flag flip. Downgrading from "one command" to a
+  scoped sub-task; still worth doing if op-reduction lands a bigger
+  valu-relief accept later (H-025), since the payoff compounds.
 - P-cp-2: spend the 32 freed words (pool_sizes=(17,3)) on load-side state:
   e.g. a 4-vector nv double-buffer ring for the deepest gather levels to
   decouple round r+1's gather writes from round r's nv reads (removes the

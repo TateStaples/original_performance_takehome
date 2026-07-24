@@ -176,27 +176,105 @@ schedule is within $1.7\%$ of the binding resource floor:
 \begin{center}
 \begin{tabular}{lrrr}
 \toprule
-engine & slots used & utilization & lane-ops \\
+engine & slots used & capacity & utilization \\
 \midrule
-\code{valu}  & 6{,}209 & 98.3\% (floor $6209/6 = 1035$ cyc) & --- \\
-\code{alu}   & 12{,}169 & 96.3\% & --- \\
-\code{load}  & 1{,}924 & 91.4\% (1{,}875 gathers) & --- \\
-\code{flow}  & 637 & 60.5\% & --- \\
-\code{store} & 38 & 1.8\% & --- \\
-\midrule
-\multicolumn{4}{l}{\emph{work by purpose (lane-ops, \% of total 68{,}801):}}\\
-Hash    & & & 46{,}656 \ (67.8\%) \\
-Routing & & & 12{,}409 \ (18.0\%) \\
-Index   & & & \phantom{0}9{,}144 \ (13.3\%) \\
-Setup/Store & & & \phantom{00}592 \ (0.9\%) \\
+\code{valu}  & 6{,}209  & 6{,}318  & 98.3\% (floor $6209/6 = 1035$ cyc) \\
+\code{alu}   & 12{,}169 & 12{,}636 & 96.3\% \\
+\code{load}  & 1{,}924  & 2{,}106  & 91.4\% (1{,}875 gathers) \\
+\code{flow}  & 637      & 1{,}053  & 60.5\% \\
+\code{store} & 38       & 2{,}106  & 1.8\% \\
 \bottomrule
 \end{tabular}
 \end{center}
+
+\noindent Splitting that same slot count by \emph{purpose} instead of just
+by engine shows where each engine's cycles actually go, and lines it up
+against the \emph{lane-op} total (the scalar-equivalent work, after
+un-packing \code{valu}/\code{flow}'s 8-wide slots) so the two units --- one
+slot costs one cycle-slot on its engine, one lane-op is one scalar
+operation --- can be read side by side:
+
+\begin{center}
+\begin{tabular}{lrrrrrrr}
+\toprule
+purpose & \code{alu} & \code{valu} & \code{load} & \code{store} & \code{flow} & lane-ops & \% \\
+\midrule
+Hash    & 10{,}280 & 4{,}547 & ---     & ---   & ---   & 46{,}656 & 67.8\% \\
+Routing &    809   &   593   & 1{,}872 & ---   & 623   & 12{,}409 & 18.0\% \\
+Index   &  1{,}064 & 1{,}010 & ---     & ---   & ---   &  9{,}144 & 13.3\% \\
+Setup   &     16   &    59   &    52   & ---   &  14   &    554  &  0.8\% \\
+Store   &    ---   &   ---   &   ---   &  38   & ---   &     38  &  0.1\% \\
+\midrule
+total   & 12{,}169 & 6{,}209 & 1{,}924 &  38   & 637   & 68{,}801 & 100.0\% \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent Each column foots to the engine-utilization table above:
+\code{alu} and \code{valu} are almost entirely Hash; \code{load} and
+\code{flow} are almost entirely Routing (the gather-vs-tournament trade);
+\code{store} is 100\% end-of-run writes.
 
 The binding engine is \code{valu} (its fused multiply-add has no scalar
 substitute), so the optimizations below are ultimately judged by how many
 \code{valu} slots they remove or how well they keep all six engines busy in
 the same cycle.
+
+\noindent Zooming in one level further, from slots to individual
+\emph{opcodes}, shows which instructions each engine's budget is actually
+spent on (\code{\^{}}~xor, \code{\&}~and, \code{|}~or, \code{<<}/\code{>>}
+shift left/right):
+
+\begin{center}
+\begin{tabular}{llrr}
+\toprule
+engine & opcode & count & \% of engine \\
+\midrule
+\code{alu}
+  & \code{\^{}}          & 6{,}154 & 50.6\% \\
+  & \code{>>}            & 4{,}160 & 34.2\% \\
+  & \code{\&}            &   720   &  5.9\% \\
+  & \code{<<}            &   475   &  3.9\% \\
+  & \code{+}             &   410   &  3.4\% \\
+  & \code{-}             &   249   &  2.0\% \\
+  & \code{|}             &     1   &  0.0\% \\
+\midrule
+\code{valu}
+  & \code{multiply\_add} & 2{,}846 & 45.8\% \\
+  & \code{v\^{}}         & 1{,}991 & 32.1\% \\
+  & \code{v\&}           &   552   &  8.9\% \\
+  & \code{v>>}           &   508   &  8.2\% \\
+  & \code{v+}            &   160   &  2.6\% \\
+  & \code{v-}            &    93   &  1.5\% \\
+  & \code{vbroadcast}    &    59   &  0.9\% \\
+\midrule
+\code{load}
+  & \code{load}          & 1{,}875 & 97.5\% \\
+  & \code{vload}         &    40   &  2.1\% \\
+  & \code{const}         &     9   &  0.5\% \\
+\midrule
+\code{store}
+  & \code{vstore}        &    38   & 100.0\% \\
+\midrule
+\code{flow}
+  & \code{vselect}       &   623   & 97.8\% \\
+  & \code{add\_imm}      &    12   &  1.9\% \\
+  & \code{pause}         &     2   &  0.3\% \\
+\midrule
+\code{debug} & \code{vcompare} & 384 & 100.0\% (free, uncounted) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent Of the ISA's 47 instruction forms across all six engines, the
+kernel uses 22. What it uses is narrow and deliberate: every \code{alu}/
+\code{valu} op is xor/shift/and-heavy integer mixing (the hash and index
+recurrences) plus the fused \code{multiply\_add}; \code{load} is almost
+entirely data-dependent gathers; \code{flow} is almost entirely tournament
+\code{vselect} folds. \code{load\_offset}, scalar \code{select}, and every
+jump/halt/\code{coreid} control-flow op go unused --- the kernel is a
+straight-line, branch-free bundle sequence, so it never needs control flow
+at all.
 
 \section{Algorithmic improvements}
 

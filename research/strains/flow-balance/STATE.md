@@ -380,3 +380,210 @@ H-009, H-011.
   drain tail is genuinely load-bound-elsewhere; the ONLY lever left on it
   is a global op-removal accept (H-016) that lowers the valu floor so the
   whole tail shifts left. No flow-balance mechanism reaches it."
+- P-14 [status: ACCEPTED (flag-gated, default off), EXTERNAL SOURCE — not
+  an in-repo strain finding]:
+  select-vs-add for the idx/gather bias fold. ATTRIBUTION: found by
+  reading a third-party public solution to this same take-home,
+  github.com/zhanglistar/original_performance_takehome (commit e9b8f4c,
+  their measured 1026 cycles at the graded shape fh=10/bs=256/r=16 — same
+  frozen problem.py/tests, confirmed byte-identical, so directly
+  comparable). This is their idea, ported here as a hypothesis, not ours;
+  do not write it up as an original finding if it lands.
+  - mechanism: their `round_gather`'s idx update (perf_takehome.py in
+    that repo, ~line 1474-1478) does
+    `vec_select(tmp1, parity, add_odd_v, add_even_v); vec_madd(idx, idx,
+    two_v, tmp1)` where `add_even_v=-6, add_odd_v=-5` (i.e. bias-1,
+    bias). Our equivalent (perf_takehome.py:1980-1987) does
+    `madd(st,st,two_vec,ov); vec(sgn,st,st,par)` — a genuine elementwise
+    add/sub of the per-lane parity vector, which is NOT vselect-able
+    (vselect only picks between two FIXED operands, not "add or subtract
+    a variable"). Their reformulation works because the amount to add is
+    just `bias + parity_bit`, and parity is 0/1 — exactly a 2-way choice
+    between two PRECOMPUTED CONSTANTS (bias, bias+1), which a vselect CAN
+    express, moving that step off valu/alu onto flow.
+  - predicted: same op count per instance (parity-extract + combine +
+    madd = 3 ops either way — this is a REPLACEMENT of engine eligibility,
+    not an op-count cut), but every instance becomes flow-racealable via
+    idx_race/emit_any where today it is valu/alu-only. Their measured
+    engine mix at 1026 cyc: valu 5997 slots (97.4%, floor ~1000) vs our
+    6209 (98.3%, floor 1035); flow 873 slots (85.1%) vs our 637 (60.5%).
+    Consistent with (not proof of) most of their ~236-slot flow gain and
+    corresponding valu relief coming from this one pattern, since it is
+    their general-case gather-round idx update, not a special case.
+  - IMPLEMENTATION NOTE (better than the original cost estimate below):
+    no new scratch was needed at all. `omf1_vec == omf_vec + 1` already
+    (by construction: `omf1_s = omf_s + one_c`), so `ov +/- par` for
+    par in {0,1} is exactly a choice between the two ALREADY-LIVE
+    constants `omf_vec`/`omf1_vec` — just re-order which is `hi`/`lo`
+    by `sgn`. Landed as `idx_select: bool = False` in
+    `build_kernel_scheduled` (perf_takehome.py), covering ONLY the
+    steady-gather branch (not the c5_prexor boundary-crossing branch,
+    which is keyed by `rec_vecs[key]` and would need its own check for
+    whether `key`/`key+/-1` coexist before the same zero-scratch trick
+    applies — left for a follow-up). Mutually exclusive with idx_race
+    (idx_select takes priority when both set).
+  - result: ACCEPTED, flag-gated (default off, mainline dispatch
+    untouched pending a decision on whether to flip it). Measured via
+    `tools/run_variant.py` against the frozen grader, 6 seeds
+    (1,2,3,7,42,99) + 3 unseeded runs + debug_compares=True, all
+    correct=true:
+    - `idx_select=True` alone: 1053 -> 1052 (-1 cyc). Engine census:
+      alu 12169->11433 (-736), valu 6209->6131 (-78, floor 1035->1022),
+      flow 637->774 (+137), load/store unchanged. Matches the mechanism:
+      work left valu/alu for flow, and the wall-clock gain (-1) is much
+      smaller than the floor drop (-13) because friction rose from
+      18 cyc (1.7%) to 30 cyc (2.9%) — expected per the standing P-3
+      pattern (an engine-relief accept needs the l4_gmin dial retuned,
+      not just re-measured at the old optimum).
+    - `idx_select=True` + retuned `l4_gmin=(9,30)` (was (12,30)): swept
+      first coordinate 5..13 and second 26..32 around the new optimum;
+      **1053 -> 1043 (-10 cyc, -0.95%)**, confirmed on all 6 seeds +
+      debug_compares=True + 3 unseeded runs. Census at 1043: alu 11769
+      (~mainline), valu 6122 (floor 1021), load 1900 (-24, more L4
+      served -> fewer gathers), flow 794 (+157), store 38. This is the
+      single largest verified accept surfaced in this conversation
+      session; NOT yet folded into `build_kernel`'s dispatch (still
+      flag-gated) pending the driver/user deciding whether to flip
+      mainline.
+  - depends: none structurally; interacts with c5_prexor's elide(r,g)
+    sign flip the same way P-10 does (the `sgn` choice is already known
+    at emission time, so this only changes HOW the chosen constant is
+    supplied, not the correctness logic) — confirmed mechanical, no
+    correctness surprises hit during implementation.
+  - FIXED (2026-07-23, own regression, not the crash below): the original
+    `if idx_select: assert mp_levels...` insertion accidentally landed
+    INSIDE the indentation of `if mp_levels:`'s body, stealing the three
+    pre-existing asserts (`l4_mem_primed`, the mp_levels/L4 depth check,
+    the b3_last-final-round-only check) so they silently stopped running
+    for the entire mainline path (idx_select=False) — no behavior change
+    since the invariants held, but the safety net was gone. Fixed by
+    restoring those three asserts under `if mp_levels:` and making the
+    idx_select check its own independent `if` block. Reverified: default
+    still 1053, idx_select=True+l4_gmin=(9,30) still 1043/correct.
+  - KNOWN BUG (found 2026-07-23, NOT yet root-caused): `idx_select=True`
+    combined with certain l4_gmin second-coordinate (epoch-1 threshold)
+    values crashes with `IndexError: list index out of range` in the
+    Machine's `load` (i.e. a computed gather address goes out of bounds)
+    — e.g. (9,0), (9,1), (9,5), (9,10) all crash; (9,15) and everything
+    from (9,20) up through the accepted (9,30) are fine and pass
+    debug_compares. NOT monotonic in the threshold (9,10 crashes but
+    9,15 doesn't), which smells like an interaction with skew-block
+    boundaries or `b3_last=(15,)`'s round-15 handling rather than a
+    simple math error in the hi/lo select logic (hand-verified algebra:
+    `omf1_vec == omf_vec+1`, so `select(par,hi,lo)` reproduces
+    `ov +/- par` correctly in both sign cases — the bug is not there).
+    Only manifests when almost no groups are L4-served at round 15
+    (the last round), a regime nobody was proposing to ship. Does NOT
+    affect the accepted (9,30) point or any config in the 15-32 range
+    checked around it (all correct=true, incl. debug_compares). Treat
+    idx_select as validated ONLY for l4_gmin second-coordinate >= ~15
+    until this is root-caused; do not sweep l4_gmin freely with
+    idx_select=True without checking `correct` at every point.
+    UPDATE 2026-07-23 (external-repo-gap investigation): also crashes
+    for an explicit (non-threshold) epoch-1 group SET that swaps group
+    30 for group 0 (i.e. {0,31} instead of {30,31}) while epoch-1 COUNT
+    stays at 2 — so it's not purely a "how many groups" threshold effect
+    either; specific group IDENTITY at round 15 matters. Narrows the
+    suspects toward something round-15/b3_last-specific tied to WHICH
+    groups are in the last skew block, not just how many. Still not
+    root-caused; still does not affect the accepted (9,30) contiguous
+    point.
+  - pool_sizes / skew RE-SWEPT 2026-07-23 against idx_select=True,
+    l4_gmin=(9,30) (the P-3-pattern follow-up this entry called for):
+    NO IMPROVEMENT FOUND. pool_sizes (16,4) [mainline] beats (16,3)=1054,
+    (17,3)=1056, (15,4)=1062, (18,3)=1054, (14,4)=1076; (17,4)/(16,5)
+    both overflow scratch. skew (4,3) [mainline] ties (8,2)=1043; (4,2)
+    =1107, (8,1)=1117, (4,4)=1066, (2,3)=1169 all worse. Mainline's
+    existing pool_sizes/skew were ALREADY optimal even under the new
+    engine mix — the only retune the new mix actually wanted was
+    l4_gmin, which is done.
+  - BOUNDARY-CROSSING EXTENSION CHECKED 2026-07-23, NOT FEASIBLE right
+    now: introspected the actual `rec_off(r,g)` keys that arise at the
+    mainline shape (l4_gmin=(9,30)) — only TWO distinct keys are ever
+    needed, {30, 62} — and NEITHER has a key+/-1 sibling already in
+    `rec_vecs` (confirmed programmatically). So the "reuse an
+    already-existing +/-1 neighbor" trick that made idx_select free
+    does NOT apply here for free; it would need 2 new broadcast
+    constants (16 words) precomputed at setup. Scratch is at 1533/1536
+    (3 free) even after idx_select (which added zero scratch, as
+    designed) — 16 words is not available without shrinking pool_sizes,
+    which the earlier resweep just confirmed is a net loss. Closing this
+    sub-item as infeasible until/unless scratch is freed elsewhere.
+  - status: ACCEPTED at the flag level (`idx_select=True, l4_gmin=(9,30)`
+    measured -10 cyc, verified correct; pool_sizes/skew confirmed already
+    optimal; boundary-crossing extension checked and found infeasible on
+    current scratch budget). Follow-ups for whoever picks this back up:
+    (a) decide whether to flip `build_kernel`'s dispatch to adopt it as
+    mainline — should also fix or at least guard-rail the l4_gmin-range
+    bug above first; (b) root-cause the crash above; (c) revisit the
+    boundary-crossing extension if a future accept frees >=16 scratch
+    words. Full external-repo comparison (engine utilization,
+    opcode census, scheduler design) is in the 2026-07-23 conversation
+    log; other differences noted there (finer L4-boundary block-set
+    tuning, 13-group/stagger-2 skew shape, a critical-path-priority list
+    scheduler) were NOT turned into proposals here because they are
+    structural/tuning differences rather than a single portable
+    mechanism — worth a dedicated look later if this strain or
+    scheduler reopens.
+
+- P-15 [flow-balance, 2026-07-23, EXTERNAL-GAP FOLLOW-UP]: after H-029,
+  still 17 cyc / 1.6% slower than the external repo (1043 vs 1026).
+  Re-measured their engine census against ours at the current best point:
+  valu 6122 (floor 1021) vs their 5997 (floor 1000) — a 125-slot gap,
+  NOT a friction gap (our friction is comparable or slightly better than
+  theirs). Two things investigated:
+  1. HYPOTHESIS: their idx recurrence is uniform (`madd(idx,idx,two,
+     parity)` literally identical at EVERY round, root through gather —
+     confirmed by reading their round_root/round_depth1/round_depth2:
+     same one-op form throughout, no boundary-conversion special case at
+     all). This is possible for them because their constant-commuting
+     analog (`c5_root_s`) is NARROW — only at the round-10-to-11
+     wraparound — not broad like our c5_prexor (elides ^C6 on 9/16
+     rounds), so they never need complement-position tracking and never
+     pay our boundary-crossing's extra op.
+  2. TESTED the obvious inference ("would narrowing our own commuting
+     scope net-win by avoiding the idx-side cost?") by disabling
+     c5_prexor outright (closest comparable stack otherwise): 1112
+     cycles — WORSE than mainline's 1053, let alone today's 1043.
+     REFUTED: c5_prexor's broad hash-side savings clearly outweigh its
+     idx-side bookkeeping cost for OUR kernel; this is not a case of
+     "their way is strictly better," it's a different tradeoff point,
+     and ours wins on this specific axis. The remaining 125-slot gap is
+     NOT explained by constant-commuting scope.
+  - Opcode-level comparison (valu only) at the current best point:
+    multiply_add ours 2950 vs theirs 2764 (+186), v^ 1943 vs 1583 (+360),
+    v& 565 vs 358 (+207), v>> 506 vs 1126 (-620, we alu-offload shifts
+    they don't), v+ 0 vs 53 (-53... wait this needs re-reading against
+    alu offload totals), vbroadcast 59 vs 46 (+13). The +186/+360/+207
+    deltas plausibly trace to extra bookkeeping our BROADER c5_prexor
+    scope requires (more setup/transition xors and masks to track the
+    primed vs unprimed domain across more transition points) that their
+    narrow version doesn't need — but this is not confirmed by a clean
+    isolated test, just consistent with the direction.
+  - INFRASTRUCTURE LANDED (small, useful regardless): generalized
+    `l4_gmin` entries to accept either an int threshold (original,
+    `g >= gmin`) or an explicit set/list of served group indices (finer
+    than a contiguous cutoff, matching how the external repo tunes L4
+    service as arbitrary block sets rather than a threshold) —
+    `l4_served`/`l4_any` in perf_takehome.py. Verified bit-identical for
+    int inputs (default unaffected, 1053; idx_select+(9,30) still 1043).
+  - Tried a handful of non-contiguous group-set swaps at the SAME served
+    count (e.g. swap group 9<->8, 9<->0, epoch-1 30<->0): all measured
+    EQUAL or WORSE (1043-1044), and the 30<->0 swap CRASHES (see the
+    idx_select bug note above, now broadened: it's not purely a count
+    threshold effect, specific group identity at round 15 matters too).
+    No evidence so far that non-contiguous L4 service beats the
+    contiguous threshold for THIS kernel's structure — but the search
+    was small (a handful of hand-picked swaps, not a real search), so
+    "not found yet" rather than "ruled out."
+  - status: OPEN, gap not closed. What's NOT yet checked: their
+    finer-grained skew (13 groups/stagger 2 vs our 4/stagger 3) and
+    their critical-path-priority scheduler — both bigger, riskier
+    structural changes than anything tried this pass, flagged as the
+    most likely remaining sources of the 125-slot gap since the cheaper
+    hypotheses (constant-commuting scope, simple L4 set swaps) were
+    checked and didn't pan out. Recommend a dedicated session to
+    (a) do a REAL non-contiguous L4 search (not hand-picked swaps) once
+    the idx_select crash is root-caused enough to bound it safely, and
+    (b) prototype the finer skew shape, before concluding the gap is
+    scheduler-bound.

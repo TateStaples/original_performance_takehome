@@ -454,6 +454,8 @@ class KernelBuilder:
         u_race: bool = False,
         sel_race: bool = False,
         idx_race: bool = False,
+        idx_select: bool = False,
+        store_order: str = "group",
         b3_last=(),
         b3l_race: bool = True,
         b3l_diffs: bool = False,
@@ -647,6 +649,21 @@ class KernelBuilder:
           spelling -- per-lane shift then add/subtract, 16 scalar slots
           over two dependent levels -- raced against the single valu madd.
           All except idx_race require parity_conds; all default off.
+          `idx_select` (P-14, ported from a third-party solution to this
+          same problem -- github.com/zhanglistar/original_performance_takehome
+          -- not an in-house finding) rewrites the gather-mode steady-state
+          update `madd(st,st,two,ov); vec(sgn,st,st,par)` as a select
+          BEFORE the madd instead of an add/sub AFTER it: since
+          `omf1_vec == omf_vec + 1` by construction, `ov +/- par` for a
+          0/1 `par` is exactly a choice between the two ALREADY-EXISTING
+          broadcast constants `omf_vec`/`omf1_vec` (no new scratch),
+          which a flow vselect can express but a variable add/sub cannot
+          -- moving that step off valu/alu onto flow. Same op count;
+          mutually exclusive with idx_race (idx_select takes priority
+          when both are set). Only the steady-gather branch is covered;
+          the boundary-crossing branch (c5_prexor's key-indexed rec_vecs)
+          is left alone since exploiting the same trick there would need
+          new persistent scratch this kernel doesn't have (1533/1536 used).
 
         - `b3_last` (H-023): reverse the served-level-4 tournament fold
           order so the NEWEST parity (b3 = the raw parity riding `nv`,
@@ -842,10 +859,20 @@ class KernelBuilder:
                 return False
             ep = r // period
             gmin = l4_gmin[ep] if ep < len(l4_gmin) else n_groups_
+            # l4_gmin entries may be an int threshold (g >= gmin, original
+            # semantics) or an explicit iterable of served group indices
+            # (finer-grained than a contiguous threshold; external-repo
+            # comparison found they tune L4 service as arbitrary block
+            # sets, not a simple cutoff).
+            if isinstance(gmin, (set, frozenset, list, tuple)):
+                return g in gmin
             return g >= gmin
 
+        # NOTE: checks every group, not just the endpoints, since l4_gmin
+        # entries may now be an arbitrary set (not just a contiguous
+        # g >= threshold range where checking the endpoints would suffice).
         l4_any = any(
-            l4_served(r, g) for r in range(rounds) for g in (0, n_groups_ - 1)
+            l4_served(r, g) for r in range(rounds) for g in range(n_groups_)
         )
 
         # l4_race (H-019): served-level-4 W-combine pairs whose fold races
@@ -933,6 +960,8 @@ class KernelBuilder:
             # b3_last is fine: omf1's last read precedes r15.
             assert not (b3l_rounds - {rounds - 1}), \
                 "mem_prime supports b3_last on the final round only"
+        if idx_select:
+            assert mp_levels, "idx_select needs omf1_vec, which mem_prime creates"
 
         def primed_nv(rr, g):
             # Does round rr's fold read a C5-pre-xored node_val source?
@@ -1977,14 +2006,28 @@ class KernelBuilder:
                             ov, osrc, sgn = omf1_vec, omf1_s, "-"
                         else:
                             ov, osrc, sgn = omf_vec, omf_s, "+"
-                        if idx_race:
+                        if idx_select:
+                            # P-14: omf1_vec == omf_vec + 1 by construction,
+                            # so `ov +/- par` for 0/1 par is exactly a
+                            # choice between the two ALREADY-LIVE constants
+                            # omf_vec/omf1_vec -- no new scratch, and (as a
+                            # vselect instead of a variable add/sub)
+                            # flow-eligible where the add/sub form is not.
+                            hi, lo = (
+                                (omf1_vec, omf_vec) if sgn == "+"
+                                else (omf_vec, omf1_vec)
+                            )
+                            vsel(par, par, hi, lo)
+                            madd(st, st, two_vec, par)
+                        elif idx_race:
                             # 2*gaddr + 1 - fp (+1 and -par when elided)
                             race_idx_madd(st, two_vec, ov,
                                           lambda i, osrc=osrc: (
                                               "+", st + i, st + i, osrc))
+                            vec(sgn, st, st, par)
                         else:
                             madd(st, st, two_vec, ov)  # 2*gaddr + 1 - fp
-                        vec(sgn, st, st, par)
+                            vec(sgn, st, st, par)
                     for lane in range(VLEN):
                         S.emit("load", ("load", nv + lane, st + lane),
                                (st + lane,), (nv + lane,), mem_read=True)
@@ -2068,9 +2111,23 @@ class KernelBuilder:
                 raise ValueError(f"unknown emit_order {emit_order!r}")
 
         # --- store final values; second pause after everything ---
+        # P-c4 (cross): the greedy scheduler places stores in emission
+        # order when several are simultaneously ready, so a group whose
+        # hash finishes LAST in real dependency time can still get queued
+        # behind an earlier-emitted, not-yet-ready group's store. Emitting
+        # the last-finishing groups FIRST lets them claim their earliest
+        # feasible slot instead of waiting on emission-order ties.
+        store_gs = list(range(n_groups))
+        if store_order == "rev":
+            store_gs = list(reversed(store_gs))
+        elif store_order == "tail_first":
+            # only reorder the known r15-staircase groups (last-finishing
+            # per H-021's profile), leave the rest in natural order
+            tail = store_gs[-4:]
+            store_gs = list(reversed(tail)) + store_gs[:-4]
         S.tag = None
         last = 0
-        for g in range(n_groups):
+        for g in store_gs:
             c = S.emit("store", ("vstore", val_addrs[g], val_vecs[g]),
                        (val_addrs[g],) + self._v(val_vecs[g]), (), mem_write=True)
             last = max(last, c)
