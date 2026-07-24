@@ -1548,6 +1548,26 @@ class KernelBuilder:
                            (la,) + self._v(stage), (), mem_write=True)
 
         b3l_dE = b3l_dD = b3l_pool = None
+        # BUG GUARD (found 2026-07-23, traced with a scratch-write log at
+        # l4_gmin=(9,0)): idx_select's vselect reads BOTH omf_vec and
+        # omf1_vec on every steady-gather call (both select arms, not just
+        # the elide(r,g)=True branch the original race_idx_madd path
+        # used), so it needs omf1_vec valid strictly longer than the
+        # "omf1's last read precedes r15" assumption that lets
+        # b3l_diffs's round-15 dffold FALLBACK reclaim lv[24:32]
+        # (=omf1_vec's storage) as a transient D_vecs fold temp when its
+        # private-register funding runs out. Confirmed: omf1_vec's value
+        # flips from the correct ~-5 to garbage mid-run, then a later
+        # steady-gather madd for a different group reads it and produces
+        # an out-of-bounds gather address. A same-session attempt to give
+        # idx_select a protected copy of omf1_vec made things WORSE (broke
+        # the validated (9,30) config via scratch overflow, and produced
+        # silently wrong answers once pool_sizes was shrunk to compensate)
+        # -- reverted. Detect the actual clobbering event instead of
+        # trying to predict it, so this fails loudly at build time instead
+        # of silently corrupting a gather address or (worse) passing
+        # `correct` while wrong:
+        omf1_vec_clobbered = False
 
         def b3l_make_diffs(r):
             # H-027 (b3l_diffs): leaf-diff tables + a private-register pool
@@ -1814,6 +1834,8 @@ class KernelBuilder:
                             # pool cannot fund another private group).
                             b3l_fold_diffs(st, nv)
                         else:
+                            nonlocal omf1_vec_clobbered
+                            omf1_vec_clobbered = True  # see the bug guard note above
                             dffold(st, E_vecs, tm[j], tmM[j], t1[s],
                                    condA[j], condB[j], da=lv,
                                    db=lv + VLEN)                # E_win->condB
@@ -2109,6 +2131,16 @@ class KernelBuilder:
                 round_robin([emit_stages(r, g) for r, gs in waves for g in gs])
             else:
                 raise ValueError(f"unknown emit_order {emit_order!r}")
+
+        assert not (idx_select and omf1_vec_clobbered), (
+            "idx_select needs omf1_vec valid for longer than this config's "
+            "b3l_diffs round-15 dffold fallback allows (it just reclaimed "
+            "omf1_vec's storage as a transient fold temp) -- this WILL "
+            "corrupt a later steady-gather gather address. Increase the "
+            "l4_gmin round-15 threshold (validated safe from ~15 up), or "
+            "reduce L4 service at round 15, until the private-register "
+            "path funds every served group instead of falling back."
+        )
 
         # --- store final values; second pause after everything ---
         # P-c4 (cross): the greedy scheduler places stores in emission

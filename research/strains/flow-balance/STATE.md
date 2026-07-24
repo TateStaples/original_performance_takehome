@@ -460,34 +460,54 @@ H-009, H-011.
     restoring those three asserts under `if mp_levels:` and making the
     idx_select check its own independent `if` block. Reverified: default
     still 1053, idx_select=True+l4_gmin=(9,30) still 1043/correct.
-  - KNOWN BUG (found 2026-07-23, NOT yet root-caused): `idx_select=True`
-    combined with certain l4_gmin second-coordinate (epoch-1 threshold)
-    values crashes with `IndexError: list index out of range` in the
-    Machine's `load` (i.e. a computed gather address goes out of bounds)
-    — e.g. (9,0), (9,1), (9,5), (9,10) all crash; (9,15) and everything
-    from (9,20) up through the accepted (9,30) are fine and pass
-    debug_compares. NOT monotonic in the threshold (9,10 crashes but
-    9,15 doesn't), which smells like an interaction with skew-block
-    boundaries or `b3_last=(15,)`'s round-15 handling rather than a
-    simple math error in the hi/lo select logic (hand-verified algebra:
-    `omf1_vec == omf_vec+1`, so `select(par,hi,lo)` reproduces
-    `ov +/- par` correctly in both sign cases — the bug is not there).
-    Only manifests when almost no groups are L4-served at round 15
-    (the last round), a regime nobody was proposing to ship. Does NOT
-    affect the accepted (9,30) point or any config in the 15-32 range
-    checked around it (all correct=true, incl. debug_compares). Treat
-    idx_select as validated ONLY for l4_gmin second-coordinate >= ~15
-    until this is root-caused; do not sweep l4_gmin freely with
-    idx_select=True without checking `correct` at every point.
-    UPDATE 2026-07-23 (external-repo-gap investigation): also crashes
-    for an explicit (non-threshold) epoch-1 group SET that swaps group
-    30 for group 0 (i.e. {0,31} instead of {30,31}) while epoch-1 COUNT
-    stays at 2 — so it's not purely a "how many groups" threshold effect
-    either; specific group IDENTITY at round 15 matters. Narrows the
-    suspects toward something round-15/b3_last-specific tied to WHICH
-    groups are in the last skew block, not just how many. Still not
-    root-caused; still does not affect the accepted (9,30) contiguous
-    point.
+  - BUG ROOT-CAUSED 2026-07-23 (was "not yet root-caused" — now fully
+    understood, traced with a manual scratch-write log). Mechanism:
+    `omf1_vec` (used both by the original `race_idx_madd`/`ov` path AND
+    idx_select) is NOT permanently allocated — it lives at `lv +
+    3*VLEN`, dead scratch reused from setup, per the comment "scratch is
+    otherwise full." The ORIGINAL code only reads it on the
+    `elide(r,g)=True` branch (some rounds only), so its "last read
+    precedes r15" — which is exactly the assumption that lets
+    `b3l_diffs`'s round-15 dffold FALLBACK reclaim that same address as
+    a transient D_vecs fold temp (`perf_takehome.py`, the `dffold(st,
+    D_vecs, ..., db=lv+3*VLEN)` call) whenever the private-register
+    funding runs out for a served-L4 group at the final round.
+    idx_select's `vselect(par,par,hi,lo)` reads BOTH `omf_vec` AND
+    `omf1_vec` on EVERY steady-gather call (both select arms, not just
+    the elide=True one) — extending which (r,g) instances touch
+    omf1_vec far beyond the original scheme, and once the dffold
+    fallback fires (as confirmed by direct trace: omf1_vec's value
+    flips from the correct ~-5 to a garbage large int mid-run), a LATER
+    steady-gather madd for some OTHER group reads the corrupted value
+    and produces an out-of-bounds gather address.
+    ATTEMPTED FIX (reverted): gave idx_select a protected copy of
+    omf1_vec (computed fresh, not sharing `lv`). This needs 8 new
+    scratch words, which don't exist (3 free) — shrinking pool_sizes to
+    fit broke the validated (9,30) config outright (scratch overflow)
+    and, when pool_sizes was shrunk further to compensate, produced a
+    DIFFERENT, worse failure mode: `correct: false` (silently wrong
+    answers, no crash) rather than a loud IndexError. Reverted rather
+    than shipped, since a fix that trades a loud failure for a silent
+    one is a regression, not a fix.
+    LANDED INSTEAD: a build-time GUARD (`omf1_vec_clobbered` flag set at
+    the exact dffold call site, asserted against at the end of
+    `build_kernel_scheduled` when `idx_select` is on) that converts this
+    from an unpredictable crash/silent-corruption into an immediate,
+    clear build-time assertion. IMPORTANT CORRECTION this guard
+    surfaced: earlier seed-limited testing (this same file, above) had
+    marked l4_gmin second-coordinates from ~15 up as "safe" based on
+    `correct: true` on a handful of seeds — the guard reveals this was
+    FALSE CONFIDENCE. (9,15) through (9,26) all trigger the guard (the
+    clobber genuinely happens; it just didn't happen to corrupt data
+    that mattered for those particular random seeds). The REAL
+    confirmed-safe boundary for this l4_gmin[0]=9 pairing is
+    second-coordinate >= 28, not >= 15. The accepted (9,30) point is
+    unaffected and re-verified (6 seeds, debug_compares, unseeded, all
+    correct=true) after the guard landed. Do not trust seed-based
+    `correct: true` alone for this flag's safety envelope — the guard is
+    now the authoritative check, and any future l4_gmin sweep with
+    idx_select=True should rely on it tripping (or not) rather than
+    spot-checking `correct` on a few seeds.
   - pool_sizes / skew RE-SWEPT 2026-07-23 against idx_select=True,
     l4_gmin=(9,30) (the P-3-pattern follow-up this entry called for):
     NO IMPROVEMENT FOUND. pool_sizes (16,4) [mainline] beats (16,3)=1054,
