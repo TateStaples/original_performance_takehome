@@ -590,3 +590,48 @@ steady-gather branch unconditionally): mainline 1053 -> 1043 -> 1041
   documented negative to build on.
 - log: 2026-07-25 opened as a resweep of H-021 post-H-029; same-day
   accepted and flipped.
+
+### H-031 [strain: scheduler] [status: accepted, MAINLINE DISPATCH FLIPPED
+2026-07-25]
+- statement: driver-requested drill-down on the 3 named friction regions
+  (setup ramp / final-round drain / store-drain tail) at the 1041
+  mainline. Store-drain finding: the scheduler's coarse one-pseudo-
+  location memory model makes every final `vstore` wait for
+  `last_mem_read_cycle` (the last gather anywhere in the WHOLE kernel,
+  address-oblivious) via `ready()`'s `mem_write` branch — nobody had
+  checked this side of the coarse model before (H-028/`store_pair` only
+  fixed the mem_write-vs-mem_write side). Direct trace measurement: group
+  0's hash chain finishes at cycle 696 but its store is placed at cycle
+  1025 (a 329-cycle wait from this gate alone); the store engine sits
+  idle for ~989 cycles despite results being ready throughout.
+- predicted: n/a (found via direct instrumentation, not a prior backlog
+  entry).
+- cost: S (two new params on `ListScheduler.ready`/`.emit`
+  (`ignore_mem_read_hazard`, default False in `dev.py`, all existing
+  callers unaffected) wired unconditionally into `perf_takehome.py`'s
+  single final-store call site, which is the only site that can prove
+  disjointness).
+- result: ACCEPTED and FLIPPED: **1041 -> 1038** (-3), verified correct on
+  8 draws (seeds 1-7, 42, unseeded) + `debug_compares=True`, grader 9/9
+  green. The relaxation is provably safe here: `build_mem_image` lays out
+  `forest_values_p` (gather source) and `inp_values_p` (store target) as
+  disjoint static ranges, gather addresses never leave the forest range,
+  and the only reads of the store's OWN target range (each group's
+  one-time initial vload) finish at setup (~c40), long before any store's
+  earliest possible ready cycle (>=696). `store_order="rev"`/"tail_first"`
+  combined with the relaxation both regress to 1053 (reversing emission
+  order violates the WAW gate's monotone-in-emission-order requirement,
+  since `last_mem_write_cycle` is a single scalar, not per-address);
+  `store_order="finish_asc"` (sort by each group's already-known finish
+  cycle) measured identical to natural order — the natural skew-ascending
+  group layout already tracks finish order closely enough. l4_gmin
+  neighbors re-checked, default (9,30) stays optimal. Setup ramp and
+  final-round drain were re-profiled and RE-CONFIRMED structural (no new
+  lever): ramp is tight against a counted 43-load-op/2-wide floor (=22
+  cycles, matches measured exactly, 6 remaining arbitrary hash constants
+  already proven to have no 1-op algebraic relation per H-024); the
+  drain's idle alu/load/flow slots are too small (a few per cycle) to
+  host any relocatable work, unlike the store-drain's ~989 idle cycles.
+  See scheduler/STATE.md's H-031 section for full per-region detail.
+- log: 2026-07-25 opened (driver-scoped drill-down), accepted and flipped
+  same session.

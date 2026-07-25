@@ -529,6 +529,23 @@ H-009, H-011.
     designed) — 16 words is not available without shrinking pool_sizes,
     which the earlier resweep just confirmed is a net loss. Closing this
     sub-item as infeasible until/unless scratch is freed elsewhere.
+  - RE-VERIFIED 2026-07-25 (independent re-check at today's mainline:
+    1041 cycles, unchanged shape fh=10/bs=256/rounds=16, l4_gmin=(9,30),
+    tournament_levels=(1,2,3)): same conclusion, still infeasible,
+    numbers unchanged. Instrumented `gaddr_reconstruction_exits`/
+    `gather_recovery_offset` directly (temp debug prints, reverted after)
+    rather than trusting the prose: `gaddr_reconstruction_keys == [30,
+    62]`, 62 exits total, and EVERY exit at both live transitions (level
+    3->4: key 30, level 4->5: key 62) has `is_c5_xor_elided(r,g) == True`
+    with no exceptions — the non-elided sibling (29, resp. 61) never
+    occurs, so it is not already materialized. Cost check: each new key
+    needs 1 scalar word + VLEN=8 words = 9 words; 2 new keys = 18 words
+    worst case, 16 at best. `scratch_next_addr` is 1533/1536 today (3
+    free) — confirmed via direct instrumentation, same as 2026-07-23.
+    Needing >=16 words against 3 free is not a rounding-error gap;
+    conclusion stands: NOT a cheap win, no implementation attempted or
+    landed. Re-open only if a future accept frees roughly 13-15+ scratch
+    words elsewhere.
   - status: ACCEPTED at the flag level (`idx_select=True, l4_gmin=(9,30)`
     measured -10 cyc, verified correct; pool_sizes/skew confirmed already
     optimal; boundary-crossing extension checked and found infeasible on

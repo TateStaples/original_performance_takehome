@@ -52,6 +52,7 @@ BASE_KWARGS: dict[str, Any] = {
     "newest_parity_last_leaf_diff_tables": True,  # ...with leaf-diff tables in dead registers
     "idx_select_before_madd": True,  # H-029 accepted: steady-gather idx update as vselect (1053 -> 1043 composed w/ l4_gmin retune)
     "tie_break": "fold_flow",  # H-021/H-029-follow-up: dual_fold ties favor flow over valu (1043 -> 1041, re-measured under the new engine mix)
+    "store_disjoint_region": True,  # H-031: final vstores skip the coarse mem model's address-oblivious WAR gate (provably disjoint regions), 1041 -> 1038
     "debug_compares": False,  # speed; grader ignores debug slots anyway
 }
 SHAPE: dict[str, int] = {"forest_height": 10, "batch_size": 256, "rounds": 16}

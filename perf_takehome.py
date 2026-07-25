@@ -66,9 +66,15 @@ class ListScheduler:
     op into an earlier bundle than a previously placed independent op is
     always safe.
 
-    Memory is tracked coarsely (one pseudo-location for all of mem): reads
-    are plentiful (gathers) and the only writes are the final vstores, so
-    per-address tracking would buy nothing.
+    Memory is tracked coarsely (one pseudo-location for all of mem) for the
+    WAW side: reads are plentiful (gathers) and the only writes are the
+    final vstores/mem-priming stores, so per-address WAW tracking would buy
+    nothing (H-028's same-cycle write pairing already special-cases this).
+    The WAR side (mem_write vs prior mem_read) is coarse the same way by
+    default, but `ignore_mem_read_hazard` lets a caller that can prove its
+    write's address range is statically disjoint from every prior read's
+    range skip it (H-031: the final result vstores target a memory range
+    the kernel's gathers never touch).
 
     Placement scans start from a per-engine `hint` = first cycle known to
     possibly have a free slot on that engine (monotone, since slots only
@@ -91,6 +97,7 @@ class ListScheduler:
         mem_read: bool = False,
         mem_write: bool = False,
         min_cycle: int = 0,
+        ignore_mem_read_hazard: bool = False,
     ) -> int:
         cycle = min_cycle
         lw = self.last_write
@@ -112,7 +119,17 @@ class ListScheduler:
             # Same-cycle mem WRITES ok: commit end-of-cycle, disjoint addrs exact, kernel never writes a word twice; reads keep full ordering vs writes both ways.
             if self.last_mem_write_cycle > cycle:
                 cycle = self.last_mem_write_cycle
-            if self.last_mem_read_cycle > cycle:
+            # The coarse one-pseudo-location mem model otherwise makes every
+            # write wait for the LAST mem read anywhere in the kernel
+            # (address-oblivious WAR). Real gathers run almost to the final
+            # cycle, so that would block every final vstore behind the
+            # kernel's last gather regardless of whether they alias. The
+            # final result vstores target inp_values_p's range, which
+            # build_mem_image lays out as STATICALLY DISJOINT from every
+            # gather's forest_values_p range -- callers that can prove
+            # disjointness (only the final store loop) pass
+            # ignore_mem_read_hazard=True to skip this gate (H-031).
+            if not ignore_mem_read_hazard and self.last_mem_read_cycle > cycle:
                 cycle = self.last_mem_read_cycle
         return cycle
 
@@ -178,8 +195,9 @@ class ListScheduler:
         mem_read: bool = False,
         mem_write: bool = False,
         min_cycle: int = 0,
+        ignore_mem_read_hazard: bool = False,
     ) -> int:
-        cycle = self.ready(reads, writes, mem_read, mem_write, min_cycle)
+        cycle = self.ready(reads, writes, mem_read, mem_write, min_cycle, ignore_mem_read_hazard)
         cycle = self.find_free(engine, cycle)
         self.put(engine, slot, cycle, reads, writes, mem_read, mem_write)
         return cycle
@@ -1288,13 +1306,22 @@ class KernelBuilder:
                         emit_group_round(r, g)
 
         # --- store final values; second pause after everything ---
+        # H-031: each store's target (val_addrs[g], inside inp_values_p's
+        # range) is statically disjoint from every gather's source range
+        # (forest_values_p's range) -- build_mem_image lays these out as
+        # separate regions and gather addresses never leave the forest
+        # range -- so these stores can skip the coarse mem model's
+        # address-oblivious WAR gate (last_mem_read_cycle) and place as
+        # soon as each group's own hash chain retires, instead of waiting
+        # for the kernel's LAST gather anywhere.
         assert val_addrs is not None and hash_chain_vecs is not None
         last_store_cycle = 0
         for g in range(n_groups):
             va = val_addrs[g]
             assert va is not None
             c = scheduler.emit("store", ("vstore", va, hash_chain_vecs[g]),
-                       (va,) + self._v(hash_chain_vecs[g]), (), mem_write=True)
+                       (va,) + self._v(hash_chain_vecs[g]), (), mem_write=True,
+                       ignore_mem_read_hazard=True)
             last_store_cycle = max(last_store_cycle, c)
         scheduler.emit("flow", ("pause",), min_cycle=last_store_cycle)
 

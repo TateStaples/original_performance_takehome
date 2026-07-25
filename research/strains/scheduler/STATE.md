@@ -171,3 +171,95 @@ strain: re-tune l4_gmin/skew/pools under derive_consts+alu_val_addrs
   = 1070 -> 1064; ramp empty slots 49 -> 22, round 0 starts c12 -> c7.
   lazy_val_loads negative alone (+9), neutral composed — kept as a
   negative control. Default bit-identical; grader 9/9 @ 1070.
+- iter 7 (H-031, post-H-030 mainline 1041): store-drain re-investigation
+  per the driver's 3-region brief (setup ramp / final-round drain /
+  store-drain tail). Findings + accept below.
+
+## H-031: store-drain tail was a scheduler mem-model artifact, not a
+structural bound. Mainline **1041 -> 1038** (flipped into perf_takehome.py)
+
+**Region 3 (store-drain) -- REAL FIND, ACCEPTED and FLIPPED.** The class
+docstring says memory is tracked coarsely (one pseudo-location for all of
+mem) because "reads are plentiful (gathers) and the only writes are the
+final vstores, so per-address tracking would buy nothing" -- true for
+WAW (H-028 already fixed that side with `store_pair`), but nobody had
+checked the WAR/mem_write-vs-mem_read side: `ready()`'s `mem_write`
+branch makes EVERY store wait until `last_mem_read_cycle`, the cycle of
+the LAST gather anywhere in the entire kernel, address-oblivious. Direct
+measurement (script: dump `kb.sched_trace`, tag = (round, group), find
+each group's last write to its own `val{g}` address): group 0's hash
+chain is fully done at cycle **696**, yet its store is placed at cycle
+**1025** -- a 329-cycle wait purely from this coarse gate, NOT from any
+real hazard. Every group's finish time (696 for g0 up to 1036 for g31)
+sits far below the actual store cycle (1025-1040): the store engine sits
+completely idle (except 5 small mem_prime writes at c23-36) for ~989
+cycles despite results being ready.
+
+This is provably safe to relax for the FINAL store loop specifically:
+`build_mem_image` (problem.py) lays out `forest_values_p` (gather source)
+and `inp_values_p` (store target) as consecutive, disjoint, STATIC
+ranges; gather addresses never leave `[forest_values_p, forest_values_p +
+n_nodes)`. The only reads that ever touch `inp_values_p` are each group's
+one-time initial vload, which complete at setup (~c40), always before any
+store's earliest possible ready cycle (>=696, since a store needs its
+group's full round-15 hash chain). mem_prime's tree-priming writes DO
+alias their own reads (read tree, xor, write back) and are left untouched.
+
+Implementation: `ListScheduler.ready`/`.emit` take a new
+`ignore_mem_read_hazard` param (default False in `dev.py`; wired
+unconditionally into `perf_takehome.py`'s single final-store call site).
+A companion `store_order` mode `"finish_asc"` (dev.py only) sorts the
+store loop by each group's ALREADY-KNOWN `scheduler.last_write[hash_chain_vecs[g]]`
+instead of natural group index; measured IDENTICAL to natural "group"
+order (1038) -- the default group layout (skew blocks ascending) already
+tracks finish order closely enough that sorting buys nothing extra.
+
+MEASURED (mainline 1041 baseline, verified both via `tools/run_variant.py`
+and directly against `perf_takehome.py`):
+  store_disjoint_region=True                    1038  (-3, FLIPPED)
+  + store_order="finish_asc"                    1038  (=, redundant)
+  + store_order="rev"                           1053  (+12: reversing
+    emission order violates the WAW gate's monotonicity -- g31's store
+    (ready ~1037) gets processed FIRST, bumping `last_mem_write_cycle` to
+    1037, which then floors every earlier group's store back up to 1037)
+  + store_order="tail_first"                    1053  (same mechanism)
+  l4_gmin retune under the flag: (9,30) [default] 1038, (10,30) 1040,
+    (9,29) 1042, (8,30) 1041 -- default l4_gmin stays optimal, no retune.
+Verified correct on 8 draws (seeds 1-7, 42, unseeded) + `debug_compares=True`,
+grader 9/9 green @ 1038. Profile after the fix (`tools/sched_profile.py
+--detail`): the store-drain region drops from 4 fully-idle-except-store
+cycles to 1 (cycle 1037 only); stores now interleave with the r15 L4
+drain's compute instead of trailing it.
+
+**Regions 1 and 2 -- re-confirmed structural, no new lever found.**
+
+- Setup ramp: re-profiled at the 1041 mainline (post-H-030). Load engine
+  runs 2/2 solid every cycle from c0 through the whole ramp with zero
+  idle load slots -- confirmed throughput-bound, not latency-bound.
+  Counted the necessary load-engine ops still in the ramp: 6 arbitrary
+  hash constants (C0, C1, ap, aq, C4, C5 -- H-024 already brute-forced
+  these against every 1-op alu combination of loaded scalars, found none)
+  + 2 header loads + 1 root load + 32 val vloads (one per group, real
+  input data, not derivable) + ~2 level-table vloads = ~43 load ops,
+  ceil(43/2) = 22 cycles -- matches the profiler's 22 measured empty-slot
+  count exactly. This is a tight floor: shrinking it further needs either
+  a new algebraic relation among the 6 remaining constants (already
+  proven absent) or a way to fetch more than 2 load-engine words/cycle
+  (an ISA change, out of scope). No new idea found; H-024's `derive_consts`
+  + `alu_val_addrs` already harvest everything derivable.
+- Final-round drain (r15 L4 + r14-15 seam): re-profiled; alu/load/flow
+  sit mostly idle there (e.g. cycle 1033: alu=0, load=0, flow=0, only
+  valu busy at 2-3/6) while valu chases a genuine serial RAW chain on
+  `val` (multiply_add -> ^ -> >> -> ^, level by level, the hash's own
+  stages). This is the identical mechanism H-002/H-010/H-023 already
+  measured exhaustively: the chain is the hash itself, already shortened
+  once (H-027's `b3l_diffs`, in mainline) and its shortening bought
+  nothing further to try beyond what's landed -- there is no unconsumed
+  slack on any OTHER engine at those specific cycles to move work onto
+  (unlike the store-drain, where the store engine had ~989 cycles of pure
+  idle capacity, the alu/load/flow idleness here is only a few slots per
+  cycle, already smaller than one op's worth of useful relocatable work).
+  No new speculative-fold or reordering variant was tried beyond H-023/
+  H-027/H-030's existing sweep since no new mechanism (unlike H-031's
+  mem-hazard finding) was found to justify one; this region is treated as
+  re-confirmed rather than newly closed.
