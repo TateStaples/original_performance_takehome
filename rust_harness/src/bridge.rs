@@ -10,7 +10,7 @@
 //! never depend on them (see docs/isa.md §2), so there is nothing to lose by
 //! omitting them from the bridge. Fine-grained per-step checking during
 //! development is `debug::Compare` against a fixture's trace *within Rust*
-//! (see `machine::Machine::with_trace`) — that's the fast loop this harness
+//! (see `machine::Machine::with_value_trace`) — that's the fast loop this harness
 //! is for. `tools/load_rust_kernel.py` is the Python-side counterpart that
 //! reads this JSON back into a real `KernelBuilder`.
 
@@ -35,20 +35,20 @@ fn alu_op_str(op: AluOp) -> &'static str {
     }
 }
 
-fn alu_slot_json(s: &AluSlot) -> Value {
-    json!([alu_op_str(s.op), s.dest.0, s.a1.0, s.a2.0])
+fn alu_slot_json(slot: &AluSlot) -> Value {
+    json!([alu_op_str(slot.op), slot.dest.0, slot.a1.0, slot.a2.0])
 }
 
-fn valu_slot_json(s: &ValuSlot) -> Value {
-    match s {
+fn valu_slot_json(slot: &ValuSlot) -> Value {
+    match slot {
         ValuSlot::Op { op, dest, a1, a2 } => json!([alu_op_str(*op), dest.0, a1.0, a2.0]),
         ValuSlot::Broadcast { dest, src } => json!(["vbroadcast", dest.0, src.0]),
         ValuSlot::MultiplyAdd { dest, a, b, c } => json!(["multiply_add", dest.0, a.0, b.0, c.0]),
     }
 }
 
-fn load_slot_json(s: &LoadSlot) -> Value {
-    match s {
+fn load_slot_json(slot: &LoadSlot) -> Value {
+    match slot {
         LoadSlot::Load { dest, addr } => json!(["load", dest.0, addr.0]),
         LoadSlot::LoadOffset { dest, addr, offset } => {
             json!(["load_offset", dest.0, addr.0, offset])
@@ -58,15 +58,15 @@ fn load_slot_json(s: &LoadSlot) -> Value {
     }
 }
 
-fn store_slot_json(s: &StoreSlot) -> Value {
-    match s {
+fn store_slot_json(slot: &StoreSlot) -> Value {
+    match slot {
         StoreSlot::Store { addr, src } => json!(["store", addr.0, src.0]),
         StoreSlot::VStore { addr, src } => json!(["vstore", addr.0, src.0]),
     }
 }
 
-fn flow_slot_json(s: &FlowSlot) -> Value {
-    match s {
+fn flow_slot_json(slot: &FlowSlot) -> Value {
+    match slot {
         FlowSlot::Select { dest, cond, a, b } => json!(["select", dest.0, cond.0, a.0, b.0]),
         FlowSlot::VSelect { dest, cond, a, b } => json!(["vselect", dest.0, cond.0, a.0, b.0]),
         FlowSlot::AddImm { dest, a, imm } => json!(["add_imm", dest.0, a.0, imm]),
@@ -81,36 +81,36 @@ fn flow_slot_json(s: &FlowSlot) -> Value {
     }
 }
 
-pub fn bundle_to_python_json(b: &Bundle) -> Value {
+pub fn bundle_to_python_json(bundle: &Bundle) -> Value {
     let mut map = Map::new();
-    if !b.alu.is_empty() {
+    if !bundle.alu.is_empty() {
         map.insert(
             "alu".into(),
-            Value::Array(b.alu.iter().map(alu_slot_json).collect()),
+            Value::Array(bundle.alu.iter().map(alu_slot_json).collect()),
         );
     }
-    if !b.valu.is_empty() {
+    if !bundle.valu.is_empty() {
         map.insert(
             "valu".into(),
-            Value::Array(b.valu.iter().map(valu_slot_json).collect()),
+            Value::Array(bundle.valu.iter().map(valu_slot_json).collect()),
         );
     }
-    if !b.load.is_empty() {
+    if !bundle.load.is_empty() {
         map.insert(
             "load".into(),
-            Value::Array(b.load.iter().map(load_slot_json).collect()),
+            Value::Array(bundle.load.iter().map(load_slot_json).collect()),
         );
     }
-    if !b.store.is_empty() {
+    if !bundle.store.is_empty() {
         map.insert(
             "store".into(),
-            Value::Array(b.store.iter().map(store_slot_json).collect()),
+            Value::Array(bundle.store.iter().map(store_slot_json).collect()),
         );
     }
-    if !b.flow.is_empty() {
+    if !bundle.flow.is_empty() {
         map.insert(
             "flow".into(),
-            Value::Array(b.flow.iter().map(flow_slot_json).collect()),
+            Value::Array(bundle.flow.iter().map(flow_slot_json).collect()),
         );
     }
     Value::Object(map)
@@ -123,7 +123,7 @@ pub fn program_to_python_json(program: &Program) -> Value {
     Value::Array(
         program
             .iter()
-            .filter(|b| b.costs_a_cycle())
+            .filter(|bundle| bundle.costs_a_cycle())
             .map(bundle_to_python_json)
             .collect(),
     )

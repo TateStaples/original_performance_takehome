@@ -43,19 +43,19 @@ pub struct ProgramStats {
 }
 
 pub fn analyze(program: &Program) -> ProgramStats {
-    let mut s = ProgramStats::default();
+    let mut stats = ProgramStats::default();
     for bundle in program {
         if !bundle.costs_a_cycle() {
             continue; // matches Machine's cycle-counting rule (docs/isa.md §2)
         }
-        s.total_cycles += 1;
-        accumulate(&mut s.alu, bundle.alu.len(), slot_limits::ALU);
-        accumulate(&mut s.valu, bundle.valu.len(), slot_limits::VALU);
-        accumulate(&mut s.load, bundle.load.len(), slot_limits::LOAD);
-        accumulate(&mut s.store, bundle.store.len(), slot_limits::STORE);
-        accumulate(&mut s.flow, bundle.flow.len(), slot_limits::FLOW);
+        stats.total_cycles += 1;
+        accumulate(&mut stats.alu, bundle.alu.len(), slot_limits::ALU);
+        accumulate(&mut stats.valu, bundle.valu.len(), slot_limits::VALU);
+        accumulate(&mut stats.load, bundle.load.len(), slot_limits::LOAD);
+        accumulate(&mut stats.store, bundle.store.len(), slot_limits::STORE);
+        accumulate(&mut stats.flow, bundle.flow.len(), slot_limits::FLOW);
     }
-    s
+    stats
 }
 
 fn accumulate(stats: &mut EngineStats, used: usize, limit: usize) {
@@ -75,24 +75,24 @@ pub fn engines_per_bundle_histogram(program: &Program) -> Vec<(usize, u64)> {
         if !bundle.costs_a_cycle() {
             continue;
         }
-        let n = active_engine_count(bundle);
-        counts[n] += 1;
+        let active_engine_count = active_engine_count(bundle);
+        counts[active_engine_count] += 1;
     }
     counts
         .iter()
         .enumerate()
         .filter(|(_, &c)| c > 0)
-        .map(|(n, &c)| (n, c))
+        .map(|(active_engine_count, &c)| (active_engine_count, c))
         .collect()
 }
 
-fn active_engine_count(b: &Bundle) -> usize {
+fn active_engine_count(bundle: &Bundle) -> usize {
     [
-        !b.alu.is_empty(),
-        !b.valu.is_empty(),
-        !b.load.is_empty(),
-        !b.store.is_empty(),
-        !b.flow.is_empty(),
+        !bundle.alu.is_empty(),
+        !bundle.valu.is_empty(),
+        !bundle.load.is_empty(),
+        !bundle.store.is_empty(),
+        !bundle.flow.is_empty(),
     ]
     .into_iter()
     .filter(|x| *x)
@@ -107,7 +107,7 @@ impl fmt::Display for ProgramStats {
             "{:<7} {:>10} {:>12} {:>9}   {:>9}",
             "engine", "used", "capacity", "fill%", "busy%"
         )?;
-        for (name, s) in [
+        for (name, engine_stats) in [
             ("alu", self.alu),
             ("valu", self.valu),
             ("load", self.load),
@@ -118,10 +118,10 @@ impl fmt::Display for ProgramStats {
                 f,
                 "{:<7} {:>10} {:>12} {:>8.2}%   {:>8.2}%",
                 name,
-                s.used_slots,
-                s.capacity_slots,
-                s.utilization_pct(),
-                s.busy_pct(self.total_cycles)
+                engine_stats.used_slots,
+                engine_stats.capacity_slots,
+                engine_stats.utilization_pct(),
+                engine_stats.busy_pct(self.total_cycles)
             )?;
         }
         Ok(())

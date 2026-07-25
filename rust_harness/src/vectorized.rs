@@ -52,52 +52,52 @@ use crate::problem::HASH_STAGES;
 /// itself for exactly this reason.
 struct Packer {
     program: Program,
-    current: Bundle,
+    current_bundle: Bundle,
 }
 
 impl Packer {
     fn new() -> Self {
         Packer {
             program: Vec::new(),
-            current: Bundle::default(),
+            current_bundle: Bundle::default(),
         }
     }
 
     fn barrier(&mut self) {
-        if !self.current.is_empty() {
-            self.program.push(std::mem::take(&mut self.current));
+        if !self.current_bundle.is_empty() {
+            self.program.push(std::mem::take(&mut self.current_bundle));
         }
     }
 
     fn alu(&mut self, slot: AluSlot) {
-        if self.current.alu.len() >= slot_limits::ALU {
+        if self.current_bundle.alu.len() >= slot_limits::ALU {
             self.barrier();
         }
-        self.current.alu.push(slot);
+        self.current_bundle.alu.push(slot);
     }
     fn valu(&mut self, slot: ValuSlot) {
-        if self.current.valu.len() >= slot_limits::VALU {
+        if self.current_bundle.valu.len() >= slot_limits::VALU {
             self.barrier();
         }
-        self.current.valu.push(slot);
+        self.current_bundle.valu.push(slot);
     }
     fn load(&mut self, slot: LoadSlot) {
-        if self.current.load.len() >= slot_limits::LOAD {
+        if self.current_bundle.load.len() >= slot_limits::LOAD {
             self.barrier();
         }
-        self.current.load.push(slot);
+        self.current_bundle.load.push(slot);
     }
     fn store(&mut self, slot: StoreSlot) {
-        if self.current.store.len() >= slot_limits::STORE {
+        if self.current_bundle.store.len() >= slot_limits::STORE {
             self.barrier();
         }
-        self.current.store.push(slot);
+        self.current_bundle.store.push(slot);
     }
     fn flow(&mut self, slot: FlowSlot) {
-        if self.current.flow.len() >= slot_limits::FLOW {
+        if self.current_bundle.flow.len() >= slot_limits::FLOW {
             self.barrier();
         }
-        self.current.flow.push(slot);
+        self.current_bundle.flow.push(slot);
     }
 
     fn finish(mut self) -> Program {
@@ -113,243 +113,243 @@ pub fn build_kernel_vectorized(batch_size: u32, rounds: u32, pipeline_width: usi
         "batch_size must be a multiple of VLEN={VLEN} for this kernel"
     );
     assert!(pipeline_width >= 1);
-    let n_groups = (batch_size / VLEN as u32) as usize;
+    let group_count = (batch_size / VLEN as u32) as usize;
 
-    let mut b = Builder::new();
+    let mut builder = Builder::new();
 
     // Only the 4 header fields this kernel actually reads (see
     // docs/problem.md §2.5 for the fixed 7-word header layout).
-    let n_nodes_s = load_header_field(&mut b, "n_nodes", 1);
-    let forest_values_p_s = load_header_field(&mut b, "forest_values_p", 4);
-    let inp_indices_p_s = load_header_field(&mut b, "inp_indices_p", 5);
-    let inp_values_p_s = load_header_field(&mut b, "inp_values_p", 6);
+    let n_nodes_scalar = load_header_field(&mut builder, "n_nodes", 1);
+    let forest_values_p_scalar = load_header_field(&mut builder, "forest_values_p", 4);
+    let inp_indices_p_scalar = load_header_field(&mut builder, "inp_indices_p", 5);
+    let inp_values_p_scalar = load_header_field(&mut builder, "inp_values_p", 6);
 
-    b.push_flow_single(FlowSlot::Pause);
+    builder.push_flow_single(FlowSlot::Pause);
 
-    let mut pk = Packer::new();
+    let mut packer = Packer::new();
 
     // Broadcast every constant this kernel needs into an 8-wide vector,
     // exactly once, up front; every group/round below only *reads* these.
-    let zero_s = b.scratch_const(0);
-    let one_s = b.scratch_const(1);
-    let two_s = b.scratch_const(2);
-    let zero_vec = broadcast(&mut b, &mut pk, zero_s);
-    let one_vec = broadcast(&mut b, &mut pk, one_s);
-    let two_vec = broadcast(&mut b, &mut pk, two_s);
-    let forest_values_p_vec = broadcast(&mut b, &mut pk, forest_values_p_s);
-    let n_nodes_vec = broadcast(&mut b, &mut pk, n_nodes_s);
+    let zero_scalar = builder.scratch_const(0);
+    let one_scalar = builder.scratch_const(1);
+    let two_scalar = builder.scratch_const(2);
+    let zero_vec = broadcast(&mut builder, &mut packer, zero_scalar);
+    let one_vec = broadcast(&mut builder, &mut packer, one_scalar);
+    let two_vec = broadcast(&mut builder, &mut packer, two_scalar);
+    let forest_values_p_vec = broadcast(&mut builder, &mut packer, forest_values_p_scalar);
+    let n_nodes_vec = broadcast(&mut builder, &mut packer, n_nodes_scalar);
 
     let hash_const_vecs: Vec<(Scratch, Scratch)> = HASH_STAGES
         .iter()
         .map(|&(_, val1, _, _, val3)| {
-            let c1 = b.scratch_const(val1);
-            let c3 = b.scratch_const(val3);
+            let val1_const = builder.scratch_const(val1);
+            let val3_const = builder.scratch_const(val3);
             (
-                broadcast(&mut b, &mut pk, c1),
-                broadcast(&mut b, &mut pk, c3),
+                broadcast(&mut builder, &mut packer, val1_const),
+                broadcast(&mut builder, &mut packer, val3_const),
             )
         })
         .collect();
-    pk.barrier();
+    packer.barrier();
 
     // One persistent 8-wide vector register per group, alive for the
     // group's entire 16-round lifetime.
-    let idx_vecs: Vec<Scratch> = (0..n_groups)
-        .map(|_| b.alloc_scratch(VLEN as u16))
+    let idx_vecs: Vec<Scratch> = (0..group_count)
+        .map(|_| builder.alloc_scratch(VLEN as u16))
         .collect();
-    let val_vecs: Vec<Scratch> = (0..n_groups)
-        .map(|_| b.alloc_scratch(VLEN as u16))
+    let val_vecs: Vec<Scratch> = (0..group_count)
+        .map(|_| builder.alloc_scratch(VLEN as u16))
         .collect();
 
     // Per-pipeline-slot scratch temporaries, reused wave to wave.
     let addr_tmp: Vec<Scratch> = (0..pipeline_width)
-        .map(|_| b.alloc_scratch(VLEN as u16))
+        .map(|_| builder.alloc_scratch(VLEN as u16))
         .collect();
     let node_val_tmp: Vec<Scratch> = (0..pipeline_width)
-        .map(|_| b.alloc_scratch(VLEN as u16))
+        .map(|_| builder.alloc_scratch(VLEN as u16))
         .collect();
     let hash_tmp1: Vec<Scratch> = (0..pipeline_width)
-        .map(|_| b.alloc_scratch(VLEN as u16))
+        .map(|_| builder.alloc_scratch(VLEN as u16))
         .collect();
     let hash_tmp2: Vec<Scratch> = (0..pipeline_width)
-        .map(|_| b.alloc_scratch(VLEN as u16))
+        .map(|_| builder.alloc_scratch(VLEN as u16))
         .collect();
     let offset_tmp: Vec<Scratch> = (0..pipeline_width)
-        .map(|_| b.alloc_scratch(VLEN as u16))
+        .map(|_| builder.alloc_scratch(VLEN as u16))
         .collect();
     let next_idx_tmp: Vec<Scratch> = (0..pipeline_width)
-        .map(|_| b.alloc_scratch(VLEN as u16))
+        .map(|_| builder.alloc_scratch(VLEN as u16))
         .collect();
     let cmp_tmp: Vec<Scratch> = (0..pipeline_width)
-        .map(|_| b.alloc_scratch(VLEN as u16))
+        .map(|_| builder.alloc_scratch(VLEN as u16))
         .collect();
 
     // Load every group's starting idx/val once. Addresses are computed in
     // one packed batch (up to 12/cycle on alu) rather than one-at-a-time,
     // since stats::analyze on an earlier version of this function showed
     // these as unpacked single-op bundles -- a real, easily-fixed miss.
-    let idx_addrs = group_addrs(&mut b, &mut pk, inp_indices_p_s, n_groups);
-    let val_addrs = group_addrs(&mut b, &mut pk, inp_values_p_s, n_groups);
-    for g in 0..n_groups {
-        pk.load(LoadSlot::VLoad {
-            dest: idx_vecs[g],
-            addr: idx_addrs[g],
+    let idx_addrs = group_addrs(&mut builder, &mut packer, inp_indices_p_scalar, group_count);
+    let val_addrs = group_addrs(&mut builder, &mut packer, inp_values_p_scalar, group_count);
+    for group in 0..group_count {
+        packer.load(LoadSlot::VLoad {
+            dest: idx_vecs[group],
+            addr: idx_addrs[group],
         });
-        pk.load(LoadSlot::VLoad {
-            dest: val_vecs[g],
-            addr: val_addrs[g],
+        packer.load(LoadSlot::VLoad {
+            dest: val_vecs[group],
+            addr: val_addrs[group],
         });
     }
-    pk.barrier();
+    packer.barrier();
 
     for _round in 0..rounds {
         let mut wave_start = 0;
-        while wave_start < n_groups {
-            let wave_end = (wave_start + pipeline_width).min(n_groups);
+        while wave_start < group_count {
+            let wave_end = (wave_start + pipeline_width).min(group_count);
             let wave: Vec<usize> = (wave_start..wave_end).collect();
             wave_start = wave_end;
 
-            // addr[g] = idx[g] + forest_values_p (all 8 lanes' gather addresses in one valu op)
-            for (slot, &g) in wave.iter().enumerate() {
-                pk.valu(ValuSlot::Op {
+            // addr[group] = idx[group] + forest_values_p (all 8 lanes' gather addresses in one valu op)
+            for (pipeline_slot, &group) in wave.iter().enumerate() {
+                packer.valu(ValuSlot::Op {
                     op: AluOp::Add,
-                    dest: addr_tmp[slot],
-                    a1: idx_vecs[g],
+                    dest: addr_tmp[pipeline_slot],
+                    a1: idx_vecs[group],
                     a2: forest_values_p_vec,
                 });
             }
-            pk.barrier();
+            packer.barrier();
 
             // gather node_val -- unavoidably scalar, see module docs
-            for (slot, _) in wave.iter().enumerate() {
+            for (pipeline_slot, _) in wave.iter().enumerate() {
                 for lane in 0..VLEN {
-                    pk.load(LoadSlot::Load {
-                        dest: node_val_tmp[slot].lane(lane),
-                        addr: addr_tmp[slot].lane(lane),
+                    packer.load(LoadSlot::Load {
+                        dest: node_val_tmp[pipeline_slot].lane(lane),
+                        addr: addr_tmp[pipeline_slot].lane(lane),
                     });
                 }
             }
-            pk.barrier();
+            packer.barrier();
 
             // val ^= node_val
-            for (slot, &g) in wave.iter().enumerate() {
-                pk.valu(ValuSlot::Op {
+            for (pipeline_slot, &group) in wave.iter().enumerate() {
+                packer.valu(ValuSlot::Op {
                     op: AluOp::Xor,
-                    dest: val_vecs[g],
-                    a1: val_vecs[g],
-                    a2: node_val_tmp[slot],
+                    dest: val_vecs[group],
+                    a1: val_vecs[group],
+                    a2: node_val_tmp[pipeline_slot],
                 });
             }
-            pk.barrier();
+            packer.barrier();
 
             // 6-stage hash, vectorized
             for (stage_idx, &(op1, _, op2, op3, _)) in HASH_STAGES.iter().enumerate() {
-                let (c1_vec, c3_vec) = hash_const_vecs[stage_idx];
-                for (slot, &g) in wave.iter().enumerate() {
-                    pk.valu(ValuSlot::Op {
+                let (val1_const_vec, val3_const_vec) = hash_const_vecs[stage_idx];
+                for (pipeline_slot, &group) in wave.iter().enumerate() {
+                    packer.valu(ValuSlot::Op {
                         op: op1,
-                        dest: hash_tmp1[slot],
-                        a1: val_vecs[g],
-                        a2: c1_vec,
+                        dest: hash_tmp1[pipeline_slot],
+                        a1: val_vecs[group],
+                        a2: val1_const_vec,
                     });
-                    pk.valu(ValuSlot::Op {
+                    packer.valu(ValuSlot::Op {
                         op: op3,
-                        dest: hash_tmp2[slot],
-                        a1: val_vecs[g],
-                        a2: c3_vec,
+                        dest: hash_tmp2[pipeline_slot],
+                        a1: val_vecs[group],
+                        a2: val3_const_vec,
                     });
                 }
-                pk.barrier();
-                for (slot, &g) in wave.iter().enumerate() {
-                    pk.valu(ValuSlot::Op {
+                packer.barrier();
+                for (pipeline_slot, &group) in wave.iter().enumerate() {
+                    packer.valu(ValuSlot::Op {
                         op: op2,
-                        dest: val_vecs[g],
-                        a1: hash_tmp1[slot],
-                        a2: hash_tmp2[slot],
+                        dest: val_vecs[group],
+                        a1: hash_tmp1[pipeline_slot],
+                        a2: hash_tmp2[pipeline_slot],
                     });
                 }
-                pk.barrier();
+                packer.barrier();
             }
 
             // offset = (val % 2) + 1 -- replaces the naive mod+eq+select
-            for (slot, &g) in wave.iter().enumerate() {
-                pk.valu(ValuSlot::Op {
+            for (pipeline_slot, &group) in wave.iter().enumerate() {
+                packer.valu(ValuSlot::Op {
                     op: AluOp::Mod,
-                    dest: offset_tmp[slot],
-                    a1: val_vecs[g],
+                    dest: offset_tmp[pipeline_slot],
+                    a1: val_vecs[group],
                     a2: two_vec,
                 });
             }
-            pk.barrier();
-            for (slot, _) in wave.iter().enumerate() {
-                pk.valu(ValuSlot::Op {
+            packer.barrier();
+            for (pipeline_slot, _) in wave.iter().enumerate() {
+                packer.valu(ValuSlot::Op {
                     op: AluOp::Add,
-                    dest: offset_tmp[slot],
-                    a1: offset_tmp[slot],
+                    dest: offset_tmp[pipeline_slot],
+                    a1: offset_tmp[pipeline_slot],
                     a2: one_vec,
                 });
             }
-            pk.barrier();
+            packer.barrier();
 
             // next_idx = idx*2 + offset
-            for (slot, &g) in wave.iter().enumerate() {
-                pk.valu(ValuSlot::Op {
+            for (pipeline_slot, &group) in wave.iter().enumerate() {
+                packer.valu(ValuSlot::Op {
                     op: AluOp::Mul,
-                    dest: next_idx_tmp[slot],
-                    a1: idx_vecs[g],
+                    dest: next_idx_tmp[pipeline_slot],
+                    a1: idx_vecs[group],
                     a2: two_vec,
                 });
             }
-            pk.barrier();
-            for (slot, _) in wave.iter().enumerate() {
-                pk.valu(ValuSlot::Op {
+            packer.barrier();
+            for (pipeline_slot, _) in wave.iter().enumerate() {
+                packer.valu(ValuSlot::Op {
                     op: AluOp::Add,
-                    dest: next_idx_tmp[slot],
-                    a1: next_idx_tmp[slot],
-                    a2: offset_tmp[slot],
+                    dest: next_idx_tmp[pipeline_slot],
+                    a1: next_idx_tmp[pipeline_slot],
+                    a2: offset_tmp[pipeline_slot],
                 });
             }
-            pk.barrier();
+            packer.barrier();
 
             // wraparound: idx = (next_idx < n_nodes) ? next_idx : 0 -- the one genuine select
-            for (slot, _) in wave.iter().enumerate() {
-                pk.valu(ValuSlot::Op {
+            for (pipeline_slot, _) in wave.iter().enumerate() {
+                packer.valu(ValuSlot::Op {
                     op: AluOp::Lt,
-                    dest: cmp_tmp[slot],
-                    a1: next_idx_tmp[slot],
+                    dest: cmp_tmp[pipeline_slot],
+                    a1: next_idx_tmp[pipeline_slot],
                     a2: n_nodes_vec,
                 });
             }
-            pk.barrier();
-            for (slot, &g) in wave.iter().enumerate() {
-                pk.flow(FlowSlot::VSelect {
-                    dest: idx_vecs[g],
-                    cond: cmp_tmp[slot],
-                    a: next_idx_tmp[slot],
+            packer.barrier();
+            for (pipeline_slot, &group) in wave.iter().enumerate() {
+                packer.flow(FlowSlot::VSelect {
+                    dest: idx_vecs[group],
+                    cond: cmp_tmp[pipeline_slot],
+                    a: next_idx_tmp[pipeline_slot],
                     b: zero_vec,
                 });
             }
-            pk.barrier();
+            packer.barrier();
         }
     }
 
     // Store every group's final idx/val once, at the *same* addresses
-    // computed for the initial load -- nothing writes inp_indices_p_s /
-    // inp_values_p_s in between, so those registers are still valid and
+    // computed for the initial load -- nothing writes inp_indices_p_scalar /
+    // inp_values_p_scalar in between, so those registers are still valid and
     // there's no need to recompute them.
-    for g in 0..n_groups {
-        pk.store(StoreSlot::VStore {
-            addr: idx_addrs[g],
-            src: idx_vecs[g],
+    for group in 0..group_count {
+        packer.store(StoreSlot::VStore {
+            addr: idx_addrs[group],
+            src: idx_vecs[group],
         });
-        pk.store(StoreSlot::VStore {
-            addr: val_addrs[g],
-            src: val_vecs[g],
+        packer.store(StoreSlot::VStore {
+            addr: val_addrs[group],
+            src: val_vecs[group],
         });
     }
 
-    let mut program = b.program;
-    program.extend(pk.finish());
+    let mut program = builder.program;
+    program.extend(packer.finish());
     program.push(Bundle {
         flow: vec![FlowSlot::Pause],
         ..Default::default()
@@ -357,27 +357,32 @@ pub fn build_kernel_vectorized(batch_size: u32, rounds: u32, pipeline_width: usi
     program
 }
 
-fn load_header_field(b: &mut Builder, name: &'static str, header_index: u32) -> Scratch {
-    let dest = b.alloc_named(name, 1);
-    let addr = b.scratch_const(header_index);
-    b.push_load_single(LoadSlot::Load { dest, addr });
+fn load_header_field(builder: &mut Builder, name: &'static str, header_index: u32) -> Scratch {
+    let dest = builder.alloc_named(name, 1);
+    let addr = builder.scratch_const(header_index);
+    builder.push_load_single(LoadSlot::Load { dest, addr });
     dest
 }
 
-fn broadcast(b: &mut Builder, pk: &mut Packer, src: Scratch) -> Scratch {
-    let dest = b.alloc_scratch(VLEN as u16);
-    pk.valu(ValuSlot::Broadcast { dest, src });
+fn broadcast(builder: &mut Builder, packer: &mut Packer, src: Scratch) -> Scratch {
+    let dest = builder.alloc_scratch(VLEN as u16);
+    packer.valu(ValuSlot::Broadcast { dest, src });
     dest
 }
 
-/// `addr[g] = base + g*VLEN` for every group, computed as one packed batch
+/// `addr[group] = base + group*VLEN` for every group, computed as one packed batch
 /// (up to `slot_limits::ALU` per bundle) rather than one bundle per group.
-fn group_addrs(b: &mut Builder, pk: &mut Packer, base: Scratch, n_groups: usize) -> Vec<Scratch> {
-    let addrs: Vec<Scratch> = (0..n_groups)
-        .map(|g| {
-            let dest = b.alloc_scratch(1);
-            let offset_const = b.scratch_const((g * VLEN) as u32);
-            pk.alu(AluSlot {
+fn group_addrs(
+    builder: &mut Builder,
+    packer: &mut Packer,
+    base: Scratch,
+    group_count: usize,
+) -> Vec<Scratch> {
+    let addrs: Vec<Scratch> = (0..group_count)
+        .map(|group| {
+            let dest = builder.alloc_scratch(1);
+            let offset_const = builder.scratch_const((group * VLEN) as u32);
+            packer.alu(AluSlot {
                 op: AluOp::Add,
                 dest,
                 a1: base,
@@ -386,6 +391,6 @@ fn group_addrs(b: &mut Builder, pk: &mut Packer, base: Scratch, n_groups: usize)
             dest
         })
         .collect();
-    pk.barrier();
+    packer.barrier();
     addrs
 }

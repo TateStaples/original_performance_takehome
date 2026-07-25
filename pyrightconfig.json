@@ -1,0 +1,19 @@
+{
+  "include": [
+    "problem.py",
+    "perf_takehome.py",
+    "dev.py",
+    "watch_trace.py",
+    "tools"
+  ],
+  "exclude": [
+    "**/node_modules",
+    "**/__pycache__",
+    "**/.*",
+    ".venv",
+    "tests",
+    "research"
+  ],
+  "pythonVersion": "3.13",
+  "typeCheckingMode": "basic"
+}

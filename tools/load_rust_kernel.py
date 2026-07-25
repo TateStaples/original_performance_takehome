@@ -13,12 +13,18 @@ Usage (from the repo root):
     python tools/load_rust_kernel.py --forest-height 10 --batch-size 256 --rounds 16
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import os
 import random
 import subprocess
 import sys
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from problem import Engine, Instruction, Program
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RUST_DIR = os.path.join(REPO_ROOT, "rust_harness")
@@ -27,18 +33,18 @@ sys.path.insert(0, REPO_ROOT)
 sys.path.insert(0, os.path.join(REPO_ROOT, "tests"))
 
 
-def instrs_from_json(bundles):
+def instrs_from_json(bundles: list[dict[Engine, list[list[Any]]]]) -> Program:
     """Rust's JSON bundles (lists of lists) -> KernelBuilder's tuple form."""
-    instrs = []
+    instrs: Program = []
     for bundle in bundles:
-        instr = {}
+        instr: Instruction = {}
         for engine, slots in bundle.items():
             instr[engine] = [tuple(slot) for slot in slots]
         instrs.append(instr)
     return instrs
 
 
-def gen_kernel_json(forest_height: int, n_nodes: int, batch_size: int, rounds: int):
+def gen_kernel_json(forest_height: int, n_nodes: int, batch_size: int, rounds: int) -> Any:
     try:
         result = subprocess.run(
             [
@@ -58,21 +64,21 @@ def gen_kernel_json(forest_height: int, n_nodes: int, batch_size: int, rounds: i
     return json.loads(result.stdout)
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--forest-height", type=int, default=10)
-    ap.add_argument("--batch-size", type=int, default=256)
-    ap.add_argument("--rounds", type=int, default=16)
-    ap.add_argument("--seed", type=int, default=123)
-    args = ap.parse_args()
+def main() -> None:
+    arg_parser = argparse.ArgumentParser(description=__doc__)
+    arg_parser.add_argument("--forest-height", type=int, default=10)
+    arg_parser.add_argument("--batch-size", type=int, default=256)
+    arg_parser.add_argument("--rounds", type=int, default=16)
+    arg_parser.add_argument("--seed", type=int, default=123)
+    args = arg_parser.parse_args()
 
     # Import the frozen grading copy, exactly like tests/submission_tests.py.
     from frozen_problem import Machine, DebugInfo, build_mem_image, reference_kernel2, Tree, Input, N_CORES
 
     random.seed(args.seed)
     forest = Tree.generate(args.forest_height)
-    inp = Input.generate(forest, args.batch_size, args.rounds)
-    mem = build_mem_image(forest, inp)
+    problem_input = Input.generate(forest, args.batch_size, args.rounds)
+    mem = build_mem_image(forest, problem_input)
 
     bundles = gen_kernel_json(args.forest_height, len(forest.values), args.batch_size, args.rounds)
     instrs = instrs_from_json(bundles)
@@ -86,9 +92,12 @@ def main():
     for ref_mem in reference_kernel2(ref_mem):
         pass
 
-    inp_values_p = ref_mem[6]
-    n = len(inp.values)
-    correct = machine.mem[inp_values_p : inp_values_p + n] == ref_mem[inp_values_p : inp_values_p + n]
+    input_values_ptr = ref_mem[6]
+    value_count = len(problem_input.values)
+    correct = (
+        machine.mem[input_values_ptr : input_values_ptr + value_count]
+        == ref_mem[input_values_ptr : input_values_ptr + value_count]
+    )
 
     print(f"bundles: {len(instrs)}")
     print(f"CYCLES: {machine.cycle}")

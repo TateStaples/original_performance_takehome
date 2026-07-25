@@ -10,7 +10,7 @@
 //!
 //! Search space per target, stated precisely (this is what "exhaustive"
 //! means below — anything outside it is NOT ruled out):
-//!   * programs of exactly k ops for k = 1 .. kmax (iterative deepening);
+//!   * programs of exactly k ops for k = 1 .. max_ops (iterative deepening);
 //!   * every op's operands are the target's inputs, previous results, or
 //!     constants from the target's POOL (listed per target), EXCEPT the
 //!     final op, where xor/add/sub/and/or-constants, shift amounts, and
@@ -50,8 +50,8 @@ use std::sync::Mutex;
 use std::time::Instant;
 
 /// Probe count: every candidate value is this many parallel evaluations.
-const P: usize = 32;
-type Vp = [u32; P];
+const PROBE_COUNT: usize = 32;
+type ProbeValues = [u32; PROBE_COUNT];
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum Op {
@@ -115,7 +115,7 @@ fn bin(op: Op, a: u32, b: u32) -> u32 {
 
 /// Bit-exact `ValuSlot::MultiplyAdd`: (a*b + c) mod 2^32.
 #[inline(always)]
-fn mad(a: u32, b: u32, c: u32) -> u32 {
+fn multiply_add(a: u32, b: u32, c: u32) -> u32 {
     a.wrapping_mul(b).wrapping_add(c)
 }
 
@@ -135,58 +135,58 @@ fn modinv32(a: u32) -> u32 {
 #[derive(Clone, Debug)]
 enum Inst {
     Bin(Op, usize, usize),
-    Mad(usize, usize, usize),
+    MultiplyAdd(usize, usize, usize),
     /// op(pool[i], c) with solved constant c.
-    BinC(Op, usize, u32),
+    BinConstRight(Op, usize, u32),
     /// op(c, pool[i]) with solved constant c (non-commutative right forms).
-    CBin(Op, u32, usize),
+    BinConstLeft(Op, u32, usize),
     /// pool[i] * pool[j] + c.
-    MadC(usize, usize, u32),
+    MultiplyAddConst(usize, usize, u32),
     /// pool[i] * K + C.
-    MadKC(usize, u32, u32),
+    MultiplyAddAffine(usize, u32, u32),
 }
 
 /// A reference target function evaluated on an input tuple.
 type TargetFn = dyn Fn(&[u32]) -> u32 + Sync;
 
 struct Ctx<'a> {
-    n_inputs: usize,
+    input_count: usize,
     base_names: Vec<String>,
-    base_vals: Vec<Vp>,
+    base_vals: Vec<ProbeValues>,
     base_is_const: Vec<bool>,
-    target: Vp,
+    target: ProbeValues,
     /// complete candidate programs checked (final-level checks).
-    tested: AtomicU64,
-    stop: AtomicBool,
+    tested_count: AtomicU64,
+    should_stop: AtomicBool,
     finds: Mutex<Vec<Vec<Inst>>>,
     /// final-level constant solves skipped for lack of an odd pivot.
-    unsolved: AtomicU64,
-    f: &'a TargetFn,
+    unsolved_count: AtomicU64,
+    reference_fn: &'a TargetFn,
 }
 
 /// Per-thread mutable search state.
-struct W {
-    vals: Vec<Vp>,
-    p0: Vec<u32>,
+struct SearchState {
+    vals: Vec<ProbeValues>,
+    probe0_vals: Vec<u32>,
     is_const: Vec<bool>,
     /// per-temp "has been referenced" flags (parallel to temps only).
     temp_used: Vec<bool>,
-    unused_cnt: usize,
+    unused_temp_count: usize,
     prog: Vec<Inst>,
-    n_base: usize,
+    base_count: usize,
     tested_local: u64,
 }
 
-impl W {
-    fn new(ctx: &Ctx) -> W {
-        W {
+impl SearchState {
+    fn new(ctx: &Ctx) -> SearchState {
+        SearchState {
             vals: ctx.base_vals.clone(),
-            p0: ctx.base_vals.iter().map(|v| v[0]).collect(),
+            probe0_vals: ctx.base_vals.iter().map(|v| v[0]).collect(),
             is_const: ctx.base_is_const.clone(),
             temp_used: Vec::new(),
-            unused_cnt: 0,
+            unused_temp_count: 0,
             prog: Vec::new(),
-            n_base: ctx.base_vals.len(),
+            base_count: ctx.base_vals.len(),
             tested_local: 0,
         }
     }
@@ -194,16 +194,16 @@ impl W {
     /// Mark operand as referenced; returns true if it was an unused temp
     /// (so pop can undo).
     fn mark(&mut self, idx: usize) -> bool {
-        if idx >= self.n_base && !self.temp_used[idx - self.n_base] {
-            self.temp_used[idx - self.n_base] = true;
-            self.unused_cnt -= 1;
+        if idx >= self.base_count && !self.temp_used[idx - self.base_count] {
+            self.temp_used[idx - self.base_count] = true;
+            self.unused_temp_count -= 1;
             true
         } else {
             false
         }
     }
 
-    fn push(&mut self, inst: Inst, v: Vp) -> [bool; 3] {
+    fn push(&mut self, inst: Inst, v: ProbeValues) -> [bool; 3] {
         let mut undo = [false; 3];
         match inst {
             Inst::Bin(_, i, j) => {
@@ -212,7 +212,7 @@ impl W {
                     undo[1] = self.mark(j);
                 }
             }
-            Inst::Mad(i, j, k) => {
+            Inst::MultiplyAdd(i, j, k) => {
                 undo[0] = self.mark(i);
                 if j != i {
                     undo[1] = self.mark(j);
@@ -225,38 +225,38 @@ impl W {
         }
         self.prog.push(inst);
         self.vals.push(v);
-        self.p0.push(v[0]);
+        self.probe0_vals.push(v[0]);
         self.is_const.push(false);
         self.temp_used.push(false);
-        self.unused_cnt += 1;
+        self.unused_temp_count += 1;
         undo
     }
 
     fn pop(&mut self, undo: [bool; 3]) {
         let inst = self.prog.pop().unwrap();
         self.vals.pop();
-        self.p0.pop();
+        self.probe0_vals.pop();
         self.is_const.pop();
         self.temp_used.pop();
-        self.unused_cnt -= 1;
+        self.unused_temp_count -= 1;
         let ops: [usize; 3] = match inst {
             Inst::Bin(_, i, j) => [i, j, usize::MAX],
-            Inst::Mad(i, j, k) => [i, j, k],
+            Inst::MultiplyAdd(i, j, k) => [i, j, k],
             _ => unreachable!(),
         };
         for (n, &o) in ops.iter().enumerate() {
             if undo[n] {
-                self.temp_used[o - self.n_base] = false;
-                self.unused_cnt += 1;
+                self.temp_used[o - self.base_count] = false;
+                self.unused_temp_count += 1;
             }
         }
     }
 
-    /// Is `v` (with first probe `v0`) identical on all probes to an existing
+    /// Is `v` (with first probe `candidate_probe0`) identical on all probes to an existing
     /// pool value? (Duplicate pruning.)
-    fn is_dup(&self, v0: u32, v: &Vp) -> bool {
-        for (i, &p0) in self.p0.iter().enumerate() {
-            if p0 == v0 && &self.vals[i] == v {
+    fn is_dup(&self, candidate_probe0: u32, v: &ProbeValues) -> bool {
+        for (i, &probe0_vals) in self.probe0_vals.iter().enumerate() {
+            if probe0_vals == candidate_probe0 && &self.vals[i] == v {
                 return true;
             }
         }
@@ -267,215 +267,215 @@ impl W {
     fn unused_list(&self) -> Vec<usize> {
         (0..self.temp_used.len())
             .filter(|&t| !self.temp_used[t])
-            .map(|t| t + self.n_base)
+            .map(|t| t + self.base_count)
             .collect()
     }
 }
 
-fn eval_bin(op: Op, a: &Vp, b: &Vp) -> Vp {
-    let mut out = [0u32; P];
-    for p in 0..P {
+fn eval_bin(op: Op, a: &ProbeValues, b: &ProbeValues) -> ProbeValues {
+    let mut out = [0u32; PROBE_COUNT];
+    for p in 0..PROBE_COUNT {
         out[p] = bin(op, a[p], b[p]);
     }
     out
 }
 
-fn eval_mad(a: &Vp, b: &Vp, c: &Vp) -> Vp {
-    let mut out = [0u32; P];
-    for p in 0..P {
-        out[p] = mad(a[p], b[p], c[p]);
+fn eval_multiply_add(a: &ProbeValues, b: &ProbeValues, c: &ProbeValues) -> ProbeValues {
+    let mut out = [0u32; PROBE_COUNT];
+    for p in 0..PROBE_COUNT {
+        out[p] = multiply_add(a[p], b[p], c[p]);
     }
     out
 }
 
 /// Enumerate every candidate instruction over the current pool (dedup'd,
 /// const-const skipped, commutative ops canonicalized) and call `f`.
-fn enumerate_level(w: &W, mut f: impl FnMut(Inst, Vp)) {
-    let n = w.vals.len();
+fn enumerate_level(w: &SearchState, mut f: impl FnMut(Inst, ProbeValues)) {
+    let pool_size = w.vals.len();
     for &op in BIN_OPS.iter() {
-        for i in 0..n {
+        for i in 0..pool_size {
             let j0 = if op.commutative() { i } else { 0 };
-            for j in j0..n {
+            for j in j0..pool_size {
                 if w.is_const[i] && w.is_const[j] {
                     continue;
                 }
                 if op == Sub && i == j {
                     continue;
                 }
-                let v0 = bin(op, w.p0[i], w.p0[j]);
+                let candidate_probe0 = bin(op, w.probe0_vals[i], w.probe0_vals[j]);
                 let v = eval_bin(op, &w.vals[i], &w.vals[j]);
-                if w.is_dup(v0, &v) {
+                if w.is_dup(candidate_probe0, &v) {
                     continue;
                 }
                 f(Inst::Bin(op, i, j), v);
             }
         }
     }
-    for i in 0..n {
-        for j in i..n {
-            for k in 0..n {
+    for i in 0..pool_size {
+        for j in i..pool_size {
+            for k in 0..pool_size {
                 if w.is_const[i] && w.is_const[j] && w.is_const[k] {
                     continue;
                 }
-                let v0 = mad(w.p0[i], w.p0[j], w.p0[k]);
-                let v = eval_mad(&w.vals[i], &w.vals[j], &w.vals[k]);
-                if w.is_dup(v0, &v) {
+                let candidate_probe0 = multiply_add(w.probe0_vals[i], w.probe0_vals[j], w.probe0_vals[k]);
+                let v = eval_multiply_add(&w.vals[i], &w.vals[j], &w.vals[k]);
+                if w.is_dup(candidate_probe0, &v) {
                     continue;
                 }
-                f(Inst::Mad(i, j, k), v);
+                f(Inst::MultiplyAdd(i, j, k), v);
             }
         }
     }
 }
 
-fn dfs(ctx: &Ctx, w: &mut W, rem: usize) {
-    if ctx.stop.load(Ordering::Relaxed) {
+fn dfs(ctx: &Ctx, w: &mut SearchState, remaining_ops: usize) {
+    if ctx.should_stop.load(Ordering::Relaxed) {
         return;
     }
     // Every temp must eventually be referenced: r remaining ops can consume
     // at most 3 operands each, and all but the last create one more value
     // needing a reference. Prune when that's impossible.
-    if w.unused_cnt > 2 * rem + 1 {
+    if w.unused_temp_count > 2 * remaining_ops + 1 {
         return;
     }
-    if rem == 1 {
+    if remaining_ops == 1 {
         final_level(ctx, w);
         return;
     }
-    let mut cands: Vec<(Inst, Vp)> = Vec::with_capacity(4096);
+    let mut cands: Vec<(Inst, ProbeValues)> = Vec::with_capacity(4096);
     enumerate_level(w, |inst, v| cands.push((inst, v)));
     for (inst, v) in cands {
-        if ctx.stop.load(Ordering::Relaxed) {
+        if ctx.should_stop.load(Ordering::Relaxed) {
             return;
         }
         let undo = w.push(inst, v);
-        dfs(ctx, w, rem - 1);
+        dfs(ctx, w, remaining_ops - 1);
         w.pop(undo);
     }
 }
 
 /// Depth-1 remaining: enumerate/solve the final op against the target.
-fn final_level(ctx: &Ctx, w: &mut W) {
-    let unused = w.unused_list();
-    if unused.len() > 3 {
+fn final_level(ctx: &Ctx, w: &mut SearchState) {
+    let unused_temp_indices = w.unused_list();
+    if unused_temp_indices.len() > 3 {
         return;
     }
-    let t = &ctx.target;
-    let t0 = t[0];
-    let n = w.vals.len();
+    let target = &ctx.target;
+    let target_probe0 = target[0];
+    let pool_size = w.vals.len();
 
-    let covers2 = |i: usize, j: usize| unused.iter().all(|&u| u == i || u == j);
-    let covers3 = |i: usize, j: usize, k: usize| unused.iter().all(|&u| u == i || u == j || u == k);
+    let covers2 = |i: usize, j: usize| unused_temp_indices.iter().all(|&u| u == i || u == j);
+    let covers3 = |i: usize, j: usize, k: usize| unused_temp_indices.iter().all(|&u| u == i || u == j || u == k);
 
     // ---- pooled operands ----
     for &op in BIN_OPS.iter() {
-        for i in 0..n {
+        for i in 0..pool_size {
             let j0 = if op.commutative() { i } else { 0 };
-            for j in j0..n {
+            for j in j0..pool_size {
                 if w.is_const[i] && w.is_const[j] {
                     continue;
                 }
                 w.tested_local += 1;
-                if bin(op, w.p0[i], w.p0[j]) != t0 || !covers2(i, j) {
+                if bin(op, w.probe0_vals[i], w.probe0_vals[j]) != target_probe0 || !covers2(i, j) {
                     continue;
                 }
-                if (0..P).all(|p| bin(op, w.vals[i][p], w.vals[j][p]) == t[p]) {
+                if (0..PROBE_COUNT).all(|p| bin(op, w.vals[i][p], w.vals[j][p]) == target[p]) {
                     report(ctx, w, Inst::Bin(op, i, j));
                 }
             }
         }
     }
-    for i in 0..n {
-        for j in i..n {
-            for k in 0..n {
+    for i in 0..pool_size {
+        for j in i..pool_size {
+            for k in 0..pool_size {
                 if w.is_const[i] && w.is_const[j] && w.is_const[k] {
                     continue;
                 }
                 w.tested_local += 1;
-                if mad(w.p0[i], w.p0[j], w.p0[k]) != t0 || !covers3(i, j, k) {
+                if multiply_add(w.probe0_vals[i], w.probe0_vals[j], w.probe0_vals[k]) != target_probe0 || !covers3(i, j, k) {
                     continue;
                 }
-                if (0..P).all(|p| mad(w.vals[i][p], w.vals[j][p], w.vals[k][p]) == t[p]) {
-                    report(ctx, w, Inst::Mad(i, j, k));
+                if (0..PROBE_COUNT).all(|p| multiply_add(w.vals[i][p], w.vals[j][p], w.vals[k][p]) == target[p]) {
+                    report(ctx, w, Inst::MultiplyAdd(i, j, k));
                 }
             }
         }
     }
 
-    // ---- solved-constant forms (one non-const pool operand x) ----
-    for i in 0..n {
+    // ---- solved-constant forms (one non-const pool operand sole_operand) ----
+    for i in 0..pool_size {
         if w.is_const[i] {
             continue;
         }
-        if !unused.iter().all(|&u| u == i) {
-            continue; // solved forms use only x; all unused temps must be x
+        if !unused_temp_indices.iter().all(|&u| u == i) {
+            continue; // solved forms use only sole_operand; all unused temps must be sole_operand
         }
-        let x = &w.vals[i];
+        let sole_operand = &w.vals[i];
 
         // xor / add / sub (both orders): c determined by probe 0.
-        let c = t0 ^ x[0];
+        let c = target_probe0 ^ sole_operand[0];
         w.tested_local += 1;
-        if (0..P).all(|p| (x[p] ^ c) == t[p]) {
-            report(ctx, w, Inst::BinC(Xor, i, c));
+        if (0..PROBE_COUNT).all(|p| (sole_operand[p] ^ c) == target[p]) {
+            report(ctx, w, Inst::BinConstRight(Xor, i, c));
         }
-        let c = t0.wrapping_sub(x[0]);
+        let c = target_probe0.wrapping_sub(sole_operand[0]);
         w.tested_local += 1;
-        if (0..P).all(|p| x[p].wrapping_add(c) == t[p]) {
-            report(ctx, w, Inst::BinC(Add, i, c));
+        if (0..PROBE_COUNT).all(|p| sole_operand[p].wrapping_add(c) == target[p]) {
+            report(ctx, w, Inst::BinConstRight(Add, i, c));
         }
-        let c = x[0].wrapping_sub(t0);
+        let c = sole_operand[0].wrapping_sub(target_probe0);
         w.tested_local += 1;
-        if (0..P).all(|p| x[p].wrapping_sub(c) == t[p]) {
-            report(ctx, w, Inst::BinC(Sub, i, c));
+        if (0..PROBE_COUNT).all(|p| sole_operand[p].wrapping_sub(c) == target[p]) {
+            report(ctx, w, Inst::BinConstRight(Sub, i, c));
         }
-        let c = t0.wrapping_add(x[0]);
+        let c = target_probe0.wrapping_add(sole_operand[0]);
         w.tested_local += 1;
-        if (0..P).all(|p| c.wrapping_sub(x[p]) == t[p]) {
-            report(ctx, w, Inst::CBin(Sub, c, i));
+        if (0..PROBE_COUNT).all(|p| c.wrapping_sub(sole_operand[p]) == target[p]) {
+            report(ctx, w, Inst::BinConstLeft(Sub, c, i));
         }
 
         // and / or: bitwise-solved constant.
         let mut c_and = 0u32;
-        for p in 0..P {
-            c_and |= x[p] & t[p];
+        for p in 0..PROBE_COUNT {
+            c_and |= sole_operand[p] & target[p];
         }
         w.tested_local += 1;
-        if (0..P).all(|p| (x[p] & c_and) == t[p]) {
-            report(ctx, w, Inst::BinC(And, i, c_and));
+        if (0..PROBE_COUNT).all(|p| (sole_operand[p] & c_and) == target[p]) {
+            report(ctx, w, Inst::BinConstRight(And, i, c_and));
         }
         let mut c_or = 0u32;
-        for p in 0..P {
-            c_or |= t[p] & !x[p];
+        for p in 0..PROBE_COUNT {
+            c_or |= target[p] & !sole_operand[p];
         }
         w.tested_local += 1;
-        if (0..P).all(|p| (x[p] | c_or) == t[p]) {
-            report(ctx, w, Inst::BinC(Or, i, c_or));
+        if (0..PROBE_COUNT).all(|p| (sole_operand[p] | c_or) == target[p]) {
+            report(ctx, w, Inst::BinConstRight(Or, i, c_or));
         }
 
         // shl / shr by any amount 0..31.
         for s in 0..32u32 {
             w.tested_local += 2;
-            if (x[0] << s) == t0 && (0..P).all(|p| (x[p] << s) == t[p]) {
-                report(ctx, w, Inst::BinC(Shl, i, s));
+            if (sole_operand[0] << s) == target_probe0 && (0..PROBE_COUNT).all(|p| (sole_operand[p] << s) == target[p]) {
+                report(ctx, w, Inst::BinConstRight(Shl, i, s));
             }
-            if (x[0] >> s) == t0 && (0..P).all(|p| (x[p] >> s) == t[p]) {
-                report(ctx, w, Inst::BinC(Shr, i, s));
+            if (sole_operand[0] >> s) == target_probe0 && (0..PROBE_COUNT).all(|p| (sole_operand[p] >> s) == target[p]) {
+                report(ctx, w, Inst::BinConstRight(Shr, i, s));
             }
         }
 
-        // multiply_add x*K + C with both K and C solved: pick a probe pair
+        // multiply_add sole_operand*K + C with both K and C solved: pick a probe pair
         // with odd difference (K then unique), C follows.
         let mut solved = false;
-        'pairs: for p in 0..P {
-            for q in (p + 1)..P {
-                let dx = x[p].wrapping_sub(x[q]);
+        'pairs: for p in 0..PROBE_COUNT {
+            for q in (p + 1)..PROBE_COUNT {
+                let dx = sole_operand[p].wrapping_sub(sole_operand[q]);
                 if dx & 1 == 1 {
-                    let dt = t[p].wrapping_sub(t[q]);
+                    let dt = target[p].wrapping_sub(target[q]);
                     let k = dt.wrapping_mul(modinv32(dx));
-                    let c = t[p].wrapping_sub(k.wrapping_mul(x[p]));
+                    let c = target[p].wrapping_sub(k.wrapping_mul(sole_operand[p]));
                     w.tested_local += 1;
-                    if (0..P).all(|r| mad(x[r], k, c) == t[r]) {
-                        report(ctx, w, Inst::MadKC(i, k, c));
+                    if (0..PROBE_COUNT).all(|r| multiply_add(sole_operand[r], k, c) == target[r]) {
+                        report(ctx, w, Inst::MultiplyAddAffine(i, k, c));
                     }
                     solved = true;
                     break 'pairs;
@@ -483,23 +483,23 @@ fn final_level(ctx: &Ctx, w: &mut W) {
             }
         }
         if !solved {
-            ctx.unsolved.fetch_add(1, Ordering::Relaxed);
+            ctx.unsolved_count.fetch_add(1, Ordering::Relaxed);
         }
     }
 
     // multiply_add pool[i]*pool[j] + solved C.
-    for i in 0..n {
-        for j in i..n {
+    for i in 0..pool_size {
+        for j in i..pool_size {
             if w.is_const[i] && w.is_const[j] {
                 continue;
             }
             if !covers2(i, j) {
                 continue;
             }
-            let c = t0.wrapping_sub(w.p0[i].wrapping_mul(w.p0[j]));
+            let c = target_probe0.wrapping_sub(w.probe0_vals[i].wrapping_mul(w.probe0_vals[j]));
             w.tested_local += 1;
-            if (0..P).all(|p| mad(w.vals[i][p], w.vals[j][p], c) == t[p]) {
-                report(ctx, w, Inst::MadC(i, j, c));
+            if (0..PROBE_COUNT).all(|p| multiply_add(w.vals[i][p], w.vals[j][p], c) == target[p]) {
+                report(ctx, w, Inst::MultiplyAddConst(i, j, c));
             }
         }
     }
@@ -507,7 +507,7 @@ fn final_level(ctx: &Ctx, w: &mut W) {
 
 /// A candidate matched all probes: verify against the reference function on
 /// 10M+ inputs, then record + print.
-fn report(ctx: &Ctx, w: &W, last: Inst) {
+fn report(ctx: &Ctx, w: &SearchState, last: Inst) {
     let mut prog = w.prog.clone();
     prog.push(last);
     report_prog(ctx, prog);
@@ -532,27 +532,27 @@ fn report_prog(ctx: &Ctx, prog: Vec<Inst>) {
         let mut finds = ctx.finds.lock().unwrap();
         finds.push(prog);
         if finds.len() >= 8 {
-            ctx.stop.store(true, Ordering::Relaxed);
+            ctx.should_stop.store(true, Ordering::Relaxed);
         }
     }
 }
 
 /// Execute `prog` on concrete inputs (base constants from ctx).
 fn run_prog(ctx: &Ctx, prog: &[Inst], inputs: &[u32]) -> u32 {
-    let n_base = ctx.base_vals.len();
-    let mut vals: Vec<u32> = Vec::with_capacity(n_base + prog.len());
+    let base_count = ctx.base_vals.len();
+    let mut vals: Vec<u32> = Vec::with_capacity(base_count + prog.len());
     vals.extend_from_slice(inputs);
-    for b in ctx.n_inputs..n_base {
+    for b in ctx.input_count..base_count {
         vals.push(ctx.base_vals[b][0]); // constants are probe-invariant
     }
     for inst in prog {
         let v = match *inst {
             Inst::Bin(op, i, j) => bin(op, vals[i], vals[j]),
-            Inst::Mad(i, j, k) => mad(vals[i], vals[j], vals[k]),
-            Inst::BinC(op, i, c) => bin(op, vals[i], c),
-            Inst::CBin(op, c, i) => bin(op, c, vals[i]),
-            Inst::MadC(i, j, c) => mad(vals[i], vals[j], c),
-            Inst::MadKC(i, k, c) => mad(vals[i], k, c),
+            Inst::MultiplyAdd(i, j, k) => multiply_add(vals[i], vals[j], vals[k]),
+            Inst::BinConstRight(op, i, c) => bin(op, vals[i], c),
+            Inst::BinConstLeft(op, c, i) => bin(op, c, vals[i]),
+            Inst::MultiplyAddConst(i, j, c) => multiply_add(vals[i], vals[j], c),
+            Inst::MultiplyAddAffine(i, k, c) => multiply_add(vals[i], k, c),
         };
         vals.push(v);
     }
@@ -580,8 +580,8 @@ fn verify(ctx: &Ctx, prog: &[Inst]) -> bool {
         0xDEAD_BEEF,
         0x0F0F_0F0F,
     ];
-    let check = |ins: &[u32]| run_prog(ctx, prog, ins) == (ctx.f)(ins);
-    match ctx.n_inputs {
+    let check = |ins: &[u32]| run_prog(ctx, prog, ins) == (ctx.reference_fn)(ins);
+    match ctx.input_count {
         1 => {
             for &s in &structured {
                 if !check(&[s]) {
@@ -619,12 +619,12 @@ fn verify(ctx: &Ctx, prog: &[Inst]) -> bool {
 }
 
 fn render(ctx: &Ctx, prog: &[Inst]) -> String {
-    let n_base = ctx.base_vals.len();
+    let base_count = ctx.base_vals.len();
     let name = |idx: usize, ctx: &Ctx| -> String {
-        if idx < n_base {
+        if idx < base_count {
             ctx.base_names[idx].clone()
         } else {
-            format!("t{}", idx - n_base + 1)
+            format!("t{}", idx - base_count + 1)
         }
     };
     let mut out = String::new();
@@ -636,13 +636,13 @@ fn render(ctx: &Ctx, prog: &[Inst]) -> String {
         };
         let rhs = match *inst {
             Inst::Bin(op, a, b) => format!("{}({}, {})", op.name(), name(a, ctx), name(b, ctx)),
-            Inst::Mad(a, b, c) => {
+            Inst::MultiplyAdd(a, b, c) => {
                 format!("madd({}, {}, {})", name(a, ctx), name(b, ctx), name(c, ctx))
             }
-            Inst::BinC(op, a, c) => format!("{}({}, {:#010x})", op.name(), name(a, ctx), c),
-            Inst::CBin(op, c, a) => format!("{}({:#010x}, {})", op.name(), c, name(a, ctx)),
-            Inst::MadC(a, b, c) => format!("madd({}, {}, {:#010x})", name(a, ctx), name(b, ctx), c),
-            Inst::MadKC(a, k, c) => {
+            Inst::BinConstRight(op, a, c) => format!("{}({}, {:#010x})", op.name(), name(a, ctx), c),
+            Inst::BinConstLeft(op, c, a) => format!("{}({:#010x}, {})", op.name(), c, name(a, ctx)),
+            Inst::MultiplyAddConst(a, b, c) => format!("madd({}, {}, {:#010x})", name(a, ctx), name(b, ctx), c),
+            Inst::MultiplyAddAffine(a, k, c) => {
                 format!("madd({}, {:#010x}, {:#010x})", name(a, ctx), k, c)
             }
         };
@@ -658,15 +658,15 @@ fn render(ctx: &Ctx, prog: &[Inst]) -> String {
 struct Target {
     name: &'static str,
     desc: &'static str,
-    n_inputs: usize,
+    input_count: usize,
     consts: Vec<(&'static str, u32)>,
-    kmax: usize,
+    max_ops: usize,
     current_ops: usize,
-    f: Box<TargetFn>,
-    long: bool,
+    reference_fn: Box<TargetFn>,
+    is_long_suite: bool,
 }
 
-fn probes(n_inputs: usize) -> Vec<Vec<u32>> {
+fn probes(input_count: usize) -> Vec<Vec<u32>> {
     let structured: [u32; 14] = [
         0,
         1,
@@ -684,13 +684,13 @@ fn probes(n_inputs: usize) -> Vec<Vec<u32>> {
         0xDEAD_BEEF,
     ];
     let mut rng = Rng::new(0x5EED_CAFE);
-    let mut out = Vec::with_capacity(P);
-    for p in 0..P {
-        let mut tup = Vec::with_capacity(n_inputs);
-        for k in 0..n_inputs {
+    let mut out = Vec::with_capacity(PROBE_COUNT);
+    for p in 0..PROBE_COUNT {
+        let mut tup = Vec::with_capacity(input_count);
+        for k in 0..input_count {
             // First rows pair structured values with randoms so single-input
             // structure is exercised; later rows are fully random.
-            let v = if p < structured.len() && k == p % n_inputs.max(1) {
+            let v = if p < structured.len() && k == p % input_count.max(1) {
                 structured[p]
             } else {
                 rng.next_u64() as u32
@@ -702,56 +702,56 @@ fn probes(n_inputs: usize) -> Vec<Vec<u32>> {
     out
 }
 
-fn run_target(tg: &Target, threads: usize) {
-    let probes = probes(tg.n_inputs);
+fn run_target(target_spec: &Target, threads: usize) {
+    let probes = probes(target_spec.input_count);
     let mut base_names: Vec<String> = Vec::new();
-    let mut base_vals: Vec<Vp> = Vec::new();
+    let mut base_vals: Vec<ProbeValues> = Vec::new();
     let mut base_is_const: Vec<bool> = Vec::new();
     let input_names = ["x", "y"];
-    for k in 0..tg.n_inputs {
+    for k in 0..target_spec.input_count {
         base_names.push(input_names[k].to_string());
-        let mut v = [0u32; P];
+        let mut v = [0u32; PROBE_COUNT];
         for (p, tup) in probes.iter().enumerate() {
             v[p] = tup[k];
         }
         base_vals.push(v);
         base_is_const.push(false);
     }
-    for (nm, c) in &tg.consts {
+    for (nm, c) in &target_spec.consts {
         base_names.push(format!("{nm}={c:#010x}"));
-        base_vals.push([*c; P]);
+        base_vals.push([*c; PROBE_COUNT]);
         base_is_const.push(true);
     }
-    let mut target = [0u32; P];
+    let mut target = [0u32; PROBE_COUNT];
     for (p, tup) in probes.iter().enumerate() {
-        target[p] = (tg.f)(tup);
+        target[p] = (target_spec.reference_fn)(tup);
     }
 
     println!(
         "== target {} : {} (current {} ops, searching k<= {}) ==",
-        tg.name, tg.desc, tg.current_ops, tg.kmax
+        target_spec.name, target_spec.desc, target_spec.current_ops, target_spec.max_ops
     );
     println!(
         "   pool: [{}]",
         base_names
             .iter()
-            .skip(tg.n_inputs)
+            .skip(target_spec.input_count)
             .cloned()
             .collect::<Vec<_>>()
             .join(", ")
     );
 
     let ctx = Ctx {
-        n_inputs: tg.n_inputs,
+        input_count: target_spec.input_count,
         base_names,
         base_vals,
         base_is_const,
         target,
-        tested: AtomicU64::new(0),
-        stop: AtomicBool::new(false),
+        tested_count: AtomicU64::new(0),
+        should_stop: AtomicBool::new(false),
         finds: Mutex::new(Vec::new()),
-        unsolved: AtomicU64::new(0),
-        f: &*tg.f,
+        unsolved_count: AtomicU64::new(0),
+        reference_fn: &*target_spec.reference_fn,
     };
 
     // k = 0: target already available?
@@ -762,80 +762,80 @@ fn run_target(tg: &Target, threads: usize) {
     }
 
     let t_start = Instant::now();
-    search_iterative(&ctx, tg.kmax, threads);
+    search_iterative(&ctx, target_spec.max_ops, threads);
 
     let finds = ctx.finds.lock().unwrap();
-    let unsolved = ctx.unsolved.load(Ordering::Relaxed);
+    let unsolved_count = ctx.unsolved_count.load(Ordering::Relaxed);
     if finds.is_empty() {
         println!(
             "   RESULT: no program of <= {} ops within this space ({} candidates, {:.1}s{})",
-            tg.kmax,
-            ctx.tested.load(Ordering::Relaxed),
+            target_spec.max_ops,
+            ctx.tested_count.load(Ordering::Relaxed),
             t_start.elapsed().as_secs_f64(),
-            if unsolved > 0 {
-                format!(", {unsolved} madd-K solves skipped: no odd pivot")
+            if unsolved_count > 0 {
+                format!(", {unsolved_count} madd-K solves skipped: no odd pivot")
             } else {
                 String::new()
             }
         );
         println!(
             "   => current {}-op form stands within the searched space\n",
-            tg.current_ops
+            target_spec.current_ops
         );
     } else {
         println!(
             "   RESULT: {} verified shorter program(s) found ({} ops < current {})\n",
             finds.len(),
             finds[0].len(),
-            tg.current_ops
+            target_spec.current_ops
         );
     }
 }
 
-/// The forward-only iterative-deepening search (k = 1..=kmax, exhaustive per
+/// The forward-only iterative-deepening search (k = 1..=max_ops, exhaustive per
 /// k within the ctx's pool): forward DFS to depth k-1 + solved final level.
 /// Shared by the legacy suite (`run_target`) and the MITM runner's engine A.
-fn search_iterative(ctx: &Ctx, kmax: usize, threads: usize) {
-    for k in 1..=kmax {
+fn search_iterative(ctx: &Ctx, max_ops: usize, threads: usize) {
+    for op_count in 1..=max_ops {
         if !ctx.finds.lock().unwrap().is_empty() {
-            break; // already found something shorter at k-1
+            break; // already found something shorter at op_count-1
         }
-        let k_start = Instant::now();
-        if k == 1 {
-            let mut w = W::new(ctx);
+        let iteration_start = Instant::now();
+        if op_count == 1 {
+            let mut w = SearchState::new(ctx);
             final_level(ctx, &mut w);
-            ctx.tested.fetch_add(w.tested_local, Ordering::Relaxed);
+            ctx.tested_count.fetch_add(w.tested_local, Ordering::Relaxed);
         } else {
             // Thread over first-level candidates.
-            let mut l1: Vec<(Inst, Vp)> = Vec::new();
+            let mut first_level_candidates: Vec<(Inst, ProbeValues)> = Vec::new();
             {
-                let w = W::new(ctx);
-                enumerate_level(&w, |inst, v| l1.push((inst, v)));
+                let w = SearchState::new(ctx);
+                enumerate_level(&w, |inst, v| first_level_candidates.push((inst, v)));
             }
             let next = AtomicU64::new(0);
             std::thread::scope(|scope| {
                 for _ in 0..threads {
                     scope.spawn(|| {
-                        let mut w = W::new(ctx);
+                        let mut w = SearchState::new(ctx);
                         loop {
                             let idx = next.fetch_add(1, Ordering::Relaxed) as usize;
-                            if idx >= l1.len() || ctx.stop.load(Ordering::Relaxed) {
+                            if idx >= first_level_candidates.len() || ctx.should_stop.load(Ordering::Relaxed) {
                                 break;
                             }
-                            let (inst, v) = l1[idx].clone();
+                            let (inst, v) = first_level_candidates[idx].clone();
                             let undo = w.push(inst, v);
-                            dfs(ctx, &mut w, k - 1);
+                            dfs(ctx, &mut w, op_count - 1);
                             w.pop(undo);
                         }
-                        ctx.tested.fetch_add(w.tested_local, Ordering::Relaxed);
+                        ctx.tested_count.fetch_add(w.tested_local, Ordering::Relaxed);
                     });
                 }
             });
         }
         println!(
-            "   k={k}: exhausted in {:.1}s (cumulative candidates tested: {})",
-            k_start.elapsed().as_secs_f64(),
-            ctx.tested.load(Ordering::Relaxed)
+            "   op_count={op_count}: exhausted in {:.1}s (cumulative candidates tested: {})",
+            iteration_start.elapsed().as_secs_f64(),
+            ctx.tested_count.load(Ordering::Relaxed)
         );
     }
 }
@@ -850,350 +850,350 @@ fn targets() -> Vec<Target> {
         Target {
             name: "full",
             desc: "entire 6-stage myhash",
-            n_inputs: 1,
+            input_count: 1,
             consts: mk(&[
-                ("C0", C0),
-                ("C1", C1),
-                ("K0", K0),
-                ("KP", KP),
-                ("AP", AP),
-                ("KQ", KQ),
-                ("AQ", AQ),
-                ("K4", K4),
-                ("C4", C4),
-                ("C5", C5),
+                ("STAGE0_ADD_CONSTANT", STAGE0_ADD_CONSTANT),
+                ("STAGE1_XOR_CONSTANT", STAGE1_XOR_CONSTANT),
+                ("STAGE0_MULTIPLIER", STAGE0_MULTIPLIER),
+                ("F23_P_MULTIPLIER", F23_P_MULTIPLIER),
+                ("F23_P_CONSTANT", F23_P_CONSTANT),
+                ("F23_Q_MULTIPLIER", F23_Q_MULTIPLIER),
+                ("F23_Q_CONSTANT", F23_Q_CONSTANT),
+                ("STAGE4_MULTIPLIER", STAGE4_MULTIPLIER),
+                ("STAGE4_ADD_CONSTANT", STAGE4_ADD_CONSTANT),
+                ("STAGE5_XOR_CONSTANT", STAGE5_XOR_CONSTANT),
                 ("sh1", 19),
                 ("sh5", 16),
                 ("s12", 12),
             ]),
-            kmax: 3,
+            max_ops: 3,
             current_ops: 11,
-            f: Box::new(|x| myhash(x[0])),
-            long: false,
+            reference_fn: Box::new(|x| myhash(x[0])),
+            is_long_suite: false,
         },
         Target {
             name: "g01",
             desc: "stage1(stage0(a)) [madd,shr,xor,xor]",
-            n_inputs: 1,
+            input_count: 1,
             consts: mk(&[
-                ("C0", C0),
-                ("C1", C1),
-                ("K0", K0),
+                ("STAGE0_ADD_CONSTANT", STAGE0_ADD_CONSTANT),
+                ("STAGE1_XOR_CONSTANT", STAGE1_XOR_CONSTANT),
+                ("STAGE0_MULTIPLIER", STAGE0_MULTIPLIER),
                 ("p12", 4096),
                 ("s12", 12),
                 ("sh1", 19),
-                ("C1s", C1 >> 19),
-                ("C1i", C1 ^ (C1 >> 19)),
-                ("C0x1", C0 ^ C1),
+                ("C1s", STAGE1_XOR_CONSTANT >> 19),
+                ("C1i", STAGE1_XOR_CONSTANT ^ (STAGE1_XOR_CONSTANT >> 19)),
+                ("C0x1", STAGE0_ADD_CONSTANT ^ STAGE1_XOR_CONSTANT),
             ]),
-            kmax: 3,
+            max_ops: 3,
             current_ops: 4,
-            f: Box::new(|x| hs::stage1(hs::stage0(x[0]))),
-            long: false,
+            reference_fn: Box::new(|x| hs::stage1(hs::stage0(x[0]))),
+            is_long_suite: false,
         },
         Target {
             name: "a2u",
-            desc: "sigma19(stage0(a)) (pre-C1 point) [madd,shr,xor]",
-            n_inputs: 1,
+            desc: "sigma19(stage0(a)) (pre-STAGE1_XOR_CONSTANT point) [madd,shr,xor]",
+            input_count: 1,
             consts: mk(&[
-                ("C0", C0),
-                ("K0", K0),
+                ("STAGE0_ADD_CONSTANT", STAGE0_ADD_CONSTANT),
+                ("STAGE0_MULTIPLIER", STAGE0_MULTIPLIER),
                 ("p12", 4096),
                 ("s12", 12),
                 ("sh1", 19),
                 ("p19", 1 << 19),
             ]),
-            kmax: 2,
+            max_ops: 2,
             current_ops: 3,
-            f: Box::new(|x| {
+            reference_fn: Box::new(|x| {
                 let b = hs::stage0(x[0]);
                 b ^ (b >> 19)
             }),
-            long: false,
+            is_long_suite: false,
         },
         Target {
             name: "b2c",
             desc: "stage1 alone [shr,xor,xor]",
-            n_inputs: 1,
+            input_count: 1,
             consts: mk(&[
-                ("C1", C1),
+                ("STAGE1_XOR_CONSTANT", STAGE1_XOR_CONSTANT),
                 ("sh1", 19),
-                ("C1s", C1 >> 19),
-                ("C1i", C1 ^ (C1 >> 19)),
+                ("C1s", STAGE1_XOR_CONSTANT >> 19),
+                ("C1i", STAGE1_XOR_CONSTANT ^ (STAGE1_XOR_CONSTANT >> 19)),
                 ("p19", 1 << 19),
                 ("p13", 1 << 13),
                 ("s13", 13),
             ]),
-            kmax: 2,
+            max_ops: 2,
             current_ops: 3,
-            f: Box::new(|x| hs::stage1(x[0])),
-            long: false,
+            reference_fn: Box::new(|x| hs::stage1(x[0])),
+            is_long_suite: false,
         },
         Target {
             name: "g123mid",
-            desc: "f23(u ^ C1) (stage1 tail + fused23) [xor,madd,madd,xor]",
-            n_inputs: 1,
+            desc: "f23(u ^ STAGE1_XOR_CONSTANT) (stage1 tail + fused23) [xor,madd,madd,xor]",
+            input_count: 1,
             consts: mk(&[
-                ("C1", C1),
-                ("KP", KP),
-                ("AP", AP),
-                ("KQ", KQ),
-                ("AQ", AQ),
-                ("KPC1", KP.wrapping_mul(C1)),
-                ("KQC1", KQ.wrapping_mul(C1)),
-                ("APK", AP.wrapping_add(KP.wrapping_mul(C1))),
-                ("AQK", AQ.wrapping_add(KQ.wrapping_mul(C1))),
+                ("STAGE1_XOR_CONSTANT", STAGE1_XOR_CONSTANT),
+                ("F23_P_MULTIPLIER", F23_P_MULTIPLIER),
+                ("F23_P_CONSTANT", F23_P_CONSTANT),
+                ("F23_Q_MULTIPLIER", F23_Q_MULTIPLIER),
+                ("F23_Q_CONSTANT", F23_Q_CONSTANT),
+                ("KPC1", F23_P_MULTIPLIER.wrapping_mul(STAGE1_XOR_CONSTANT)),
+                ("KQC1", F23_Q_MULTIPLIER.wrapping_mul(STAGE1_XOR_CONSTANT)),
+                ("APK", F23_P_CONSTANT.wrapping_add(F23_P_MULTIPLIER.wrapping_mul(STAGE1_XOR_CONSTANT))),
+                ("AQK", F23_Q_CONSTANT.wrapping_add(F23_Q_MULTIPLIER.wrapping_mul(STAGE1_XOR_CONSTANT))),
                 ("s5", 5),
                 ("s9", 9),
             ]),
-            kmax: 3,
+            max_ops: 3,
             current_ops: 4,
-            f: Box::new(|x| hs::f23(x[0] ^ hs::C1)),
-            long: false,
+            reference_fn: Box::new(|x| hs::f23(x[0] ^ hs::STAGE1_XOR_CONSTANT)),
+            is_long_suite: false,
         },
         Target {
             name: "f23",
             desc: "fused stage2+3 [madd,madd,xor]",
-            n_inputs: 1,
+            input_count: 1,
             consts: mk(&[
-                ("KP", KP),
-                ("AP", AP),
-                ("KQ", KQ),
-                ("AQ", AQ),
+                ("F23_P_MULTIPLIER", F23_P_MULTIPLIER),
+                ("F23_P_CONSTANT", F23_P_CONSTANT),
+                ("F23_Q_MULTIPLIER", F23_Q_MULTIPLIER),
+                ("F23_Q_CONSTANT", F23_Q_CONSTANT),
                 ("C2", 0x1656_67B1),
                 ("C3", 0xD3A2_646C),
                 ("s5", 5),
                 ("s9", 9),
                 ("p9", 512),
             ]),
-            kmax: 2,
+            max_ops: 2,
             current_ops: 3,
-            f: Box::new(|x| hs::f23(x[0])),
-            long: false,
+            reference_fn: Box::new(|x| hs::f23(x[0])),
+            is_long_suite: false,
         },
         Target {
             name: "g234",
             desc: "stage4(f23(c)) [madd,madd,xor,madd]",
-            n_inputs: 1,
+            input_count: 1,
             consts: mk(&[
-                ("KP", KP),
-                ("AP", AP),
-                ("KQ", KQ),
-                ("AQ", AQ),
-                ("K4", K4),
-                ("C4", C4),
-                ("KP9", KP.wrapping_mul(9)),
-                ("KQ9", KQ.wrapping_mul(9)),
-                ("AP9", AP.wrapping_mul(9).wrapping_add(C4)),
-                ("AQ9", AQ.wrapping_mul(9)),
+                ("F23_P_MULTIPLIER", F23_P_MULTIPLIER),
+                ("F23_P_CONSTANT", F23_P_CONSTANT),
+                ("F23_Q_MULTIPLIER", F23_Q_MULTIPLIER),
+                ("F23_Q_CONSTANT", F23_Q_CONSTANT),
+                ("STAGE4_MULTIPLIER", STAGE4_MULTIPLIER),
+                ("STAGE4_ADD_CONSTANT", STAGE4_ADD_CONSTANT),
+                ("KP9", F23_P_MULTIPLIER.wrapping_mul(9)),
+                ("KQ9", F23_Q_MULTIPLIER.wrapping_mul(9)),
+                ("AP9", F23_P_CONSTANT.wrapping_mul(9).wrapping_add(STAGE4_ADD_CONSTANT)),
+                ("AQ9", F23_Q_CONSTANT.wrapping_mul(9)),
                 ("s3", 3),
             ]),
-            kmax: 3,
+            max_ops: 3,
             current_ops: 4,
-            f: Box::new(|x| hs::stage4(hs::f23(x[0]))),
-            long: false,
+            reference_fn: Box::new(|x| hs::stage4(hs::f23(x[0]))),
+            is_long_suite: false,
         },
         Target {
             name: "g45",
             desc: "stage5(stage4(d)) [madd,xor,shr,xor]",
-            n_inputs: 1,
+            input_count: 1,
             consts: mk(&[
-                ("K4", K4),
-                ("C4", C4),
-                ("C5", C5),
+                ("STAGE4_MULTIPLIER", STAGE4_MULTIPLIER),
+                ("STAGE4_ADD_CONSTANT", STAGE4_ADD_CONSTANT),
+                ("STAGE5_XOR_CONSTANT", STAGE5_XOR_CONSTANT),
                 ("sh5", 16),
-                ("C5s", C5 >> 16),
-                ("C5i", C5 ^ (C5 >> 16)),
-                ("C45", C4 ^ C5),
+                ("C5s", STAGE5_XOR_CONSTANT >> 16),
+                ("C5i", STAGE5_XOR_CONSTANT ^ (STAGE5_XOR_CONSTANT >> 16)),
+                ("C45", STAGE4_ADD_CONSTANT ^ STAGE5_XOR_CONSTANT),
                 ("s3", 3),
                 ("p3", 8),
                 ("p16", 1 << 16),
             ]),
-            kmax: 3,
+            max_ops: 3,
             current_ops: 4,
-            f: Box::new(|x| hs::stage5(hs::stage4(x[0]))),
-            long: false,
+            reference_fn: Box::new(|x| hs::stage5(hs::stage4(x[0]))),
+            is_long_suite: false,
         },
         Target {
             name: "e2out",
             desc: "stage5 alone [xor,shr,xor]",
-            n_inputs: 1,
+            input_count: 1,
             consts: mk(&[
-                ("C5", C5),
+                ("STAGE5_XOR_CONSTANT", STAGE5_XOR_CONSTANT),
                 ("sh5", 16),
-                ("C5s", C5 >> 16),
-                ("C5i", C5 ^ (C5 >> 16)),
+                ("C5s", STAGE5_XOR_CONSTANT >> 16),
+                ("C5i", STAGE5_XOR_CONSTANT ^ (STAGE5_XOR_CONSTANT >> 16)),
                 ("p16", 1 << 16),
             ]),
-            kmax: 2,
+            max_ops: 2,
             current_ops: 3,
-            f: Box::new(|x| hs::stage5(x[0])),
-            long: false,
+            reference_fn: Box::new(|x| hs::stage5(x[0])),
+            is_long_suite: false,
         },
         Target {
             name: "head2",
             desc: "stage0(v ^ n) (fold-in + stage0) [xor,madd]",
-            n_inputs: 2,
-            consts: mk(&[("C0", C0), ("K0", K0), ("p12", 4096), ("s12", 12)]),
-            kmax: 1,
+            input_count: 2,
+            consts: mk(&[("STAGE0_ADD_CONSTANT", STAGE0_ADD_CONSTANT), ("STAGE0_MULTIPLIER", STAGE0_MULTIPLIER), ("p12", 4096), ("s12", 12)]),
+            max_ops: 1,
             current_ops: 2,
-            f: Box::new(|x| hs::stage0(x[0] ^ x[1])),
-            long: false,
+            reference_fn: Box::new(|x| hs::stage0(x[0] ^ x[1])),
+            is_long_suite: false,
         },
         Target {
             name: "head3",
             desc: "stage1(stage0(v ^ n)) (fold-in + 2 stages) [xor,madd,shr,xor,xor]",
-            n_inputs: 2,
+            input_count: 2,
             consts: vec![
-                ("C0", C0),
-                ("C1", C1),
-                ("K0", K0),
+                ("STAGE0_ADD_CONSTANT", STAGE0_ADD_CONSTANT),
+                ("STAGE1_XOR_CONSTANT", STAGE1_XOR_CONSTANT),
+                ("STAGE0_MULTIPLIER", STAGE0_MULTIPLIER),
                 ("p12", 4096),
                 ("sh1", 19),
                 ("s12", 12),
             ],
-            kmax: 4,
+            max_ops: 4,
             current_ops: 5,
-            f: Box::new(|x| hs::stage1(hs::stage0(x[0] ^ x[1]))),
-            long: true,
+            reference_fn: Box::new(|x| hs::stage1(hs::stage0(x[0] ^ x[1]))),
+            is_long_suite: true,
         },
         Target {
             name: "xr3",
-            desc: "next-round madd of sigma16(e)^n (C5 pre-xored into tree) [shr,xor,xor,madd]",
-            n_inputs: 2,
+            desc: "next-round madd of sigma16(e)^n (STAGE5_XOR_CONSTANT pre-xored into tree) [shr,xor,xor,madd]",
+            input_count: 2,
             consts: mk(&[
-                ("C0", C0),
-                ("K0", K0),
+                ("STAGE0_ADD_CONSTANT", STAGE0_ADD_CONSTANT),
+                ("STAGE0_MULTIPLIER", STAGE0_MULTIPLIER),
                 ("sh5", 16),
                 ("p16", 1 << 16),
-                ("K016", K0.wrapping_mul(1 << 16)),
+                ("K016", STAGE0_MULTIPLIER.wrapping_mul(1 << 16)),
             ]),
-            kmax: 3,
+            max_ops: 3,
             current_ops: 4,
-            f: Box::new(|x| {
+            reference_fn: Box::new(|x| {
                 let e = x[0];
-                let w = e ^ (e >> 16);
-                hs::stage0(w ^ x[1])
+                let sigma16_e = e ^ (e >> 16);
+                hs::stage0(sigma16_e ^ x[1])
             }),
-            long: false,
+            is_long_suite: false,
         },
         Target {
             name: "xr4",
             desc: "cross-round: stage0(stage5(e) ^ n) [shr,xor,xor,xor,madd]",
-            n_inputs: 2,
+            input_count: 2,
             consts: vec![
-                ("C0", C0),
-                ("C5", C5),
-                ("K0", K0),
+                ("STAGE0_ADD_CONSTANT", STAGE0_ADD_CONSTANT),
+                ("STAGE5_XOR_CONSTANT", STAGE5_XOR_CONSTANT),
+                ("STAGE0_MULTIPLIER", STAGE0_MULTIPLIER),
                 ("sh5", 16),
-                ("C5i", hs::C5 ^ (hs::C5 >> 16)),
+                ("C5i", hs::STAGE5_XOR_CONSTANT ^ (hs::STAGE5_XOR_CONSTANT >> 16)),
                 ("p16", 1 << 16),
             ],
-            kmax: 4,
+            max_ops: 4,
             current_ops: 5,
-            f: Box::new(|x| hs::stage0(hs::stage5(x[0]) ^ x[1])),
-            long: true,
+            reference_fn: Box::new(|x| hs::stage0(hs::stage5(x[0]) ^ x[1])),
+            is_long_suite: true,
         },
         Target {
             name: "u2e",
-            desc: "stage4(f23(u ^ C1)) (stage1 tail through stage4) [xor,madd,madd,xor,madd]",
-            n_inputs: 1,
+            desc: "stage4(f23(u ^ STAGE1_XOR_CONSTANT)) (stage1 tail through stage4) [xor,madd,madd,xor,madd]",
+            input_count: 1,
             consts: vec![
-                ("C1", C1),
-                ("KP", KP),
-                ("AP", AP),
-                ("KQ", KQ),
-                ("AQ", AQ),
-                ("K4", K4),
-                ("C4", C4),
-                ("KP9", KP.wrapping_mul(9)),
+                ("STAGE1_XOR_CONSTANT", STAGE1_XOR_CONSTANT),
+                ("F23_P_MULTIPLIER", F23_P_MULTIPLIER),
+                ("F23_P_CONSTANT", F23_P_CONSTANT),
+                ("F23_Q_MULTIPLIER", F23_Q_MULTIPLIER),
+                ("F23_Q_CONSTANT", F23_Q_CONSTANT),
+                ("STAGE4_MULTIPLIER", STAGE4_MULTIPLIER),
+                ("STAGE4_ADD_CONSTANT", STAGE4_ADD_CONSTANT),
+                ("KP9", F23_P_MULTIPLIER.wrapping_mul(9)),
             ],
-            kmax: 4,
+            max_ops: 4,
             current_ops: 5,
-            f: Box::new(|x| hs::stage4(hs::f23(x[0] ^ hs::C1))),
-            long: true,
+            reference_fn: Box::new(|x| hs::stage4(hs::f23(x[0] ^ hs::STAGE1_XOR_CONSTANT))),
+            is_long_suite: true,
         },
         Target {
             name: "par_c_deep",
             desc: "parity bit from stage1 output c in <=4 ops (5 via par_d chain)",
-            n_inputs: 1,
+            input_count: 1,
             consts: vec![
-                ("KP", KP),
-                ("AP", AP),
-                ("KQ", KQ),
-                ("AQ", AQ),
-                ("PDK", PAR_D_K),
-                ("PDC", PAR_D_C),
+                ("F23_P_MULTIPLIER", F23_P_MULTIPLIER),
+                ("F23_P_CONSTANT", F23_P_CONSTANT),
+                ("F23_Q_MULTIPLIER", F23_Q_MULTIPLIER),
+                ("F23_Q_CONSTANT", F23_Q_CONSTANT),
+                ("PDK", PARITY_FROM_D_MULTIPLIER),
+                ("PDC", PARITY_FROM_D_CONSTANT),
                 ("s31", 31),
                 ("p31", 1 << 31),
             ],
-            kmax: 4,
+            max_ops: 4,
             current_ops: 5,
-            f: Box::new(|x| hs::stage5(hs::stage4(hs::f23(x[0]))) & 1),
-            long: true,
+            reference_fn: Box::new(|x| hs::stage5(hs::stage4(hs::f23(x[0]))) & 1),
+            is_long_suite: true,
         },
         Target {
             name: "par_d",
             desc: "parity bit (myhash&1) from f23 output d [vs 5 ops via value chain]",
-            n_inputs: 1,
+            input_count: 1,
             consts: mk(&[
-                ("K4", K4),
-                ("C4", C4),
-                ("C5", C5),
-                ("PDK", PAR_D_K),
-                ("PDC", PAR_D_C),
-                ("PEK", PAR_E_K),
+                ("STAGE4_MULTIPLIER", STAGE4_MULTIPLIER),
+                ("STAGE4_ADD_CONSTANT", STAGE4_ADD_CONSTANT),
+                ("STAGE5_XOR_CONSTANT", STAGE5_XOR_CONSTANT),
+                ("PDK", PARITY_FROM_D_MULTIPLIER),
+                ("PDC", PARITY_FROM_D_CONSTANT),
+                ("PEK", PARITY_FROM_E_MULTIPLIER),
                 ("p31", 1 << 31),
                 ("b17", 0x0001_0001),
                 ("s31", 31),
                 ("s16", 16),
                 ("s15", 15),
             ]),
-            kmax: 2,
+            max_ops: 2,
             current_ops: 5,
-            f: Box::new(|x| hs::stage5(hs::stage4(x[0])) & 1),
-            long: false,
+            reference_fn: Box::new(|x| hs::stage5(hs::stage4(x[0])) & 1),
+            is_long_suite: false,
         },
         Target {
             name: "par_e",
             desc: "parity bit from stage4 output e [vs 4 ops via value chain]",
-            n_inputs: 1,
+            input_count: 1,
             consts: mk(&[
-                ("C5", C5),
-                ("PEK", PAR_E_K),
-                ("PEC", PAR_E_C),
+                ("STAGE5_XOR_CONSTANT", STAGE5_XOR_CONSTANT),
+                ("PEK", PARITY_FROM_E_MULTIPLIER),
+                ("PEC", PARITY_FROM_E_CONSTANT),
                 ("p31", 1 << 31),
                 ("b17", 0x0001_0001),
                 ("s31", 31),
                 ("s16", 16),
                 ("s15", 15),
             ]),
-            kmax: 2,
+            max_ops: 2,
             current_ops: 4,
-            f: Box::new(|x| hs::stage5(x[0]) & 1),
-            long: false,
+            reference_fn: Box::new(|x| hs::stage5(x[0]) & 1),
+            is_long_suite: false,
         },
         Target {
             name: "par_c",
             desc: "parity bit from stage1 output c (before f23)",
-            n_inputs: 1,
+            input_count: 1,
             consts: mk(&[
-                ("KP", KP),
-                ("AP", AP),
-                ("KQ", KQ),
-                ("AQ", AQ),
-                ("K4", K4),
-                ("C4", C4),
-                ("PDK", hs::PAR_D_K),
-                ("PDC", hs::PAR_D_C),
+                ("F23_P_MULTIPLIER", F23_P_MULTIPLIER),
+                ("F23_P_CONSTANT", F23_P_CONSTANT),
+                ("F23_Q_MULTIPLIER", F23_Q_MULTIPLIER),
+                ("F23_Q_CONSTANT", F23_Q_CONSTANT),
+                ("STAGE4_MULTIPLIER", STAGE4_MULTIPLIER),
+                ("STAGE4_ADD_CONSTANT", STAGE4_ADD_CONSTANT),
+                ("PDK", hs::PARITY_FROM_D_MULTIPLIER),
+                ("PDC", hs::PARITY_FROM_D_CONSTANT),
                 ("p31", 1 << 31),
                 ("s31", 31),
                 ("s15", 15),
             ]),
-            kmax: 3,
+            max_ops: 3,
             current_ops: 8,
-            f: Box::new(|x| hs::stage5(hs::stage4(hs::f23(x[0]))) & 1),
-            long: false,
+            reference_fn: Box::new(|x| hs::stage5(hs::stage4(hs::f23(x[0]))) & 1),
+            is_long_suite: false,
         },
     ]
 }
@@ -1233,18 +1233,18 @@ fn targets() -> Vec<Target> {
 //   xor:    r ^ c = ...   <=> the batteries (m[p]^m[0]) and (r[p]^r[0]) match;
 //   affine: r = K*m + C   <=> the difference batteries match after odd-part
 //           canonicalization; K even (= 2^t * odd) is handled by storing the
-//           canonical battery shifted left by t = 0..=TMAX on the table side.
+//           canonical battery shifted left by t = 0..=MAX_EVEN_MULTIPLIER_SHIFT on the table side.
 // Both are exact equivalences (proofs in `affine_canon`'s comment), so a
 // table hit + constant solve + full-battery check loses nothing.
 
 /// Max power-of-two factor searched for even meet multipliers K = 2^t * odd.
-const TMAX: u32 = 12;
+const MAX_EVEN_MULTIPLIER_SHIFT: u32 = 12;
 /// Cap on the link-constant pool (printed per target for the honest record).
-const LINK_C_CAP: usize = 72;
+const LINK_CONSTANT_POOL_CAP: usize = 72;
 
 /// Odd multipliers for backward affine links (`y -> K*y + c`). Chosen as the
 /// machine-plausible family: stage multipliers, 2^j +/- 1, small odds, -1.
-const LINK_KS: [u32; 16] = [
+const ODD_LINK_MULTIPLIERS: [u32; 16] = [
     1,
     0xFFFF_FFFF, // -1: covers c - y
     3,
@@ -1264,8 +1264,8 @@ const LINK_KS: [u32; 16] = [
 ];
 
 const TAG_EXACT: u64 = 0x4558_4143_5421_1111;
-const TAG_XORN: u64 = 0x584f_524e_5f5f_2222;
-const TAG_AFFN: u64 = 0x4146_464e_5f5f_3333;
+const TAG_XOR_NORM: u64 = 0x584f_524e_5f5f_2222;
+const TAG_AFFINE_CANON: u64 = 0x4146_464e_5f5f_3333;
 
 /// Identity hasher for u64 keys that are already well-mixed by `hash_words`.
 #[derive(Default, Clone)]
@@ -1285,17 +1285,17 @@ type IdMap = HashMap<u64, u32, std::hash::BuildHasherDefault<IdHasher>>;
 
 fn hash_words(tag: u64, words: &[u32]) -> u64 {
     let mut h = tag ^ 0x9E37_79B9_7F4A_7C15;
-    for &w in words {
-        h = (h ^ u64::from(w)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    for &word in words {
+        h = (h ^ u64::from(word)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
         h ^= h >> 29;
     }
     h
 }
 
 /// Battery signature invariant under `v -> v ^ c` for any constant c.
-fn xor_norm(v: &Vp) -> [u32; P - 1] {
-    let mut d = [0u32; P - 1];
-    for p in 1..P {
+fn xor_norm(v: &ProbeValues) -> [u32; PROBE_COUNT - 1] {
+    let mut d = [0u32; PROBE_COUNT - 1];
+    for p in 1..PROBE_COUNT {
         d[p - 1] = v[p] ^ v[0];
     }
     d
@@ -1310,16 +1310,16 @@ fn xor_norm(v: &Vp) -> [u32; P - 1] {
 /// valuations are preserved (K odd), so the same q is selected; writing
 /// d[p] = 2^s * e[p], canon[p] = 2^s * (e[p] * inv(e[q]) mod 2^(32-s)) and
 /// the factor K cancels inside the mod-2^(32-s) product. For EVEN K = 2^t*k
-/// (t <= TMAX, k odd) the canonical battery of K*v + C equals the canonical
+/// (t <= MAX_EVEN_MULTIPLIER_SHIFT, k odd) the canonical battery of K*v + C equals the canonical
 /// battery of v shifted left by t (same derivation, valuations all shift by
 /// t) — which is why tables store the t-shifted variants.
 ///
 /// Returns None for a constant battery (all differences zero).
-fn affine_canon(v: &Vp) -> Option<[u32; P - 1]> {
-    let mut d = [0u32; P - 1];
+fn affine_canon(v: &ProbeValues) -> Option<[u32; PROBE_COUNT - 1]> {
+    let mut d = [0u32; PROBE_COUNT - 1];
     let mut s_min = 33u32;
     let mut q = usize::MAX;
-    for p in 1..P {
+    for p in 1..PROBE_COUNT {
         let dd = v[p].wrapping_sub(v[0]);
         d[p - 1] = dd;
         if dd != 0 {
@@ -1340,7 +1340,7 @@ fn affine_canon(v: &Vp) -> Option<[u32; P - 1]> {
     Some(d)
 }
 
-fn shl_battery(d: &[u32; P - 1], t: u32) -> [u32; P - 1] {
+fn shl_battery(d: &[u32; PROBE_COUNT - 1], t: u32) -> [u32; PROBE_COUNT - 1] {
     let mut out = *d;
     for x in out.iter_mut() {
         *x <<= t;
@@ -1349,9 +1349,9 @@ fn shl_battery(d: &[u32; P - 1], t: u32) -> [u32; P - 1] {
 }
 
 /// Solve `r = m ^ c` over the whole battery (None if inconsistent).
-fn solve_xor_meet(m: &Vp, r: &Vp) -> Option<u32> {
+fn solve_xor_meet(m: &ProbeValues, r: &ProbeValues) -> Option<u32> {
     let c = r[0] ^ m[0];
-    if (0..P).all(|p| (m[p] ^ c) == r[p]) {
+    if (0..PROBE_COUNT).all(|p| (m[p] ^ c) == r[p]) {
         Some(c)
     } else {
         None
@@ -1363,10 +1363,10 @@ fn solve_xor_meet(m: &Vp, r: &Vp) -> Option<u32> {
 /// K is determined mod 2^(32-s) and the 2^s lifts are tried (capped at 2^12;
 /// a cap hit is astronomically unlikely with random probes and would only
 /// cost a missed find, never a false one).
-fn solve_affine_meet(m: &Vp, r: &Vp) -> Option<(u32, u32)> {
+fn solve_affine_meet(m: &ProbeValues, r: &ProbeValues) -> Option<(u32, u32)> {
     let mut s_min = 33u32;
     let mut q = 0usize;
-    for p in 1..P {
+    for p in 1..PROBE_COUNT {
         let d = m[p].wrapping_sub(m[0]);
         if d != 0 {
             let s = d.trailing_zeros();
@@ -1387,7 +1387,7 @@ fn solve_affine_meet(m: &Vp, r: &Vp) -> Option<(u32, u32)> {
     }
     let check = |k: u32| -> Option<(u32, u32)> {
         let c = r[0].wrapping_sub(k.wrapping_mul(m[0]));
-        if (0..P).all(|p| mad(m[p], k, c) == r[p]) {
+        if (0..PROBE_COUNT).all(|p| multiply_add(m[p], k, c) == r[p]) {
             Some((k, c))
         } else {
             None
@@ -1397,9 +1397,9 @@ fn solve_affine_meet(m: &Vp, r: &Vp) -> Option<(u32, u32)> {
         return check(dr.wrapping_mul(modinv32(dm)));
     }
     let k0 = (dr >> s).wrapping_mul(modinv32(dm >> s));
-    let lifts = 1u64 << s.min(TMAX);
-    for u in 0..lifts {
-        let k = k0.wrapping_add((u as u32) << (32 - s));
+    let lifts = 1u64 << s.min(MAX_EVEN_MULTIPLIER_SHIFT);
+    for lift in 0..lifts {
+        let k = k0.wrapping_add((lift as u32) << (32 - s));
         if let Some(kc) = check(k) {
             return Some(kc);
         }
@@ -1450,9 +1450,9 @@ impl Link {
         matches!(self, Link::Aff { .. } | Link::XorC(_))
     }
     /// Required INPUT battery given the required OUTPUT battery.
-    fn invert(self, r: &Vp) -> Vp {
-        let mut out = [0u32; P];
-        for p in 0..P {
+    fn invert(self, r: &ProbeValues) -> ProbeValues {
+        let mut out = [0u32; PROBE_COUNT];
+        for p in 0..PROBE_COUNT {
             out[p] = match self {
                 Link::Aff { kinv, c, .. } => r[p].wrapping_sub(c).wrapping_mul(kinv),
                 Link::XorC(c) => r[p] ^ c,
@@ -1464,43 +1464,43 @@ impl Link {
     }
     /// Append this step's machine ops to `prog`; `cur` is the index of the
     /// chain value; returns the index of the step's result.
-    fn emit(self, cur: usize, n_base: usize, prog: &mut Vec<Inst>) -> usize {
+    fn emit(self, cur: usize, base_count: usize, prog: &mut Vec<Inst>) -> usize {
         match self {
-            Link::Aff { k, c, .. } => prog.push(Inst::MadKC(cur, k, c)),
-            Link::XorC(c) => prog.push(Inst::BinC(Xor, cur, c)),
+            Link::Aff { k, c, .. } => prog.push(Inst::MultiplyAddAffine(cur, k, c)),
+            Link::XorC(c) => prog.push(Inst::BinConstRight(Xor, cur, c)),
             Link::XsR(s) => {
-                prog.push(Inst::BinC(Shr, cur, s));
-                let t = n_base + prog.len() - 1;
+                prog.push(Inst::BinConstRight(Shr, cur, s));
+                let t = base_count + prog.len() - 1;
                 prog.push(Inst::Bin(Xor, cur, t));
             }
             Link::XsL(s) => {
-                prog.push(Inst::BinC(Shl, cur, s));
-                let t = n_base + prog.len() - 1;
+                prog.push(Inst::BinConstRight(Shl, cur, s));
+                let t = base_count + prog.len() - 1;
                 prog.push(Inst::Bin(Xor, cur, t));
             }
         }
-        n_base + prog.len() - 1
+        base_count + prog.len() - 1
     }
 }
 
 /// Emit a whole suffix chain (stored outermost-first) after the meet value.
-fn emit_chain(links: &[Link], mut cur: usize, n_base: usize, prog: &mut Vec<Inst>) {
-    for l in links.iter().rev() {
-        cur = l.emit(cur, n_base, prog);
+fn emit_chain(links: &[Link], mut cur: usize, base_count: usize, prog: &mut Vec<Inst>) {
+    for link in links.iter().rev() {
+        cur = link.emit(cur, base_count, prog);
     }
 }
 
 /// All suffix-chain steps over a link-constant pool.
-fn build_links(cs: &[u32]) -> Vec<Link> {
+fn build_links(consts: &[u32]) -> Vec<Link> {
     let mut out = Vec::new();
-    for &c in cs {
+    for &c in consts {
         if c != 0 {
             out.push(Link::XorC(c));
         }
     }
-    for &k in LINK_KS.iter() {
+    for &k in ODD_LINK_MULTIPLIERS.iter() {
         let kinv = modinv32(k);
-        for &c in cs {
+        for &c in consts {
             if k == 1 && c == 0 {
                 continue; // identity
             }
@@ -1554,41 +1554,41 @@ fn build_link_consts(seed: &[u32], shifts: &[u32]) -> Vec<u32> {
             push(seed[i].wrapping_mul(seed[j]), &mut out);
         }
     }
-    out.truncate(LINK_C_CAP);
+    out.truncate(LINK_CONSTANT_POOL_CAP);
     out
 }
 
-/// A forward prefix (kf ops) whose last value is the meet variable.
+/// A forward prefix (prefix_op_count ops) whose last value is the meet variable.
 struct FwdEntry {
-    out: Vp,
+    out: ProbeValues,
     prog: Vec<Inst>,
     out_idx: usize,
 }
 
 struct FwdTab {
-    kf: usize,
+    prefix_op_count: usize,
     entries: Vec<FwdEntry>,
     exact: IdMap,
-    xorn: IdMap,
-    /// Stores canonical batteries shifted by t = 0..=TMAX (even-K meets).
-    affn: IdMap,
+    xor_norm: IdMap,
+    /// Stores canonical batteries shifted by t = 0..=MAX_EVEN_MULTIPLIER_SHIFT (even-K meets).
+    affine_canon: IdMap,
 }
 
 impl FwdTab {
-    fn add(&mut self, out: Vp, prog: Vec<Inst>, out_idx: usize) {
-        let ek = hash_words(TAG_EXACT, &out);
-        if self.exact.contains_key(&ek) {
+    fn add(&mut self, out: ProbeValues, prog: Vec<Inst>, out_idx: usize) {
+        let exact_key = hash_words(TAG_EXACT, &out);
+        if self.exact.contains_key(&exact_key) {
             return; // battery-identical prefix already stored
         }
         let idx = self.entries.len() as u32;
-        self.exact.insert(ek, idx);
-        self.xorn
-            .entry(hash_words(TAG_XORN, &xor_norm(&out)))
+        self.exact.insert(exact_key, idx);
+        self.xor_norm
+            .entry(hash_words(TAG_XOR_NORM, &xor_norm(&out)))
             .or_insert(idx);
         if let Some(canon) = affine_canon(&out) {
-            for t in 0..=TMAX {
-                self.affn
-                    .entry(hash_words(TAG_AFFN, &shl_battery(&canon, t)))
+            for t in 0..=MAX_EVEN_MULTIPLIER_SHIFT {
+                self.affine_canon
+                    .entry(hash_words(TAG_AFFINE_CANON, &shl_battery(&canon, t)))
                     .or_insert(idx);
             }
         }
@@ -1599,42 +1599,42 @@ impl FwdTab {
 fn inst_uses(inst: &Inst, idx: usize) -> bool {
     match *inst {
         Inst::Bin(_, i, j) => i == idx || j == idx,
-        Inst::Mad(i, j, k) => i == idx || j == idx || k == idx,
+        Inst::MultiplyAdd(i, j, k) => i == idx || j == idx || k == idx,
         _ => false,
     }
 }
 
-/// Build the table of all kf-op forward prefixes (kf <= 2). Every temp except
-/// the last (the meet variable) must be referenced, so kf=2 keeps only pairs
+/// Build the table of all prefix_op_count-op forward prefixes (prefix_op_count <= 2). Every temp except
+/// the last (the meet variable) must be referenced, so prefix_op_count=2 keeps only pairs
 /// where the second op uses t1.
-fn build_fwd_tab(ctx: &Ctx, kf: usize) -> FwdTab {
+fn build_fwd_tab(ctx: &Ctx, prefix_op_count: usize) -> FwdTab {
     let mut tab = FwdTab {
-        kf,
+        prefix_op_count,
         entries: Vec::new(),
         exact: IdMap::default(),
-        xorn: IdMap::default(),
-        affn: IdMap::default(),
+        xor_norm: IdMap::default(),
+        affine_canon: IdMap::default(),
     };
-    let n_base = ctx.base_vals.len();
-    match kf {
+    let base_count = ctx.base_vals.len();
+    match prefix_op_count {
         0 => {
-            for i in 0..ctx.n_inputs {
+            for i in 0..ctx.input_count {
                 tab.add(ctx.base_vals[i], Vec::new(), i);
             }
         }
         1 => {
-            let w = W::new(ctx);
-            enumerate_level(&w, |inst, v| tab.add(v, vec![inst], n_base));
+            let w = SearchState::new(ctx);
+            enumerate_level(&w, |inst, v| tab.add(v, vec![inst], base_count));
         }
         2 => {
-            let mut w = W::new(ctx);
-            let mut l1: Vec<(Inst, Vp)> = Vec::new();
-            enumerate_level(&w, |inst, v| l1.push((inst, v)));
-            for (i1, v1) in l1 {
+            let mut w = SearchState::new(ctx);
+            let mut first_level_candidates: Vec<(Inst, ProbeValues)> = Vec::new();
+            enumerate_level(&w, |inst, v| first_level_candidates.push((inst, v)));
+            for (i1, v1) in first_level_candidates {
                 let undo = w.push(i1.clone(), v1);
                 enumerate_level(&w, |i2, v2| {
-                    if inst_uses(&i2, n_base) {
-                        tab.add(v2, vec![i1.clone(), i2], n_base + 1);
+                    if inst_uses(&i2, base_count) {
+                        tab.add(v2, vec![i1.clone(), i2], base_count + 1);
                     }
                 });
                 w.pop(undo);
@@ -1648,64 +1648,64 @@ fn build_fwd_tab(ctx: &Ctx, kf: usize) -> FwdTab {
 /// An inverted suffix chain: `req` is the battery the chain input must equal
 /// for `out` to hit the target. `links` are stored outermost-first.
 struct BwdEntry {
-    req: Vp,
+    req: ProbeValues,
     links: Vec<Link>,
 }
 
 struct BwdTab {
-    jops: usize,
+    suffix_op_count: usize,
     entries: Vec<BwdEntry>,
     exact: IdMap,
-    xorn: IdMap,
+    xor_norm: IdMap,
     /// t = 0 canonical keys only; the forward prober shifts its own canon.
-    affn: IdMap,
+    affine_canon: IdMap,
 }
 
 impl BwdTab {
-    fn new(jops: usize) -> BwdTab {
+    fn new(suffix_op_count: usize) -> BwdTab {
         BwdTab {
-            jops,
+            suffix_op_count,
             entries: Vec::new(),
             exact: IdMap::default(),
-            xorn: IdMap::default(),
-            affn: IdMap::default(),
+            xor_norm: IdMap::default(),
+            affine_canon: IdMap::default(),
         }
     }
-    fn add(&mut self, req: Vp, links: Vec<Link>) {
-        let ek = hash_words(TAG_EXACT, &req);
-        if self.exact.contains_key(&ek) {
+    fn add(&mut self, req: ProbeValues, links: Vec<Link>) {
+        let exact_key = hash_words(TAG_EXACT, &req);
+        if self.exact.contains_key(&exact_key) {
             return;
         }
         let idx = self.entries.len() as u32;
-        self.exact.insert(ek, idx);
-        self.xorn
-            .entry(hash_words(TAG_XORN, &xor_norm(&req)))
+        self.exact.insert(exact_key, idx);
+        self.xor_norm
+            .entry(hash_words(TAG_XOR_NORM, &xor_norm(&req)))
             .or_insert(idx);
         if let Some(canon) = affine_canon(&req) {
-            self.affn.entry(hash_words(TAG_AFFN, &canon)).or_insert(idx);
+            self.affine_canon.entry(hash_words(TAG_AFFINE_CANON, &canon)).or_insert(idx);
         }
         self.entries.push(BwdEntry { req, links });
     }
 }
 
 /// Tables of all inverted 1-op and 2-op suffix chains for engine B.
-fn build_bwd_tabs(target: &Vp, links: &[Link]) -> Vec<BwdTab> {
-    let mut t1 = BwdTab::new(1);
-    let mut t2 = BwdTab::new(2);
-    for &l in links {
-        match l.ops() {
-            1 => t1.add(l.invert(target), vec![l]),
-            2 => t2.add(l.invert(target), vec![l]),
+fn build_bwd_tabs(target: &ProbeValues, links: &[Link]) -> Vec<BwdTab> {
+    let mut one_op_table = BwdTab::new(1);
+    let mut two_op_table = BwdTab::new(2);
+    for &link in links {
+        match link.ops() {
+            1 => one_op_table.add(link.invert(target), vec![link]),
+            2 => two_op_table.add(link.invert(target), vec![link]),
             _ => unreachable!(),
         }
     }
-    for &l1 in links.iter().filter(|l| l.ops() == 1) {
-        let r1 = l1.invert(target);
-        for &l2 in links.iter().filter(|l| l.ops() == 1) {
-            t2.add(l2.invert(&r1), vec![l1, l2]);
+    for &link1 in links.iter().filter(|link| link.ops() == 1) {
+        let req_after_link1 = link1.invert(target);
+        for &link2 in links.iter().filter(|link| link.ops() == 1) {
+            two_op_table.add(link2.invert(&req_after_link1), vec![link1, link2]);
         }
     }
-    vec![t1, t2]
+    vec![one_op_table, two_op_table]
 }
 
 struct MitmStats {
@@ -1717,31 +1717,31 @@ struct MitmStats {
 struct EngineB<'a> {
     ctx: &'a Ctx<'a>,
     tabs: &'a [BwdTab],
-    dmax: usize,
+    max_forward_depth: usize,
     wanted: u32,
 }
 
 impl EngineB<'_> {
     /// Called with `w` already holding >= 1 op (like `dfs`).
-    fn dfs(&self, w: &mut W, nodes: &mut u64) {
-        if self.ctx.stop.load(Ordering::Relaxed) {
+    fn dfs(&self, w: &mut SearchState, nodes: &mut u64) {
+        if self.ctx.should_stop.load(Ordering::Relaxed) {
             return;
         }
         *nodes += 1;
-        let d = w.prog.len();
-        if w.unused_cnt == 1 {
-            self.probe(w, d);
+        let depth = w.prog.len();
+        if w.unused_temp_count == 1 {
+            self.probe(w, depth);
         }
-        if d >= self.dmax {
+        if depth >= self.max_forward_depth {
             return;
         }
-        if w.unused_cnt > 2 * (self.dmax - d) + 1 {
+        if w.unused_temp_count > 2 * (self.max_forward_depth - depth) + 1 {
             return;
         }
-        let mut cands: Vec<(Inst, Vp)> = Vec::with_capacity(4096);
+        let mut cands: Vec<(Inst, ProbeValues)> = Vec::with_capacity(4096);
         enumerate_level(w, |inst, v| cands.push((inst, v)));
         for (inst, v) in cands {
-            if self.ctx.stop.load(Ordering::Relaxed) {
+            if self.ctx.should_stop.load(Ordering::Relaxed) {
                 return;
             }
             let undo = w.push(inst, v);
@@ -1750,51 +1750,51 @@ impl EngineB<'_> {
         }
     }
 
-    fn probe(&self, w: &W, d: usize) {
+    fn probe(&self, w: &SearchState, depth: usize) {
         let m = *w.vals.last().unwrap();
-        let n_base = self.ctx.base_vals.len();
-        let cur = n_base + d - 1;
+        let base_count = self.ctx.base_vals.len();
+        let cur = base_count + depth - 1;
         let want = |k: usize| self.wanted & (1u32 << k) != 0;
-        let ek = hash_words(TAG_EXACT, &m);
-        let xk = hash_words(TAG_XORN, &xor_norm(&m));
+        let exact_key = hash_words(TAG_EXACT, &m);
+        let xor_norm_key = hash_words(TAG_XOR_NORM, &xor_norm(&m));
         let canon = affine_canon(&m);
         for tab in self.tabs {
-            let j = tab.jops;
-            if want(d + j) {
-                if let Some(&ei) = tab.exact.get(&ek) {
+            let j = tab.suffix_op_count;
+            if want(depth + j) {
+                if let Some(&ei) = tab.exact.get(&exact_key) {
                     let e = &tab.entries[ei as usize];
                     if e.req == m {
                         let mut prog = w.prog.clone();
-                        emit_chain(&e.links, cur, n_base, &mut prog);
+                        emit_chain(&e.links, cur, base_count, &mut prog);
                         report_prog(self.ctx, prog);
                     }
                 }
             }
-            if want(d + 1 + j) {
-                if let Some(&ei) = tab.xorn.get(&xk) {
+            if want(depth + 1 + j) {
+                if let Some(&ei) = tab.xor_norm.get(&xor_norm_key) {
                     let e = &tab.entries[ei as usize];
                     if let Some(c) = solve_xor_meet(&m, &e.req) {
                         if c != 0 {
                             let mut prog = w.prog.clone();
-                            prog.push(Inst::BinC(Xor, cur, c));
-                            emit_chain(&e.links, n_base + prog.len() - 1, n_base, &mut prog);
+                            prog.push(Inst::BinConstRight(Xor, cur, c));
+                            emit_chain(&e.links, base_count + prog.len() - 1, base_count, &mut prog);
                             report_prog(self.ctx, prog);
                         }
                     }
                 }
                 if let Some(canon) = &canon {
-                    for t in 0..=TMAX {
-                        let key = hash_words(TAG_AFFN, &shl_battery(canon, t));
-                        if let Some(&ei) = tab.affn.get(&key) {
+                    for t in 0..=MAX_EVEN_MULTIPLIER_SHIFT {
+                        let key = hash_words(TAG_AFFINE_CANON, &shl_battery(canon, t));
+                        if let Some(&ei) = tab.affine_canon.get(&key) {
                             let e = &tab.entries[ei as usize];
                             if let Some((k, c)) = solve_affine_meet(&m, &e.req) {
                                 if k != 1 || c != 0 {
                                     let mut prog = w.prog.clone();
-                                    prog.push(Inst::MadKC(cur, k, c));
+                                    prog.push(Inst::MultiplyAddAffine(cur, k, c));
                                     emit_chain(
                                         &e.links,
-                                        n_base + prog.len() - 1,
-                                        n_base,
+                                        base_count + prog.len() - 1,
+                                        base_count,
                                         &mut prog,
                                     );
                                     report_prog(self.ctx, prog);
@@ -1812,34 +1812,34 @@ impl EngineB<'_> {
 fn run_engine_b(
     ctx: &Ctx,
     tabs: &[BwdTab],
-    dmax: usize,
+    max_forward_depth: usize,
     wanted: u32,
     stats: &MitmStats,
     threads: usize,
 ) {
-    let mut l1: Vec<(Inst, Vp)> = Vec::new();
+    let mut first_level_candidates: Vec<(Inst, ProbeValues)> = Vec::new();
     {
-        let w = W::new(ctx);
-        enumerate_level(&w, |inst, v| l1.push((inst, v)));
+        let w = SearchState::new(ctx);
+        enumerate_level(&w, |inst, v| first_level_candidates.push((inst, v)));
     }
     let eng = EngineB {
         ctx,
         tabs,
-        dmax,
+        max_forward_depth,
         wanted,
     };
     let next = AtomicU64::new(0);
     std::thread::scope(|scope| {
         for _ in 0..threads {
             scope.spawn(|| {
-                let mut w = W::new(ctx);
+                let mut w = SearchState::new(ctx);
                 let mut nodes = 0u64;
                 loop {
                     let idx = next.fetch_add(1, Ordering::Relaxed) as usize;
-                    if idx >= l1.len() || ctx.stop.load(Ordering::Relaxed) {
+                    if idx >= first_level_candidates.len() || ctx.should_stop.load(Ordering::Relaxed) {
                         break;
                     }
-                    let (inst, v) = l1[idx].clone();
+                    let (inst, v) = first_level_candidates[idx].clone();
                     let undo = w.push(inst, v);
                     eng.dfs(&mut w, &mut nodes);
                     w.pop(undo);
@@ -1858,73 +1858,73 @@ struct EngineC<'a> {
     ctx: &'a Ctx<'a>,
     links: &'a [Link],
     fwd: &'a [FwdTab],
-    jmax: usize,
+    max_chain_ops: usize,
     wanted: u32,
 }
 
 impl EngineC<'_> {
-    fn dfs(&self, req: &Vp, chain: &mut Vec<Link>, ops: usize, n_u: usize, nodes: &mut u64) {
-        if self.ctx.stop.load(Ordering::Relaxed) {
+    fn dfs(&self, req: &ProbeValues, chain: &mut Vec<Link>, ops: usize, unary_link_count: usize, nodes: &mut u64) {
+        if self.ctx.should_stop.load(Ordering::Relaxed) {
             return;
         }
         *nodes += 1;
         self.probe(req, chain, ops);
-        if ops >= self.jmax {
+        if ops >= self.max_chain_ops {
             return;
         }
-        for &l in self.links {
-            let nops = ops + l.ops();
-            if nops > self.jmax {
+        for &link in self.links {
+            let nops = ops + link.ops();
+            if nops > self.max_chain_ops {
                 continue;
             }
-            let nu = n_u + usize::from(l.is_unary_const());
-            if nu > 3 || (nops == 5 && nu > 1) {
+            let next_unary_link_count = unary_link_count + usize::from(link.is_unary_const());
+            if next_unary_link_count > 3 || (nops == 5 && next_unary_link_count > 1) {
                 continue;
             }
-            let r2 = l.invert(req);
-            chain.push(l);
-            self.dfs(&r2, chain, nops, nu, nodes);
+            let r2 = link.invert(req);
+            chain.push(link);
+            self.dfs(&r2, chain, nops, next_unary_link_count, nodes);
             chain.pop();
         }
     }
 
-    fn probe(&self, req: &Vp, chain: &[Link], ops: usize) {
+    fn probe(&self, req: &ProbeValues, chain: &[Link], ops: usize) {
         let want = |k: usize| self.wanted & (1u32 << k) != 0;
-        let n_base = self.ctx.base_vals.len();
-        let ek = hash_words(TAG_EXACT, req);
-        let xk = hash_words(TAG_XORN, &xor_norm(req));
-        let ak = affine_canon(req).map(|c| hash_words(TAG_AFFN, &c));
+        let base_count = self.ctx.base_vals.len();
+        let exact_key = hash_words(TAG_EXACT, req);
+        let xor_norm_key = hash_words(TAG_XOR_NORM, &xor_norm(req));
+        let affine_canon_key = affine_canon(req).map(|c| hash_words(TAG_AFFINE_CANON, &c));
         for tab in self.fwd {
-            if want(tab.kf + ops) {
-                if let Some(&ei) = tab.exact.get(&ek) {
+            if want(tab.prefix_op_count + ops) {
+                if let Some(&ei) = tab.exact.get(&exact_key) {
                     let e = &tab.entries[ei as usize];
                     if e.out == *req {
                         let mut prog = e.prog.clone();
-                        emit_chain(chain, e.out_idx, n_base, &mut prog);
+                        emit_chain(chain, e.out_idx, base_count, &mut prog);
                         report_prog(self.ctx, prog);
                     }
                 }
             }
-            if want(tab.kf + 1 + ops) {
-                if let Some(&ei) = tab.xorn.get(&xk) {
+            if want(tab.prefix_op_count + 1 + ops) {
+                if let Some(&ei) = tab.xor_norm.get(&xor_norm_key) {
                     let e = &tab.entries[ei as usize];
                     if let Some(c) = solve_xor_meet(&e.out, req) {
                         if c != 0 {
                             let mut prog = e.prog.clone();
-                            prog.push(Inst::BinC(Xor, e.out_idx, c));
-                            emit_chain(chain, n_base + prog.len() - 1, n_base, &mut prog);
+                            prog.push(Inst::BinConstRight(Xor, e.out_idx, c));
+                            emit_chain(chain, base_count + prog.len() - 1, base_count, &mut prog);
                             report_prog(self.ctx, prog);
                         }
                     }
                 }
-                if let Some(ak) = ak {
-                    if let Some(&ei) = tab.affn.get(&ak) {
+                if let Some(affine_canon_key) = affine_canon_key {
+                    if let Some(&ei) = tab.affine_canon.get(&affine_canon_key) {
                         let e = &tab.entries[ei as usize];
                         if let Some((k, c)) = solve_affine_meet(&e.out, req) {
                             if k != 1 || c != 0 {
                                 let mut prog = e.prog.clone();
-                                prog.push(Inst::MadKC(e.out_idx, k, c));
-                                emit_chain(chain, n_base + prog.len() - 1, n_base, &mut prog);
+                                prog.push(Inst::MultiplyAddAffine(e.out_idx, k, c));
+                                emit_chain(chain, base_count + prog.len() - 1, base_count, &mut prog);
                                 report_prog(self.ctx, prog);
                             }
                         }
@@ -1939,7 +1939,7 @@ fn run_engine_c(
     ctx: &Ctx,
     links: &[Link],
     fwd: &[FwdTab],
-    jmax: usize,
+    max_chain_ops: usize,
     wanted: u32,
     stats: &MitmStats,
     threads: usize,
@@ -1948,7 +1948,7 @@ fn run_engine_c(
         ctx,
         links,
         fwd,
-        jmax,
+        max_chain_ops,
         wanted,
     };
     let next = AtomicU64::new(0);
@@ -1959,20 +1959,20 @@ fn run_engine_c(
                 let mut chain: Vec<Link> = Vec::with_capacity(8);
                 loop {
                     let idx = next.fetch_add(1, Ordering::Relaxed) as usize;
-                    if idx >= eng.links.len() || ctx.stop.load(Ordering::Relaxed) {
+                    if idx >= eng.links.len() || ctx.should_stop.load(Ordering::Relaxed) {
                         break;
                     }
-                    let l = eng.links[idx];
-                    if l.ops() > eng.jmax {
+                    let link = eng.links[idx];
+                    if link.ops() > eng.max_chain_ops {
                         continue;
                     }
-                    let req = l.invert(&ctx.target);
-                    chain.push(l);
+                    let req = link.invert(&ctx.target);
+                    chain.push(link);
                     eng.dfs(
                         &req,
                         &mut chain,
-                        l.ops(),
-                        usize::from(l.is_unary_const()),
+                        link.ops(),
+                        usize::from(link.is_unary_const()),
                         &mut nodes,
                     );
                     chain.pop();
@@ -1990,13 +1990,13 @@ fn run_engine_c(
 struct MTarget {
     name: &'static str,
     desc: &'static str,
-    n_inputs: usize,
+    input_count: usize,
     current_ops: usize,
     /// Engine A (forward-only exhaustive) depth; 0 = already closed in H-003.
-    lean_kmax: usize,
+    engine_a_kmax: usize,
     /// Engine A pool override (empty = use `pool`). Two-input k=4 runs need a
     /// leaner pool than the MITM engines to stay within a CPU budget.
-    lean: Vec<(&'static str, u32)>,
+    engine_a_pool_override: Vec<(&'static str, u32)>,
     /// Forward pool: engines B DFS and engine C's prefix tables.
     pool: Vec<(&'static str, u32)>,
     /// Seeds for the link-constant pool (enriched + capped).
@@ -2005,19 +2005,19 @@ struct MTarget {
     stretch: bool,
     /// Run engine C (the chain-DFS whale, ~10-16 min/target). When false the
     /// runner prints exactly which shapes the negative then covers.
-    engine_c: bool,
-    f: Box<TargetFn>,
+    enable_engine_c: bool,
+    reference_fn: Box<TargetFn>,
 }
 
-fn build_ctx<'a>(n_inputs: usize, consts: &[(&'static str, u32)], f: &'a TargetFn) -> Ctx<'a> {
-    let probes = probes(n_inputs);
+fn build_ctx<'a>(input_count: usize, consts: &[(&'static str, u32)], reference_fn: &'a TargetFn) -> Ctx<'a> {
+    let probes = probes(input_count);
     let mut base_names: Vec<String> = Vec::new();
-    let mut base_vals: Vec<Vp> = Vec::new();
+    let mut base_vals: Vec<ProbeValues> = Vec::new();
     let mut base_is_const: Vec<bool> = Vec::new();
     let input_names = ["x", "y"];
-    for (k, nm) in input_names.iter().enumerate().take(n_inputs) {
+    for (k, nm) in input_names.iter().enumerate().take(input_count) {
         base_names.push((*nm).to_string());
-        let mut v = [0u32; P];
+        let mut v = [0u32; PROBE_COUNT];
         for (p, tup) in probes.iter().enumerate() {
             v[p] = tup[k];
         }
@@ -2026,24 +2026,24 @@ fn build_ctx<'a>(n_inputs: usize, consts: &[(&'static str, u32)], f: &'a TargetF
     }
     for (nm, c) in consts {
         base_names.push(format!("{nm}={c:#010x}"));
-        base_vals.push([*c; P]);
+        base_vals.push([*c; PROBE_COUNT]);
         base_is_const.push(true);
     }
-    let mut target = [0u32; P];
+    let mut target = [0u32; PROBE_COUNT];
     for (p, tup) in probes.iter().enumerate() {
-        target[p] = f(tup);
+        target[p] = reference_fn(tup);
     }
     Ctx {
-        n_inputs,
+        input_count,
         base_names,
         base_vals,
         base_is_const,
         target,
-        tested: AtomicU64::new(0),
-        stop: AtomicBool::new(false),
+        tested_count: AtomicU64::new(0),
+        should_stop: AtomicBool::new(false),
         finds: Mutex::new(Vec::new()),
-        unsolved: AtomicU64::new(0),
-        f,
+        unsolved_count: AtomicU64::new(0),
+        reference_fn,
     }
 }
 
@@ -2054,296 +2054,296 @@ fn mitm_targets() -> Vec<MTarget> {
     let mk = |extra: &[(&'static str, u32)]| -> Vec<(&'static str, u32)> {
         common.iter().chain(extra.iter()).cloned().collect()
     };
-    let c1s = C1 >> 19;
-    let c1i = C1 ^ (C1 >> 19);
-    let c5s = C5 >> 16;
-    let c5i = C5 ^ (C5 >> 16);
-    let c0s = C0 >> 19;
-    let kpc1 = KP.wrapping_mul(C1);
-    let kqc1 = KQ.wrapping_mul(C1);
-    let apk = AP.wrapping_add(kpc1);
-    let aqk = AQ.wrapping_add(kqc1);
-    let kp9 = KP.wrapping_mul(9);
-    let kq9 = KQ.wrapping_mul(9);
-    let ap9 = AP.wrapping_mul(9).wrapping_add(C4);
-    let aq9 = AQ.wrapping_mul(9);
-    let k016 = K0.wrapping_mul(1 << 16);
-    let k0c4 = K0.wrapping_mul(C4);
-    let k0c5 = K0.wrapping_mul(C5);
-    let k09 = K0.wrapping_mul(9);
+    let c1_shifted_right_19 = STAGE1_XOR_CONSTANT >> 19;
+    let c1_xorshift19 = STAGE1_XOR_CONSTANT ^ (STAGE1_XOR_CONSTANT >> 19);
+    let c5_shifted_right_16 = STAGE5_XOR_CONSTANT >> 16;
+    let c5_xorshift16 = STAGE5_XOR_CONSTANT ^ (STAGE5_XOR_CONSTANT >> 16);
+    let c0_shifted_right_19 = STAGE0_ADD_CONSTANT >> 19;
+    let kp_times_c1 = F23_P_MULTIPLIER.wrapping_mul(STAGE1_XOR_CONSTANT);
+    let kq_times_c1 = F23_Q_MULTIPLIER.wrapping_mul(STAGE1_XOR_CONSTANT);
+    let f23_p_branch_at_c1 = F23_P_CONSTANT.wrapping_add(kp_times_c1);
+    let f23_q_branch_at_c1 = F23_Q_CONSTANT.wrapping_add(kq_times_c1);
+    let kp_times_k4 = F23_P_MULTIPLIER.wrapping_mul(9);
+    let kq_times_k4 = F23_Q_MULTIPLIER.wrapping_mul(9);
+    let stage4_of_ap = F23_P_CONSTANT.wrapping_mul(9).wrapping_add(STAGE4_ADD_CONSTANT);
+    let aq_times_k4 = F23_Q_CONSTANT.wrapping_mul(9);
+    let k0_times_65536 = STAGE0_MULTIPLIER.wrapping_mul(1 << 16);
+    let k0_times_c4 = STAGE0_MULTIPLIER.wrapping_mul(STAGE4_ADD_CONSTANT);
+    let k0_times_c5 = STAGE0_MULTIPLIER.wrapping_mul(STAGE5_XOR_CONSTANT);
+    let k0_times_k4 = STAGE0_MULTIPLIER.wrapping_mul(9);
     vec![
         MTarget {
             name: "b2d",
             desc: "stage1 o f23 span: f23(stage1(b)) [shr,xor,xor,madd,madd,xor]",
-            n_inputs: 1,
+            input_count: 1,
             current_ops: 6,
-            lean_kmax: 4,
-            lean: vec![],
+            engine_a_kmax: 4,
+            engine_a_pool_override: vec![],
             pool: mk(&[
-                ("C1", C1),
-                ("KP", KP),
-                ("AP", AP),
-                ("KQ", KQ),
-                ("AQ", AQ),
-                ("C1i", c1i),
+                ("STAGE1_XOR_CONSTANT", STAGE1_XOR_CONSTANT),
+                ("F23_P_MULTIPLIER", F23_P_MULTIPLIER),
+                ("F23_P_CONSTANT", F23_P_CONSTANT),
+                ("F23_Q_MULTIPLIER", F23_Q_MULTIPLIER),
+                ("F23_Q_CONSTANT", F23_Q_CONSTANT),
+                ("C1i", c1_xorshift19),
                 ("s19", 19),
                 ("s5", 5),
                 ("s9", 9),
                 ("p19", 1 << 19),
             ]),
-            seed: vec![C1, KP, AP, KQ, AQ, c1s, c1i, kpc1, kqc1, apk, aqk],
+            seed: vec![STAGE1_XOR_CONSTANT, F23_P_MULTIPLIER, F23_P_CONSTANT, F23_Q_MULTIPLIER, F23_Q_CONSTANT, c1_shifted_right_19, c1_xorshift19, kp_times_c1, kq_times_c1, f23_p_branch_at_c1, f23_q_branch_at_c1],
             shifts: vec![19, 5, 9, 13, 14],
             stretch: false,
-            engine_c: true,
-            f: Box::new(|x| hs::f23(hs::stage1(x[0]))),
+            enable_engine_c: true,
+            reference_fn: Box::new(|x| hs::f23(hs::stage1(x[0]))),
         },
         MTarget {
             name: "xr5",
             desc: "cross-round from d: stage0(stage5(stage4(d)) ^ n) [madd,shr,xor,xor,xor,madd]",
-            n_inputs: 2,
+            input_count: 2,
             current_ops: 6,
-            lean_kmax: 4,
-            lean: mk(&[
-                ("C0", C0),
-                ("K0", K0),
-                ("C4", C4),
-                ("C5", C5),
-                ("C5i", c5i),
+            engine_a_kmax: 4,
+            engine_a_pool_override: mk(&[
+                ("STAGE0_ADD_CONSTANT", STAGE0_ADD_CONSTANT),
+                ("STAGE0_MULTIPLIER", STAGE0_MULTIPLIER),
+                ("STAGE4_ADD_CONSTANT", STAGE4_ADD_CONSTANT),
+                ("STAGE5_XOR_CONSTANT", STAGE5_XOR_CONSTANT),
+                ("C5i", c5_xorshift16),
                 ("s16", 16),
                 ("s3", 3),
             ]),
             pool: mk(&[
-                ("C0", C0),
-                ("K0", K0),
-                ("C4", C4),
-                ("C5", C5),
-                ("C5i", c5i),
-                ("K4", 9),
+                ("STAGE0_ADD_CONSTANT", STAGE0_ADD_CONSTANT),
+                ("STAGE0_MULTIPLIER", STAGE0_MULTIPLIER),
+                ("STAGE4_ADD_CONSTANT", STAGE4_ADD_CONSTANT),
+                ("STAGE5_XOR_CONSTANT", STAGE5_XOR_CONSTANT),
+                ("C5i", c5_xorshift16),
+                ("STAGE4_MULTIPLIER", 9),
                 ("s16", 16),
                 ("s3", 3),
                 ("s12", 12),
-                ("K016", k016),
+                ("K016", k0_times_65536),
             ]),
-            seed: vec![C0, K0, C4, C5, c5s, c5i, k016, k0c4, k0c5, k09],
+            seed: vec![STAGE0_ADD_CONSTANT, STAGE0_MULTIPLIER, STAGE4_ADD_CONSTANT, STAGE5_XOR_CONSTANT, c5_shifted_right_16, c5_xorshift16, k0_times_65536, k0_times_c4, k0_times_c5, k0_times_k4],
             shifts: vec![16, 3, 12, 4, 15],
             stretch: false,
-            engine_c: true,
-            f: Box::new(|x| hs::stage0(hs::stage5(hs::stage4(x[0])) ^ x[1])),
+            enable_engine_c: true,
+            reference_fn: Box::new(|x| hs::stage0(hs::stage5(hs::stage4(x[0])) ^ x[1])),
         },
         MTarget {
             name: "xr3p",
             desc:
                 "primed cross-round from d: stage0(sigma16(stage4(d)) ^ n') [madd,shr,xor,xor,madd]",
-            n_inputs: 2,
+            input_count: 2,
             current_ops: 5,
-            lean_kmax: 4,
-            lean: mk(&[
-                ("C0", C0),
-                ("K0", K0),
-                ("C4", C4),
-                ("K4", 9),
+            engine_a_kmax: 4,
+            engine_a_pool_override: mk(&[
+                ("STAGE0_ADD_CONSTANT", STAGE0_ADD_CONSTANT),
+                ("STAGE0_MULTIPLIER", STAGE0_MULTIPLIER),
+                ("STAGE4_ADD_CONSTANT", STAGE4_ADD_CONSTANT),
+                ("STAGE4_MULTIPLIER", 9),
                 ("s16", 16),
                 ("s3", 3),
             ]),
             pool: mk(&[
-                ("C0", C0),
-                ("K0", K0),
-                ("C4", C4),
-                ("K4", 9),
+                ("STAGE0_ADD_CONSTANT", STAGE0_ADD_CONSTANT),
+                ("STAGE0_MULTIPLIER", STAGE0_MULTIPLIER),
+                ("STAGE4_ADD_CONSTANT", STAGE4_ADD_CONSTANT),
+                ("STAGE4_MULTIPLIER", 9),
                 ("s16", 16),
                 ("s3", 3),
                 ("s12", 12),
-                ("K016", k016),
+                ("K016", k0_times_65536),
                 ("p16", 1 << 16),
-                ("K0C4", k0c4),
+                ("K0C4", k0_times_c4),
             ]),
-            seed: vec![C0, K0, C4, k016, k0c4, k09],
+            seed: vec![STAGE0_ADD_CONSTANT, STAGE0_MULTIPLIER, STAGE4_ADD_CONSTANT, k0_times_65536, k0_times_c4, k0_times_k4],
             shifts: vec![16, 3, 12],
             stretch: false,
-            engine_c: true,
-            f: Box::new(|x| hs::stage0(hs::sigma16(hs::stage4(x[0])) ^ x[1])),
+            enable_engine_c: true,
+            reference_fn: Box::new(|x| hs::stage0(hs::sigma16(hs::stage4(x[0])) ^ x[1])),
         },
         MTarget {
             name: "xr4r",
             desc: "cross-round from e (H-003 xr4, richer pool): stage0(stage5(e) ^ n)",
-            n_inputs: 2,
+            input_count: 2,
             current_ops: 5,
-            lean_kmax: 0,
-            lean: vec![],
+            engine_a_kmax: 0,
+            engine_a_pool_override: vec![],
             pool: mk(&[
-                ("C0", C0),
-                ("C5", C5),
-                ("K0", K0),
-                ("C5s", c5s),
-                ("C5i", c5i),
+                ("STAGE0_ADD_CONSTANT", STAGE0_ADD_CONSTANT),
+                ("STAGE5_XOR_CONSTANT", STAGE5_XOR_CONSTANT),
+                ("STAGE0_MULTIPLIER", STAGE0_MULTIPLIER),
+                ("C5s", c5_shifted_right_16),
+                ("C5i", c5_xorshift16),
                 ("s16", 16),
                 ("s12", 12),
-                ("K016", k016),
+                ("K016", k0_times_65536),
                 ("p16", 1 << 16),
-                ("K0C5", k0c5),
+                ("K0C5", k0_times_c5),
             ]),
-            seed: vec![C0, K0, C5, c5s, c5i, k016, k0c5],
+            seed: vec![STAGE0_ADD_CONSTANT, STAGE0_MULTIPLIER, STAGE5_XOR_CONSTANT, c5_shifted_right_16, c5_xorshift16, k0_times_65536, k0_times_c5],
             shifts: vec![16, 3, 12, 4, 15],
             stretch: false,
-            engine_c: false,
-            f: Box::new(|x| hs::stage0(hs::stage5(x[0]) ^ x[1])),
+            enable_engine_c: false,
+            reference_fn: Box::new(|x| hs::stage0(hs::stage5(x[0]) ^ x[1])),
         },
         MTarget {
             name: "head3r",
             desc: "fold-in head (H-003 head3, richer pool): stage1(stage0(v ^ n))",
-            n_inputs: 2,
+            input_count: 2,
             current_ops: 5,
-            lean_kmax: 0,
-            lean: vec![],
+            engine_a_kmax: 0,
+            engine_a_pool_override: vec![],
             pool: mk(&[
-                ("C0", C0),
-                ("C1", C1),
-                ("K0", K0),
-                ("C0s", c0s),
-                ("C1s", c1s),
-                ("C1i", c1i),
-                ("C0x1", C0 ^ C1),
+                ("STAGE0_ADD_CONSTANT", STAGE0_ADD_CONSTANT),
+                ("STAGE1_XOR_CONSTANT", STAGE1_XOR_CONSTANT),
+                ("STAGE0_MULTIPLIER", STAGE0_MULTIPLIER),
+                ("C0s", c0_shifted_right_19),
+                ("C1s", c1_shifted_right_19),
+                ("C1i", c1_xorshift19),
+                ("C0x1", STAGE0_ADD_CONSTANT ^ STAGE1_XOR_CONSTANT),
                 ("s12", 12),
                 ("s19", 19),
                 ("p19", 1 << 19),
             ]),
-            seed: vec![C0, C1, K0, c0s, c1s, c1i, C0 ^ C1],
+            seed: vec![STAGE0_ADD_CONSTANT, STAGE1_XOR_CONSTANT, STAGE0_MULTIPLIER, c0_shifted_right_19, c1_shifted_right_19, c1_xorshift19, STAGE0_ADD_CONSTANT ^ STAGE1_XOR_CONSTANT],
             shifts: vec![12, 19, 7, 13],
             stretch: false,
-            engine_c: false,
-            f: Box::new(|x| hs::stage1(hs::stage0(x[0] ^ x[1]))),
+            enable_engine_c: false,
+            reference_fn: Box::new(|x| hs::stage1(hs::stage0(x[0] ^ x[1]))),
         },
         MTarget {
             name: "head4u",
-            desc: "fold-in head to the pre-C1 point u: sigma19(stage0(v ^ n)) [xor,madd,shr,xor]",
-            n_inputs: 2,
+            desc: "fold-in head to the pre-STAGE1_XOR_CONSTANT point u: sigma19(stage0(v ^ n)) [xor,madd,shr,xor]",
+            input_count: 2,
             current_ops: 4,
-            lean_kmax: 3,
-            lean: vec![],
+            engine_a_kmax: 3,
+            engine_a_pool_override: vec![],
             pool: mk(&[
-                ("C0", C0),
-                ("K0", K0),
-                ("C0s", c0s),
+                ("STAGE0_ADD_CONSTANT", STAGE0_ADD_CONSTANT),
+                ("STAGE0_MULTIPLIER", STAGE0_MULTIPLIER),
+                ("C0s", c0_shifted_right_19),
                 ("s12", 12),
                 ("s19", 19),
                 ("p19", 1 << 19),
             ]),
-            seed: vec![C0, K0, c0s],
+            seed: vec![STAGE0_ADD_CONSTANT, STAGE0_MULTIPLIER, c0_shifted_right_19],
             shifts: vec![12, 19, 7, 13],
             stretch: false,
-            engine_c: true,
-            f: Box::new(|x| {
+            enable_engine_c: true,
+            reference_fn: Box::new(|x| {
                 let b = hs::stage0(x[0] ^ x[1]);
                 b ^ (b >> 19)
             }),
         },
         MTarget {
             name: "u2er",
-            desc: "stage1-tail through stage4 (H-003 u2e, richer pool): stage4(f23(u ^ C1))",
-            n_inputs: 1,
+            desc: "stage1-tail through stage4 (H-003 u2e, richer pool): stage4(f23(u ^ STAGE1_XOR_CONSTANT))",
+            input_count: 1,
             current_ops: 5,
-            lean_kmax: 0,
-            lean: vec![],
+            engine_a_kmax: 0,
+            engine_a_pool_override: vec![],
             pool: mk(&[
-                ("C1", C1),
-                ("KP", KP),
-                ("AP", AP),
-                ("KQ", KQ),
-                ("AQ", AQ),
-                ("K4", 9),
-                ("C4", C4),
-                ("KP9", kp9),
-                ("KQ9", kq9),
+                ("STAGE1_XOR_CONSTANT", STAGE1_XOR_CONSTANT),
+                ("F23_P_MULTIPLIER", F23_P_MULTIPLIER),
+                ("F23_P_CONSTANT", F23_P_CONSTANT),
+                ("F23_Q_MULTIPLIER", F23_Q_MULTIPLIER),
+                ("F23_Q_CONSTANT", F23_Q_CONSTANT),
+                ("STAGE4_MULTIPLIER", 9),
+                ("STAGE4_ADD_CONSTANT", STAGE4_ADD_CONSTANT),
+                ("KP9", kp_times_k4),
+                ("KQ9", kq_times_k4),
                 ("s5", 5),
                 ("s9", 9),
                 ("s3", 3),
             ]),
-            seed: vec![C1, KP, AP, KQ, AQ, C4, kp9, kq9, ap9, aq9, apk, aqk],
+            seed: vec![STAGE1_XOR_CONSTANT, F23_P_MULTIPLIER, F23_P_CONSTANT, F23_Q_MULTIPLIER, F23_Q_CONSTANT, STAGE4_ADD_CONSTANT, kp_times_k4, kq_times_k4, stage4_of_ap, aq_times_k4, f23_p_branch_at_c1, f23_q_branch_at_c1],
             shifts: vec![5, 9, 3, 14],
             stretch: false,
-            engine_c: false,
-            f: Box::new(|x| hs::stage4(hs::f23(x[0] ^ hs::C1))),
+            enable_engine_c: false,
+            reference_fn: Box::new(|x| hs::stage4(hs::f23(x[0] ^ hs::STAGE1_XOR_CONSTANT))),
         },
         MTarget {
             name: "a2d",
             desc: "interior 7-op span: f23(stage1(stage0(a)))",
-            n_inputs: 1,
+            input_count: 1,
             current_ops: 7,
-            lean_kmax: 3,
-            lean: vec![],
+            engine_a_kmax: 3,
+            engine_a_pool_override: vec![],
             pool: mk(&[
-                ("C0", C0),
-                ("C1", C1),
-                ("K0", K0),
-                ("KP", KP),
-                ("AP", AP),
-                ("KQ", KQ),
-                ("AQ", AQ),
-                ("C1i", c1i),
+                ("STAGE0_ADD_CONSTANT", STAGE0_ADD_CONSTANT),
+                ("STAGE1_XOR_CONSTANT", STAGE1_XOR_CONSTANT),
+                ("STAGE0_MULTIPLIER", STAGE0_MULTIPLIER),
+                ("F23_P_MULTIPLIER", F23_P_MULTIPLIER),
+                ("F23_P_CONSTANT", F23_P_CONSTANT),
+                ("F23_Q_MULTIPLIER", F23_Q_MULTIPLIER),
+                ("F23_Q_CONSTANT", F23_Q_CONSTANT),
+                ("C1i", c1_xorshift19),
                 ("s12", 12),
                 ("s19", 19),
                 ("s5", 5),
                 ("s9", 9),
             ]),
-            seed: vec![C0, C1, K0, KP, AP, KQ, AQ, c1i, kpc1, kqc1, apk, aqk],
+            seed: vec![STAGE0_ADD_CONSTANT, STAGE1_XOR_CONSTANT, STAGE0_MULTIPLIER, F23_P_MULTIPLIER, F23_P_CONSTANT, F23_Q_MULTIPLIER, F23_Q_CONSTANT, c1_xorshift19, kp_times_c1, kq_times_c1, f23_p_branch_at_c1, f23_q_branch_at_c1],
             shifts: vec![12, 19, 5, 9],
             stretch: true,
-            engine_c: false,
-            f: Box::new(|x| hs::f23(hs::stage1(hs::stage0(x[0])))),
+            enable_engine_c: false,
+            reference_fn: Box::new(|x| hs::f23(hs::stage1(hs::stage0(x[0])))),
         },
         MTarget {
             name: "b2e",
             desc: "interior 7-op span: stage4(f23(stage1(b)))",
-            n_inputs: 1,
+            input_count: 1,
             current_ops: 7,
-            lean_kmax: 3,
-            lean: vec![],
+            engine_a_kmax: 3,
+            engine_a_pool_override: vec![],
             pool: mk(&[
-                ("C1", C1),
-                ("KP", KP),
-                ("AP", AP),
-                ("KQ", KQ),
-                ("AQ", AQ),
-                ("K4", 9),
-                ("C4", C4),
-                ("C1i", c1i),
+                ("STAGE1_XOR_CONSTANT", STAGE1_XOR_CONSTANT),
+                ("F23_P_MULTIPLIER", F23_P_MULTIPLIER),
+                ("F23_P_CONSTANT", F23_P_CONSTANT),
+                ("F23_Q_MULTIPLIER", F23_Q_MULTIPLIER),
+                ("F23_Q_CONSTANT", F23_Q_CONSTANT),
+                ("STAGE4_MULTIPLIER", 9),
+                ("STAGE4_ADD_CONSTANT", STAGE4_ADD_CONSTANT),
+                ("C1i", c1_xorshift19),
                 ("s19", 19),
                 ("s5", 5),
                 ("s9", 9),
                 ("s3", 3),
             ]),
-            seed: vec![C1, KP, AP, KQ, AQ, C4, c1i, kp9, kq9, ap9, aq9],
+            seed: vec![STAGE1_XOR_CONSTANT, F23_P_MULTIPLIER, F23_P_CONSTANT, F23_Q_MULTIPLIER, F23_Q_CONSTANT, STAGE4_ADD_CONSTANT, c1_xorshift19, kp_times_k4, kq_times_k4, stage4_of_ap, aq_times_k4],
             shifts: vec![19, 5, 9, 3],
             stretch: true,
-            engine_c: false,
-            f: Box::new(|x| hs::stage4(hs::f23(hs::stage1(x[0])))),
+            enable_engine_c: false,
+            reference_fn: Box::new(|x| hs::stage4(hs::f23(hs::stage1(x[0])))),
         },
         MTarget {
             name: "c2out",
             desc: "interior 7-op span: stage5(stage4(f23(c)))",
-            n_inputs: 1,
+            input_count: 1,
             current_ops: 7,
-            lean_kmax: 3,
-            lean: vec![],
+            engine_a_kmax: 3,
+            engine_a_pool_override: vec![],
             pool: mk(&[
-                ("KP", KP),
-                ("AP", AP),
-                ("KQ", KQ),
-                ("AQ", AQ),
-                ("K4", 9),
-                ("C4", C4),
-                ("C5", C5),
-                ("C5i", c5i),
+                ("F23_P_MULTIPLIER", F23_P_MULTIPLIER),
+                ("F23_P_CONSTANT", F23_P_CONSTANT),
+                ("F23_Q_MULTIPLIER", F23_Q_MULTIPLIER),
+                ("F23_Q_CONSTANT", F23_Q_CONSTANT),
+                ("STAGE4_MULTIPLIER", 9),
+                ("STAGE4_ADD_CONSTANT", STAGE4_ADD_CONSTANT),
+                ("STAGE5_XOR_CONSTANT", STAGE5_XOR_CONSTANT),
+                ("C5i", c5_xorshift16),
                 ("s5", 5),
                 ("s9", 9),
                 ("s3", 3),
                 ("s16", 16),
             ]),
-            seed: vec![KP, AP, KQ, AQ, C4, C5, c5i, kp9, kq9, ap9, aq9],
+            seed: vec![F23_P_MULTIPLIER, F23_P_CONSTANT, F23_Q_MULTIPLIER, F23_Q_CONSTANT, STAGE4_ADD_CONSTANT, STAGE5_XOR_CONSTANT, c5_xorshift16, kp_times_k4, kq_times_k4, stage4_of_ap, aq_times_k4],
             shifts: vec![5, 9, 3, 16],
             stretch: true,
-            engine_c: false,
-            f: Box::new(|x| hs::stage5(hs::stage4(hs::f23(x[0])))),
+            enable_engine_c: false,
+            reference_fn: Box::new(|x| hs::stage5(hs::stage4(hs::f23(x[0])))),
         },
     ]
 }
@@ -2357,40 +2357,40 @@ fn run_mitm_target(tg: &MTarget, threads: usize) {
     );
     let t_start = Instant::now();
 
-    // Engine A: forward-only exhaustive (full j=0 coverage at k <= lean_kmax)
+    // Engine A: forward-only exhaustive (full j=0 coverage at k <= engine_a_kmax)
     // over the target's engine-A pool.
-    let pool_a = if tg.lean.is_empty() {
+    let pool_a = if tg.engine_a_pool_override.is_empty() {
         &tg.pool
     } else {
-        &tg.lean
+        &tg.engine_a_pool_override
     };
-    let ctx_a = build_ctx(tg.n_inputs, pool_a, &*tg.f);
-    if tg.lean_kmax > 0 {
+    let ctx_a = build_ctx(tg.input_count, pool_a, &*tg.reference_fn);
+    if tg.engine_a_kmax > 0 {
         println!(
             "   engine A (forward exhaustive, k <= {}): pool [{}]",
-            tg.lean_kmax,
+            tg.engine_a_kmax,
             ctx_a
                 .base_names
                 .iter()
-                .skip(tg.n_inputs)
+                .skip(tg.input_count)
                 .cloned()
                 .collect::<Vec<_>>()
                 .join(", ")
         );
-        search_iterative(&ctx_a, tg.lean_kmax, threads);
+        search_iterative(&ctx_a, tg.engine_a_kmax, threads);
     } else {
         println!("   engine A skipped (H-003 closed this span at k <= 4 already)");
     }
 
     // Shared MITM context (same pool; link constants live outside the ctx).
-    let ctx = build_ctx(tg.n_inputs, &tg.pool, &*tg.f);
-    let link_cs = build_link_consts(&tg.seed, &tg.shifts);
-    let links = build_links(&link_cs);
+    let ctx = build_ctx(tg.input_count, &tg.pool, &*tg.reference_fn);
+    let link_consts = build_link_consts(&tg.seed, &tg.shifts);
+    let links = build_links(&link_consts);
     println!(
         "   link pool: {} constants {:x?}, {} odd Ks, {} links",
-        link_cs.len(),
-        link_cs,
-        LINK_KS.len(),
+        link_consts.len(),
+        link_consts,
+        ODD_LINK_MULTIPLIERS.len(),
         links.len()
     );
     let stats = MitmStats {
@@ -2400,15 +2400,15 @@ fn run_mitm_target(tg: &MTarget, threads: usize) {
 
     // Engine B: forward DFS x inverted-suffix tables.
     let bwd_tabs = build_bwd_tabs(&ctx.target, &links);
-    let dmax = 3.min(kmax_use - 1);
+    let max_forward_depth = 3.min(kmax_use - 1);
     println!(
         "   engine B: fwd DFS to depth {} probing suffix tables (j=1: {} chains, j=2: {} chains)",
-        dmax,
+        max_forward_depth,
         bwd_tabs[0].entries.len(),
         bwd_tabs[1].entries.len()
     );
     let tb = Instant::now();
-    run_engine_b(&ctx, &bwd_tabs, dmax, wanted, &stats, threads);
+    run_engine_b(&ctx, &bwd_tabs, max_forward_depth, wanted, &stats, threads);
     println!(
         "   engine B: {} forward nodes probed in {:.1}s",
         stats.fwd_nodes.load(Ordering::Relaxed),
@@ -2417,7 +2417,7 @@ fn run_mitm_target(tg: &MTarget, threads: usize) {
     drop(bwd_tabs);
 
     // Engine C: suffix-chain DFS x forward-prefix tables.
-    if !tg.engine_c {
+    if !tg.enable_engine_c {
         println!(
             "   engine C skipped (CPU budget): MITM coverage here = engine B shapes only \
              (forward<=3 + [solved meet]? + 1..2-op invertible suffix)"
@@ -2425,17 +2425,17 @@ fn run_mitm_target(tg: &MTarget, threads: usize) {
         summarize(tg, &ctx_a, &ctx, kmax_use, t_start);
         return;
     }
-    let fwd_tabs: Vec<FwdTab> = (0..=2).map(|kf| build_fwd_tab(&ctx, kf)).collect();
-    let jmax = 5.min(kmax_use);
+    let fwd_tabs: Vec<FwdTab> = (0..=2).map(|prefix_op_count| build_fwd_tab(&ctx, prefix_op_count)).collect();
+    let max_chain_ops = 5.min(kmax_use);
     println!(
         "   engine C: chain DFS to {} ops (caps: <=3 unary links, 5-op chains need <=1 unary) probing prefix tables (kf=0: {}, kf=1: {}, kf=2: {} prefixes)",
-        jmax,
+        max_chain_ops,
         fwd_tabs[0].entries.len(),
         fwd_tabs[1].entries.len(),
         fwd_tabs[2].entries.len()
     );
     let tc = Instant::now();
-    run_engine_c(&ctx, &links, &fwd_tabs, jmax, wanted, &stats, threads);
+    run_engine_c(&ctx, &links, &fwd_tabs, max_chain_ops, wanted, &stats, threads);
     println!(
         "   engine C: {} chain nodes probed in {:.1}s",
         stats.bwd_nodes.load(Ordering::Relaxed),
@@ -2501,7 +2501,7 @@ fn main() {
     let mut ran = 0;
     for tg in &all {
         let selected = if names.is_empty() {
-            !tg.long || long
+            !tg.is_long_suite || long
         } else {
             names.iter().any(|n| n.as_str() == tg.name)
         };
@@ -2523,14 +2523,14 @@ fn main() {
 mod tests {
     use super::*;
 
-    fn ctx_for(n_inputs: usize, consts: &[(&str, u32)], f: &'static TargetFn) -> Ctx<'static> {
-        let probes = probes(n_inputs);
+    fn ctx_for(input_count: usize, consts: &[(&str, u32)], reference_fn: &'static TargetFn) -> Ctx<'static> {
+        let probes = probes(input_count);
         let mut base_names = Vec::new();
-        let mut base_vals: Vec<Vp> = Vec::new();
+        let mut base_vals: Vec<ProbeValues> = Vec::new();
         let mut base_is_const = Vec::new();
-        for k in 0..n_inputs {
+        for k in 0..input_count {
             base_names.push(format!("in{k}"));
-            let mut v = [0u32; P];
+            let mut v = [0u32; PROBE_COUNT];
             for (p, tup) in probes.iter().enumerate() {
                 v[p] = tup[k];
             }
@@ -2539,33 +2539,33 @@ mod tests {
         }
         for (nm, c) in consts {
             base_names.push(nm.to_string());
-            base_vals.push([*c; P]);
+            base_vals.push([*c; PROBE_COUNT]);
             base_is_const.push(true);
         }
-        let mut target = [0u32; P];
+        let mut target = [0u32; PROBE_COUNT];
         for (p, tup) in probes.iter().enumerate() {
-            target[p] = f(tup);
+            target[p] = reference_fn(tup);
         }
         Ctx {
-            n_inputs,
+            input_count,
             base_names,
             base_vals,
             base_is_const,
             target,
-            tested: AtomicU64::new(0),
-            stop: AtomicBool::new(false),
+            tested_count: AtomicU64::new(0),
+            should_stop: AtomicBool::new(false),
             finds: Mutex::new(Vec::new()),
-            unsolved: AtomicU64::new(0),
-            f,
+            unsolved_count: AtomicU64::new(0),
+            reference_fn,
         }
     }
 
-    fn search(ctx: &Ctx, kmax: usize) -> usize {
-        for k in 1..=kmax {
+    fn search(ctx: &Ctx, max_ops: usize) -> usize {
+        for k in 1..=max_ops {
             if !ctx.finds.lock().unwrap().is_empty() {
                 return k - 1;
             }
-            let mut w = W::new(ctx);
+            let mut w = SearchState::new(ctx);
             if k == 1 {
                 final_level(ctx, &mut w);
             } else {
@@ -2594,10 +2594,10 @@ mod tests {
         let ctx = ctx_for(
             1,
             &[
-                ("KP", hs::KP),
-                ("AP", hs::AP),
-                ("KQ", hs::KQ),
-                ("AQ", hs::AQ),
+                ("F23_P_MULTIPLIER", hs::F23_P_MULTIPLIER),
+                ("F23_P_CONSTANT", hs::F23_P_CONSTANT),
+                ("F23_Q_MULTIPLIER", hs::F23_Q_MULTIPLIER),
+                ("F23_Q_CONSTANT", hs::F23_Q_CONSTANT),
             ],
             &F,
         );
@@ -2615,7 +2615,7 @@ mod tests {
     #[test]
     fn searcher_finds_affine_stage_in_one_op_with_solved_constants() {
         static F: fn(&[u32]) -> u32 = |x| hs::stage0(x[0]);
-        let ctx = ctx_for(1, &[], &F); // empty pool: must solve K0, C0
+        let ctx = ctx_for(1, &[], &F); // empty pool: must solve STAGE0_MULTIPLIER, STAGE0_ADD_CONSTANT
         let k = search(&ctx, 1);
         assert_eq!(k, 1, "stage0 is one madd with solved constants");
     }
@@ -2627,7 +2627,7 @@ mod tests {
         static F: fn(&[u32]) -> u32 = |x| hs::stage5(x[0]) & 1;
         let ctx = ctx_for(
             1,
-            &[("PEK", hs::PAR_E_K), ("PEC", hs::PAR_E_C), ("s31", 31)],
+            &[("PEK", hs::PARITY_FROM_E_MULTIPLIER), ("PEC", hs::PARITY_FROM_E_CONSTANT), ("s31", 31)],
             &F,
         );
         let k = search(&ctx, 2);
@@ -2638,7 +2638,7 @@ mod tests {
     #[test]
     fn searcher_rejects_one_op_stage1() {
         static F: fn(&[u32]) -> u32 = |x| hs::stage1(x[0]);
-        let ctx = ctx_for(1, &[("C1", hs::C1), ("sh1", 19)], &F);
+        let ctx = ctx_for(1, &[("STAGE1_XOR_CONSTANT", hs::STAGE1_XOR_CONSTANT), ("sh1", 19)], &F);
         let k = search(&ctx, 1);
         assert_eq!(k, usize::MAX, "stage1 must not be computable in 1 op");
     }
@@ -2664,7 +2664,7 @@ mod tests {
     fn affine_canon_invariance() {
         let mut rng = Rng::new(7);
         for _ in 0..200 {
-            let mut v = [0u32; P];
+            let mut v = [0u32; PROBE_COUNT];
             for x in v.iter_mut() {
                 *x = rng.next_u64() as u32;
             }
@@ -2676,9 +2676,9 @@ mod tests {
                 (33, 0),
                 (0xDEAD_BEEF | 1, 0xCAFE_BABE),
             ] {
-                let mut w = [0u32; P];
-                for p in 0..P {
-                    w[p] = mad(v[p], k, c);
+                let mut w = [0u32; PROBE_COUNT];
+                for p in 0..PROBE_COUNT {
+                    w[p] = multiply_add(v[p], k, c);
                 }
                 assert_eq!(
                     affine_canon(&w).unwrap(),
@@ -2686,11 +2686,11 @@ mod tests {
                     "canon not invariant under odd K={k:#x}, C={c:#x}"
                 );
             }
-            for t in 1..=TMAX {
+            for t in 1..=MAX_EVEN_MULTIPLIER_SHIFT {
                 let k = 33u32 << t; // even multiplier with odd part 33
-                let mut w = [0u32; P];
-                for p in 0..P {
-                    w[p] = mad(v[p], k, 0x0BAD_F00D);
+                let mut w = [0u32; PROBE_COUNT];
+                for p in 0..PROBE_COUNT {
+                    w[p] = multiply_add(v[p], k, 0x0BAD_F00D);
                 }
                 assert_eq!(
                     affine_canon(&w).unwrap(),
@@ -2704,38 +2704,38 @@ mod tests {
     #[test]
     fn solve_affine_meet_recovers_even_multiplier() {
         let mut rng = Rng::new(99);
-        let mut m = [0u32; P];
+        let mut m = [0u32; PROBE_COUNT];
         for x in m.iter_mut() {
             *x = rng.next_u64() as u32;
         }
         for &(k, c) in &[
             (0x0000_1234u32, 0x0F0F_0F0Fu32), // even K (val 2)
-            (33 << 9, 0xB55A_4F09),           // KQ-like: odd part 33, t=9
+            (33 << 9, 0xB55A_4F09),           // F23_Q_MULTIPLIER-like: odd part 33, t=9
             (0x8000_0000, 1),                 // extreme valuation
             (4097, 0),                        // odd K
         ] {
-            let mut r = [0u32; P];
-            for p in 0..P {
-                r[p] = mad(m[p], k, c);
+            let mut r = [0u32; PROBE_COUNT];
+            for p in 0..PROBE_COUNT {
+                r[p] = multiply_add(m[p], k, c);
             }
             let (ks, cs) = solve_affine_meet(&m, &r).expect("solve failed");
-            for p in 0..P {
-                assert_eq!(mad(m[p], ks, cs), r[p]);
+            for p in 0..PROBE_COUNT {
+                assert_eq!(multiply_add(m[p], ks, cs), r[p]);
             }
         }
     }
 
     /// End-to-end engine C regression: stage5(stage4(d)) must be rediscovered
-    /// as a 4-op program shaped [affine meet on d] + [XsR(16)] + [XorC(C5)] —
-    /// exercising the kf=0 prefix table, the affine-normalized meet solve,
+    /// as a 4-op program shaped [affine meet on d] + [XsR(16)] + [XorC(STAGE5_XOR_CONSTANT)] —
+    /// exercising the prefix_op_count=0 prefix table, the affine-normalized meet solve,
     /// chain emission, and full verification.
     #[test]
     fn mitm_engine_c_rediscovers_g45_shape() {
         static F: fn(&[u32]) -> u32 = |x| hs::stage5(hs::stage4(x[0]));
         let ctx = ctx_for(1, &[], &F);
-        let link_cs = build_link_consts(&[hs::C5], &[16]);
-        let links = build_links(&link_cs);
-        let fwd_tabs: Vec<FwdTab> = (0..=2).map(|kf| build_fwd_tab(&ctx, kf)).collect();
+        let link_consts = build_link_consts(&[hs::STAGE5_XOR_CONSTANT], &[16]);
+        let links = build_links(&link_consts);
+        let fwd_tabs: Vec<FwdTab> = (0..=2).map(|prefix_op_count| build_fwd_tab(&ctx, prefix_op_count)).collect();
         let stats = MitmStats {
             fwd_nodes: AtomicU64::new(0),
             bwd_nodes: AtomicU64::new(0),
@@ -2761,10 +2761,10 @@ mod tests {
         let ctx = ctx_for(
             1,
             &[
-                ("KP", hs::KP),
-                ("AP", hs::AP),
-                ("KQ", hs::KQ),
-                ("AQ", hs::AQ),
+                ("F23_P_MULTIPLIER", hs::F23_P_MULTIPLIER),
+                ("F23_P_CONSTANT", hs::F23_P_CONSTANT),
+                ("F23_Q_MULTIPLIER", hs::F23_Q_MULTIPLIER),
+                ("F23_Q_CONSTANT", hs::F23_Q_CONSTANT),
             ],
             &F,
         );

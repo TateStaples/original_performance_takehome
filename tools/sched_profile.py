@@ -30,21 +30,29 @@ Usage (repo root):
     python tools/sched_profile.py --timeline /tmp/t.txt # per-cycle dump
 """
 
+from __future__ import annotations
+
 import argparse
 import os
 import sys
 from collections import Counter, defaultdict
+from collections.abc import Callable
+from typing import Any
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO_ROOT)
 sys.path.insert(0, os.path.join(REPO_ROOT, "tools"))
 
-from perf_takehome import KernelBuilder  # noqa: E402
+# dev.py keeps the flag-configurable build_kernel_scheduled + sched_trace
+# hook this profiler needs; perf_takehome.py is the flag-free submission.
+from dev import KernelBuilder  # noqa: E402
 from problem import SLOT_LIMITS, VLEN  # noqa: E402
 from run_variant import BASE_KWARGS, SHAPE, parse_value  # noqa: E402
 
 
-def build(overrides=None):
+def build_traced_kernel(
+    overrides: dict[str, Any] | None = None,
+) -> tuple[KernelBuilder, dict[str, Any]]:
     kwargs = dict(BASE_KWARGS, **(overrides or {}))
     kb = KernelBuilder()
     kb.sched_trace = []
@@ -54,11 +62,11 @@ def build(overrides=None):
     return kb, kwargs
 
 
-def named_lookup(kb):
+def build_scratch_name_lookup(kb: KernelBuilder) -> Callable[[int], str | None]:
     """addr -> scratch block name (None for pool temps / anon broadcasts)."""
     blocks = sorted((a, n, ln) for a, (n, ln) in kb.scratch_debug.items())
 
-    def lookup(addr):
+    def lookup(addr: int) -> str | None:
         lo, hi = 0, len(blocks)
         while lo < hi:
             mid = (lo + hi) // 2
@@ -75,65 +83,67 @@ def named_lookup(kb):
     return lookup
 
 
-def name_class(name):
+def classify_scratch_name(name: str | None) -> str:
     if name is None:
         return "pool/anon"
-    for pfx in ("val", "st", "nv", "va", "rec"):
-        if name.startswith(pfx) and name[len(pfx):].isdigit():
-            return pfx
+    for prefix in ("val", "st", "nv", "va", "rec"):
+        if name.startswith(prefix) and name[len(prefix):].isdigit():
+            return prefix
     return name
 
 
-def replay(trace):
-    """Re-derive each op's dep ready-time and binding hazard, in emission
+def replay(
+    trace: list[tuple[Any, ...]],
+) -> list[tuple[int, tuple[str, int | None, int | None]]]:
+    """Re-derive each op's ready_cycle and binding hazard, in emission
     order (trace order == put order == the order the scheduler saw)."""
-    lw = {}  # addr -> (cycle, op_idx)
-    lr = {}
-    mem_w = (-1, None)
-    mem_r = (-1, None)
-    info = []
-    for idx, (c, engine, tag, slot, reads, writes, m_r, m_w) in enumerate(trace):
-        dep = 0
-        bind = ("none", None, None)  # kind, addr, producer idx
+    last_write: dict[int, tuple[int, int]] = {}  # addr -> (cycle, op_idx)
+    last_read: dict[int, tuple[int, int]] = {}
+    last_mem_write: tuple[int, int | None] = (-1, None)
+    last_mem_read: tuple[int, int | None] = (-1, None)
+    replay_info: list[tuple[int, tuple[str, int | None, int | None]]] = []
+    for idx, (c, engine, tag, slot, reads, writes, mem_read, mem_write) in enumerate(trace):
+        ready_cycle = 0
+        binding_hazard: tuple[str, int | None, int | None] = ("none", None, None)  # kind, addr, producer idx
         for a in reads:
-            t = lw.get(a)
-            if t is not None and t[0] + 1 > dep:
-                dep = t[0] + 1
-                bind = ("RAW", a, t[1])
+            t = last_write.get(a)
+            if t is not None and t[0] + 1 > ready_cycle:
+                ready_cycle = t[0] + 1
+                binding_hazard = ("RAW", a, t[1])
         for a in writes:
-            t = lw.get(a)
-            if t is not None and t[0] + 1 > dep:
-                dep = t[0] + 1
-                bind = ("WAW", a, t[1])
-            t = lr.get(a)
-            if t is not None and t[0] > dep:
-                dep = t[0]
-                bind = ("WAR", a, t[1])
-        if m_r and mem_w[0] + 1 > dep:
-            dep = mem_w[0] + 1
-            bind = ("MEM-RAW", None, mem_w[1])
-        if m_w:
-            if mem_w[0] + 1 > dep:
-                dep = mem_w[0] + 1
-                bind = ("MEM-WAW", None, mem_w[1])
-            if mem_r[0] > dep:
-                dep = mem_r[0]
-                bind = ("MEM-WAR", None, mem_r[1])
-        info.append((dep, bind))
+            t = last_write.get(a)
+            if t is not None and t[0] + 1 > ready_cycle:
+                ready_cycle = t[0] + 1
+                binding_hazard = ("WAW", a, t[1])
+            t = last_read.get(a)
+            if t is not None and t[0] > ready_cycle:
+                ready_cycle = t[0]
+                binding_hazard = ("WAR", a, t[1])
+        if mem_read and last_mem_write[0] + 1 > ready_cycle:
+            ready_cycle = last_mem_write[0] + 1
+            binding_hazard = ("MEM-RAW", None, last_mem_write[1])
+        if mem_write:
+            if last_mem_write[0] + 1 > ready_cycle:
+                ready_cycle = last_mem_write[0] + 1
+                binding_hazard = ("MEM-WAW", None, last_mem_write[1])
+            if last_mem_read[0] > ready_cycle:
+                ready_cycle = last_mem_read[0]
+                binding_hazard = ("MEM-WAR", None, last_mem_read[1])
+        replay_info.append((ready_cycle, binding_hazard))
         for a in reads:
-            t = lr.get(a)
+            t = last_read.get(a)
             if t is None or t[0] < c:
-                lr[a] = (c, idx)
+                last_read[a] = (c, idx)
         for a in writes:
-            lw[a] = (c, idx)
-        if m_r and mem_r[0] < c:
-            mem_r = (c, idx)
-        if m_w and mem_w[0] < c:
-            mem_w = (c, idx)
-    return info
+            last_write[a] = (c, idx)
+        if mem_read and last_mem_read[0] < c:
+            last_mem_read = (c, idx)
+        if mem_write and last_mem_write[0] < c:
+            last_mem_write = (c, idx)
+    return replay_info
 
 
-def main():
+def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--set", action="append", default=[], metavar="KEY=VALUE")
     ap.add_argument("--detail", type=int, default=0,
@@ -142,34 +152,34 @@ def main():
                     help="write a per-cycle occupancy/tag dump to this path")
     args = ap.parse_args()
 
-    overrides = {}
-    for item in args.set:
-        key, _, val = item.partition("=")
+    overrides: dict[str, Any] = {}
+    for override_arg in args.set:
+        key, _, val = override_arg.partition("=")
         overrides[key] = parse_value(val)
 
-    kb, kwargs = build(overrides)
+    kb, kwargs = build_traced_kernel(overrides)
     trace = kb.sched_trace
-    lookup = named_lookup(kb)
+    lookup = build_scratch_name_lookup(kb)
     period = SHAPE["forest_height"] + 1
 
-    span = max(e[0] for e in trace) + 1
-    occ = [dict.fromkeys(SLOT_LIMITS, 0) for _ in range(span)]
-    cyc_tags = [set() for _ in range(span)]  # (r, g) tags of ops in cycle
-    valu_ops_at = defaultdict(list)  # cycle -> [op_idx] (valu only)
+    span = max(trace_entry[0] for trace_entry in trace) + 1
+    occupancy = [dict.fromkeys(SLOT_LIMITS, 0) for _ in range(span)]
+    cycle_tags = [set() for _ in range(span)]  # (r, g) tags of ops in cycle
+    valu_ops_at: defaultdict[int, list[int]] = defaultdict(list)  # cycle -> [op_idx] (valu only)
     for idx, (c, engine, tag, slot, *_rest) in enumerate(trace):
-        occ[c][engine] += 1
+        occupancy[c][engine] += 1
         if tag is not None and isinstance(tag, tuple):
-            cyc_tags[c].add(tag)
+            cycle_tags[c].add(tag)
         if engine == "valu":
             valu_ops_at[c].append(idx)
 
-    nonempty = [c for c in range(span) if any(occ[c].values())]
+    nonempty = [c for c in range(span) if any(occupancy[c].values())]
     n_cycles = len(nonempty)
-    valu_slots = sum(o["valu"] for o in occ)
+    valu_slots = sum(cycle_occupancy["valu"] for cycle_occupancy in occupancy)
     floor = -(-valu_slots // SLOT_LIMITS["valu"])
     # empty valu slots on cycles that exist in the final stream
-    empty = {c: SLOT_LIMITS["valu"] - occ[c]["valu"]
-             for c in nonempty if occ[c]["valu"] < SLOT_LIMITS["valu"]}
+    empty = {c: SLOT_LIMITS["valu"] - occupancy[c]["valu"]
+             for c in nonempty if occupancy[c]["valu"] < SLOT_LIMITS["valu"]}
 
     print(f"config overrides: {overrides or '(mainline)'}")
     print(f"machine cycles (non-empty bundles): {n_cycles}   "
@@ -179,102 +189,104 @@ def main():
           f"empty valu slots: {sum(empty.values())} "
           f"over {len(empty)} gap cycles")
 
-    hist = Counter(occ[c]["valu"] for c in nonempty)
+    hist = Counter(occupancy[c]["valu"] for c in nonempty)
     print("\n== valu occupancy histogram (non-empty cycles) ==")
     for k in range(SLOT_LIMITS["valu"] + 1):
         print(f"  {k}/6: {hist.get(k, 0):>5}")
 
     # --- locate the gaps -------------------------------------------------
-    tagged_cycles = [c for c in range(span) if cyc_tags[c]]
+    tagged_cycles = [c for c in range(span) if cycle_tags[c]]
     first_tag_c, last_tag_c = tagged_cycles[0], tagged_cycles[-1]
 
-    def region(c):
+    def region(c: int) -> str:
         if c < first_tag_c:
             return "setup-ramp"
         if c > last_tag_c:
             return "store-drain"
-        if not cyc_tags[c]:
+        if not cycle_tags[c]:
             return "untagged"
-        rounds_here = sorted({t[0] for t in cyc_tags[c]})
+        rounds_here = sorted({t[0] for t in cycle_tags[c]})
         lv = sorted({r % period for r in rounds_here})
         return f"r{rounds_here[0]}-{rounds_here[-1]} L{','.join(map(str, lv))}"
 
-    by_region = Counter()
-    for c, e in empty.items():
-        by_region[region(c)] += e
+    by_region: Counter[str] = Counter()
+    for c, empty_slots in empty.items():
+        by_region[region(c)] += empty_slots
     print("\n== empty valu slots by region (rounds in flight, levels) ==")
-    for reg, e in by_region.most_common():
-        print(f"  {e:>4}  {reg}")
+    for region_label, empty_slots in by_region.most_common():
+        print(f"  {empty_slots:>4}  {region_label}")
 
     # --- why: replay deps, find blockers ---------------------------------
-    info = replay(trace)
+    replay_info = replay(trace)
 
-    def op_desc(idx):
+    def op_desc(idx: int) -> str:
         c, engine, tag, slot, *_ = trace[idx]
         return f"{engine}:{slot[0]}@{c}{'' if tag is None else f' rg{tag}'}"
 
     # For each gap cycle, the valu ops placed in the next cycles are the
     # frontier that COULD have filled it were their deps ready.
-    kind_cnt = Counter()   # binding hazard kind, weighted by empty slots
-    prod_cnt = Counter()   # producer engine:opcode
-    addr_cnt = Counter()   # blocked-on address class
-    blocked_cnt = Counter()  # blocked op opcode
-    details = []
-    for c, e in sorted(empty.items()):
-        frontier = []
+    hazard_kind_weight: Counter[str] = Counter()   # binding hazard kind, weighted by empty slots
+    producer_weight: Counter[str] = Counter()   # producer engine:opcode
+    addr_class_weight: Counter[str] = Counter()   # blocked-on address class
+    blocked_opcode_weight: Counter[str] = Counter()  # blocked op opcode
+    details: list[tuple[int, int, list[tuple[Any, ...]]]] = []
+    for c, empty_slots in sorted(empty.items()):
+        frontier: list[int] = []
         for cc in range(c + 1, min(c + 4, span)):
             frontier = valu_ops_at.get(cc, [])
             if frontier:
                 break
-        reasons = []
+        reasons: list[tuple[Any, ...]] = []
         for idx in frontier[:6]:
-            dep, (kind, addr, prod) = info[idx]
-            aname = name_class(lookup(addr)) if addr is not None else "mem"
-            pdesc = op_desc(prod) if prod is not None else "-"
-            ptag_eng = trace[prod][1] if prod is not None else "-"
-            popc = trace[prod][3][0] if prod is not None else "-"
-            reasons.append((kind, aname, f"{ptag_eng}:{popc}",
-                            trace[idx][3][0], idx, prod, dep))
-        w = e / max(len(reasons), 1)
-        for kind, aname, peng, bopc, *_ in reasons:
-            kind_cnt[kind] += w
-            prod_cnt[peng] += w
-            addr_cnt[aname] += w
-            blocked_cnt[bopc] += w
-        details.append((e, c, reasons))
+            ready_cycle, (kind, addr, producer_idx) = replay_info[idx]
+            addr_class = classify_scratch_name(lookup(addr)) if addr is not None else "mem"
+            pdesc = op_desc(producer_idx) if producer_idx is not None else "-"
+            producer_engine = trace[producer_idx][1] if producer_idx is not None else "-"
+            producer_opcode = trace[producer_idx][3][0] if producer_idx is not None else "-"
+            reasons.append((kind, addr_class, f"{producer_engine}:{producer_opcode}",
+                            trace[idx][3][0], idx, producer_idx, ready_cycle))
+        weight = empty_slots / max(len(reasons), 1)
+        # typeshed types Counter values as int, but these accumulate float
+        # weights; the runtime is unaffected. type: ignore is the narrow fix.
+        for kind, addr_class, producer_desc, blocked_opcode, *_ in reasons:
+            hazard_kind_weight[kind] += weight  # type: ignore[arg-type]
+            producer_weight[producer_desc] += weight  # type: ignore[arg-type]
+            addr_class_weight[addr_class] += weight  # type: ignore[arg-type]
+            blocked_opcode_weight[blocked_opcode] += weight  # type: ignore[arg-type]
+        details.append((empty_slots, c, reasons))
 
     print("\n== gap blocker attribution (weighted by empty slots) ==")
     print("hazard kinds:")
-    for k, v in kind_cnt.most_common():
-        print(f"  {v:>7.1f}  {k}")
+    for k, weight in hazard_kind_weight.most_common():
+        print(f"  {weight:>7.1f}  {k}")
     print("producer (engine:opcode of the op the frontier waits on):")
-    for k, v in prod_cnt.most_common(12):
-        print(f"  {v:>7.1f}  {k}")
+    for k, weight in producer_weight.most_common(12):
+        print(f"  {weight:>7.1f}  {k}")
     print("blocked-on address class:")
-    for k, v in addr_cnt.most_common(12):
-        print(f"  {v:>7.1f}  {k}")
+    for k, weight in addr_class_weight.most_common(12):
+        print(f"  {weight:>7.1f}  {k}")
     print("blocked valu opcode (the op that just missed the gap):")
-    for k, v in blocked_cnt.most_common(12):
-        print(f"  {v:>7.1f}  {k}")
+    for k, weight in blocked_opcode_weight.most_common(12):
+        print(f"  {weight:>7.1f}  {k}")
 
     if args.detail:
         print(f"\n== {args.detail} largest gap cycles ==")
-        for e, c, reasons in sorted(details, reverse=True)[: args.detail]:
-            print(f"cycle {c}: {e} empty  region={region(c)}  "
-                  f"occ={ {k: occ[c][k] for k in SLOT_LIMITS} }")
-            for kind, aname, peng, bopc, idx, prod, dep in reasons[:4]:
-                print(f"    valu:{bopc} rg{trace[idx][2]} ready@{dep} "
-                      f"{kind} on {aname} <- {op_desc(prod) if prod is not None else '-'}")
+        for empty_slots, c, reasons in sorted(details, reverse=True)[: args.detail]:
+            print(f"cycle {c}: {empty_slots} empty  region={region(c)}  "
+                  f"occupancy={ {k: occupancy[c][k] for k in SLOT_LIMITS} }")
+            for kind, addr_class, producer_desc, blocked_opcode, idx, producer_idx, ready_cycle in reasons[:4]:
+                print(f"    valu:{blocked_opcode} rg{trace[idx][2]} ready@{ready_cycle} "
+                      f"{kind} on {addr_class} <- {op_desc(producer_idx) if producer_idx is not None else '-'}")
 
     if args.timeline:
         with open(args.timeline, "w") as f:
             for c in range(span):
-                o = occ[c]
-                tags = sorted(cyc_tags[c])
+                cycle_occupancy = occupancy[c]
+                tags = sorted(cycle_tags[c])
                 rounds_here = sorted({t[0] for t in tags})
                 f.write(
-                    f"{c:>5} valu={o['valu']} alu={o['alu']:>2} "
-                    f"load={o['load']} flow={o['flow']} store={o['store']} "
+                    f"{c:>5} valu={cycle_occupancy['valu']} alu={cycle_occupancy['alu']:>2} "
+                    f"load={cycle_occupancy['load']} flow={cycle_occupancy['flow']} store={cycle_occupancy['store']} "
                     f"| r={rounds_here} tags={len(tags)}\n"
                 )
         print(f"\ntimeline written to {args.timeline}")

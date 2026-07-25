@@ -23,23 +23,23 @@ use perf_harness::schedule::{
 use perf_harness::spill::build_spilled_dag;
 use std::env;
 
-fn line(label: &str, dag: &Dag, window: Option<u32>) {
-    let r = schedule(
+fn print_schedule_line(label: &str, dag: &Dag, window: Option<u32>) {
+    let schedule_result = schedule(
         dag,
         SchedulerConfig {
             gather_batchable: false,
             walker_window: window,
         },
     );
-    let (peak, _) = peak_register_pressure(dag, &r);
-    let pct = |b: u64| 100.0 * b as f64 / r.cycles as f64;
+    let (peak, _) = peak_register_pressure(dag, &schedule_result);
+    let busy_pct = |busy_cycles: u64| 100.0 * busy_cycles as f64 / schedule_result.cycles as f64;
     println!(
         "{label:<26} {:>6} cyc   alu {:>3.0}% valu {:>3.0}% flow {:>3.0}% load {:>3.0}%   peak {:>4} {}",
-        r.cycles,
-        pct(r.alu.busy_cycles),
-        pct(r.valu.busy_cycles),
-        pct(r.flow.busy_cycles),
-        pct(r.load().busy_cycles),
+        schedule_result.cycles,
+        busy_pct(schedule_result.alu.busy_cycles),
+        busy_pct(schedule_result.valu.busy_cycles),
+        busy_pct(schedule_result.flow.busy_cycles),
+        busy_pct(schedule_result.load().busy_cycles),
         peak,
         if peak <= SCRATCH_SIZE as u64 { "fits" } else { "OVER" },
     );
@@ -47,54 +47,61 @@ fn line(label: &str, dag: &Dag, window: Option<u32>) {
 
 /// For the given schedule (windowed as requested), print the spill traffic
 /// needed to fit SCRATCH_SIZE and the resulting realizable-cycle lower bound.
-fn spill_line(label: &str, dag: &Dag, window: Option<u32>) {
-    let r = schedule(
+fn print_spill_line(label: &str, dag: &Dag, window: Option<u32>) {
+    let schedule_result = schedule(
         dag,
         SchedulerConfig {
             gather_batchable: false,
             walker_window: window,
         },
     );
-    let (peak, _) = peak_register_pressure(dag, &r);
+    let (peak, _) = peak_register_pressure(dag, &schedule_result);
     if peak <= SCRATCH_SIZE as u64 {
         println!(
             "{label:<26} {:>6} cyc   peak {peak:>4} fits -- no spilling needed",
-            r.cycles,
+            schedule_result.cycles,
         );
         return;
     }
-    let s = simulate_spilling(dag, &r, SCRATCH_SIZE);
-    let lpc = slot_limits::LOAD as u64;
-    let spc = slot_limits::STORE as u64;
+    let spill_stats = simulate_spilling(dag, &schedule_result, SCRATCH_SIZE);
+    let load_slots_per_cycle = slot_limits::LOAD as u64;
+    let store_slots_per_cycle = slot_limits::STORE as u64;
     // Memory floors after adding spill traffic to the existing slot uses.
-    let load_floor = (r.load().slot_uses + s.reloads).div_ceil(lpc);
-    let store_floor = (r.store.slot_uses + s.stored_values).div_ceil(spc);
-    let realizable = r.cycles.max(load_floor).max(store_floor);
+    let load_floor =
+        (schedule_result.load().slot_uses + spill_stats.reloads).div_ceil(load_slots_per_cycle);
+    let store_floor = (schedule_result.store.slot_uses + spill_stats.stored_values)
+        .div_ceil(store_slots_per_cycle);
+    let realizable = schedule_result.cycles.max(load_floor).max(store_floor);
     println!(
         "{label:<26} {:>6} cyc   peak {peak:>4} OVER -> spill {} vals / {} reloads   \
          load-floor {} store-floor {}   realizable >= {}",
-        r.cycles, s.stored_values, s.reloads, load_floor, store_floor, realizable,
+        schedule_result.cycles,
+        spill_stats.stored_values,
+        spill_stats.reloads,
+        load_floor,
+        store_floor,
+        realizable,
     );
 }
 
 fn main() {
     let args: Vec<String> = env::args().collect();
-    let fh: u32 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(10);
-    let bs: u32 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(256);
-    let rr: u32 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(16);
+    let forest_height: u32 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(10);
+    let batch_size: u32 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(256);
+    let rounds: u32 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(16);
     let window: Option<u32> = args.get(4).and_then(|s| s.parse().ok());
 
-    println!("hybrid flow/load crossover  (fh={fh} bs={bs} rounds={rr} window={window:?}); hash floor ~887");
-    for k in 0..=fh {
-        line(
-            &format!("butterfly<=L{k}, gather>L{k}"),
-            &build_problem_dag_hybrid(fh, bs, rr, k),
+    println!("hybrid flow/load crossover  (fh={forest_height} bs={batch_size} rounds={rounds} window={window:?}); hash floor ~887");
+    for butterfly_max_level in 0..=forest_height {
+        print_schedule_line(
+            &format!("butterfly<=L{butterfly_max_level}, gather>L{butterfly_max_level}"),
+            &build_problem_dag_hybrid(forest_height, batch_size, rounds, butterfly_max_level),
             window,
         );
     }
-    line(
+    print_schedule_line(
         "all-butterfly (K>=fh)",
-        &build_problem_dag_hybrid(fh, bs, rr, fh),
+        &build_problem_dag_hybrid(forest_height, batch_size, rounds, forest_height),
         window,
     );
 
@@ -110,10 +117,10 @@ fn main() {
         slot_limits::LOAD,
         slot_limits::STORE,
     );
-    for k in 0..=fh {
-        spill_line(
-            &format!("butterfly<=L{k}, gather>L{k}"),
-            &build_problem_dag_hybrid(fh, bs, rr, k),
+    for butterfly_max_level in 0..=forest_height {
+        print_spill_line(
+            &format!("butterfly<=L{butterfly_max_level}, gather>L{butterfly_max_level}"),
+            &build_problem_dag_hybrid(forest_height, batch_size, rounds, butterfly_max_level),
             spill_window,
         );
     }
@@ -133,45 +140,45 @@ fn main() {
         "\nconcrete realization: coalesce shared constants + placement-aware data spill, \
          then RE-SCHEDULE (window={spill_window:?}); re-sched peak must be <= {SCRATCH_SIZE}"
     );
-    for k in 0..=fh {
+    for butterfly_max_level in 0..=forest_height {
         rescheduled_spill_line(
-            &format!("butterfly<=L{k}, gather>L{k}"),
-            &build_problem_dag_hybrid(fh, bs, rr, k),
+            &format!("butterfly<=L{butterfly_max_level}, gather>L{butterfly_max_level}"),
+            &build_problem_dag_hybrid(forest_height, batch_size, rounds, butterfly_max_level),
             spill_window,
         );
     }
 }
 
-/// Peak register pressure of `result` counting only *data* values (excluding
+/// Peak register pressure of `schedule_result` counting only *data* values (excluding
 /// the rematerializable `Free` constants) -- the genuine working set, i.e. what
 /// pressure would be once shared constants are coalesced to one word.
-fn data_peak(dag: &Dag, result: &perf_harness::schedule::ScheduleResult) -> u64 {
-    use perf_harness::dag::ResKind;
-    let n = dag.nodes.len();
-    let mut deps: Vec<Vec<usize>> = vec![Vec::new(); n];
-    for (i, nd) in dag.nodes.iter().enumerate() {
-        for &d in &nd.deps {
-            deps[d].push(i);
+fn data_peak(dag: &Dag, schedule_result: &perf_harness::schedule::ScheduleResult) -> u64 {
+    use perf_harness::dag::NodeKind;
+    let node_count = dag.nodes.len();
+    let mut consumers: Vec<Vec<usize>> = vec![Vec::new(); node_count];
+    for (i, node) in dag.nodes.iter().enumerate() {
+        for &dep_node in &node.deps {
+            consumers[dep_node].push(i);
         }
     }
-    let maxc = result.cycles as usize;
-    let mut delta = vec![0i64; maxc + 2];
-    for (i, di) in deps.iter().enumerate() {
-        if matches!(dag.nodes[i].kind, ResKind::Store | ResKind::Free) {
+    let cycle_count = schedule_result.cycles as usize;
+    let mut liveness_delta = vec![0i64; cycle_count + 2];
+    for (i, node_consumers) in consumers.iter().enumerate() {
+        if matches!(dag.nodes[i].kind, NodeKind::Store | NodeKind::Free) {
             continue;
         }
-        let b = result.node_cycle[i] as usize;
-        let d = di
+        let birth_cycle = schedule_result.node_cycle[i] as usize;
+        let death_cycle = node_consumers
             .iter()
-            .map(|&x| result.node_cycle[x] as usize)
+            .map(|&x| schedule_result.node_cycle[x] as usize)
             .max()
-            .unwrap_or(b);
-        delta[b] += 1;
-        delta[d + 1] -= 1;
+            .unwrap_or(birth_cycle);
+        liveness_delta[birth_cycle] += 1;
+        liveness_delta[death_cycle + 1] -= 1;
     }
     let (mut live, mut peak) = (0i64, 0i64);
-    for d in delta.iter().take(maxc + 1) {
-        live += d;
+    for cycle_delta in liveness_delta.iter().take(cycle_count + 1) {
+        live += cycle_delta;
         peak = peak.max(live);
     }
     peak as u64
@@ -187,22 +194,22 @@ fn rescheduled_spill_line(label: &str, dag: &Dag, window: Option<u32>) {
         gather_batchable: false,
         walker_window: window,
     };
-    let r = schedule(dag, cfg);
-    let (orig_peak, _) = peak_register_pressure(dag, &r);
-    let dpeak = data_peak(dag, &r);
+    let orig_schedule = schedule(dag, cfg);
+    let (orig_peak, _) = peak_register_pressure(dag, &orig_schedule);
+    let data_working_set_peak = data_peak(dag, &orig_schedule);
 
     // Step the Belady data target down by ~one window at a time, with a floor
     // so an unwindowed (window 0/None) schedule still makes progress.
     let step =
         (perf_harness::isa::VLEN * window.filter(|&w| w > 0).unwrap_or(16) as usize).max(128);
     let mut target = SCRATCH_SIZE;
-    let mut best: (u64, u64, usize, usize, usize) = (0, 0, 0, 0, 0);
+    let mut last_attempt: (u64, u64, usize, usize, usize) = (0, 0, 0, 0, 0);
     for _ in 0..16 {
-        let spilled = build_spilled_dag(dag, &r, target);
-        let sr = schedule_with(&spilled.dag, cfg, &spilled.overrides);
-        let (peak, _) = peak_register_pressure(&spilled.dag, &sr);
-        best = (
-            sr.cycles,
+        let spilled = build_spilled_dag(dag, &orig_schedule, target);
+        let spilled_schedule = schedule_with(&spilled.dag, cfg, &spilled.overrides);
+        let (peak, _) = peak_register_pressure(&spilled.dag, &spilled_schedule);
+        last_attempt = (
+            spilled_schedule.cycles,
             peak,
             spilled.coalesced_free,
             spilled.num_stores,
@@ -213,11 +220,11 @@ fn rescheduled_spill_line(label: &str, dag: &Dag, window: Option<u32>) {
         }
         target -= step;
     }
-    let (cycles, peak, coalesced, stores, reloads) = best;
+    let (cycles, peak, coalesced, stores, reloads) = last_attempt;
     println!(
-        "{label:<26} orig {:>4}cyc peak {orig_peak:>4} (data {dpeak:>4})  ->  \
+        "{label:<26} orig {:>4}cyc peak {orig_peak:>4} (data {data_working_set_peak:>4})  ->  \
          coalesce {coalesced} const, spill {stores}v/{reloads}r  =>  {cycles}cyc peak {peak} {}",
-        r.cycles,
+        orig_schedule.cycles,
         if peak <= SCRATCH_SIZE as u64 {
             "FITS"
         } else {

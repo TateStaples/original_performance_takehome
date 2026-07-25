@@ -18,8 +18,13 @@ fn main() {
     });
 
     let fixture = Fixture::load(fixture_path);
-    let p = &fixture.params;
-    let program = builder::build_kernel_naive(p.forest_height, p.n_nodes, p.batch_size, p.rounds);
+    let params = &fixture.params;
+    let program = builder::build_kernel_naive(
+        params.forest_height,
+        params.n_nodes,
+        params.batch_size,
+        params.rounds,
+    );
 
     let mut machine = Machine::new(fixture.mem_in.clone(), program);
     if fixture.trace.is_empty() {
@@ -29,7 +34,7 @@ fn main() {
         // straight to the final-memory comparison below instead.
         machine.enable_debug = false;
     } else {
-        machine = machine.with_trace(fixture.trace.clone());
+        machine = machine.with_value_trace(fixture.trace.clone());
     }
 
     let start = Instant::now();
@@ -37,16 +42,16 @@ fn main() {
     machine.run(); // second pause: kernel body ran to completion
     let elapsed = start.elapsed();
 
-    let ok = machine.mem == fixture.mem_out;
+    let is_correct = machine.mem == fixture.mem_out;
     println!("CYCLES: {}", machine.cycle);
     println!("wall time: {elapsed:?}");
-    println!("correct: {ok}");
-    if !ok {
+    println!("correct: {is_correct}");
+    if !is_correct {
         let first_diff = machine
             .mem
             .iter()
             .zip(fixture.mem_out.iter())
-            .position(|(a, b)| a != b);
+            .position(|(actual, expected)| actual != expected);
         eprintln!("first mismatch at mem[{first_diff:?}]");
         std::process::exit(1);
     }

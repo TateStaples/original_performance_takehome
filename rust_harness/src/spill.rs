@@ -43,7 +43,7 @@
 //! `<= capacity` -- an upper bound on the true optimum, versus the lower bound
 //! `simulate_spilling` gives.
 
-use crate::dag::{Dag, Node, NodeCat, NodeId, ResKind};
+use crate::dag::{Dag, Node, NodeCategory, NodeId, NodeKind};
 use crate::schedule::{ScheduleOverrides, ScheduleResult};
 use std::collections::BinaryHeap;
 
@@ -52,11 +52,11 @@ use std::collections::BinaryHeap;
 /// -- see the module docs -- and `Store` nodes produce no value).
 #[derive(Debug, Default, Clone)]
 pub struct SpillPlan {
-    /// `stored[v]` = data value `v` is evicted at least once with a future use,
+    /// `stored[value]` = data value `value` is evicted at least once with a future use,
     /// so it needs exactly one spill-store. Indexed by original node id.
     pub stored: Vec<bool>,
-    /// `reload_cycles[v]` = ascending, de-duplicated original-schedule cycles
-    /// at which a use of `v` found it non-resident (each is one reload).
+    /// `reload_cycles[value]` = ascending, de-duplicated original-schedule cycles
+    /// at which a use of `value` found it non-resident (each is one reload).
     pub reload_cycles: Vec<Vec<u32>>,
     pub stored_values: u64,
     pub reloads: u64,
@@ -64,8 +64,8 @@ pub struct SpillPlan {
 
 /// True for nodes that occupy a data scratch word (everything except `Free`
 /// constants, which coalesce/rematerialize, and `Store`, which yields no value).
-fn is_data_value(kind: ResKind) -> bool {
-    !matches!(kind, ResKind::Free | ResKind::Store)
+fn is_data_value(kind: NodeKind) -> bool {
+    !matches!(kind, NodeKind::Free | NodeKind::Store)
 }
 
 /// Replay the Belady eviction of `result`'s schedule within `capacity` data
@@ -82,60 +82,60 @@ pub fn plan_spills(dag: &Dag, result: &ScheduleResult, capacity: usize) -> Spill
         capacity >= 1,
         "capacity must leave room for at least one value"
     );
-    let n = dag.nodes.len();
+    let node_count = dag.nodes.len();
 
-    // uses[v] = ascending distinct cycles at which data value v is read. A read
+    // uses[value] = ascending distinct cycles at which that value is read. A read
     // of a `Free` constant is ignored (constants are always available).
-    let mut uses: Vec<Vec<u32>> = vec![Vec::new(); n];
+    let mut uses: Vec<Vec<u32>> = vec![Vec::new(); node_count];
     for (i, node) in dag.nodes.iter().enumerate() {
-        let c = result.node_cycle[i];
-        for &d in &node.deps {
-            if is_data_value(dag.nodes[d].kind) {
-                uses[d].push(c);
+        let cycle = result.node_cycle[i];
+        for &dependency in &node.deps {
+            if is_data_value(dag.nodes[dependency].kind) {
+                uses[dependency].push(cycle);
             }
         }
     }
-    for u in uses.iter_mut() {
-        u.sort_unstable();
-        u.dedup();
+    for use_cycles in uses.iter_mut() {
+        use_cycles.sort_unstable();
+        use_cycles.dedup();
     }
 
     let max_cycle = result.cycles as usize;
     let mut born_at: Vec<Vec<NodeId>> = vec![Vec::new(); max_cycle + 2];
     let mut used_at: Vec<Vec<NodeId>> = vec![Vec::new(); max_cycle + 2];
-    for i in 0..n {
+    for i in 0..node_count {
         if !is_data_value(dag.nodes[i].kind) {
             continue;
         }
         born_at[result.node_cycle[i] as usize].push(i);
-        for &uc in &uses[i] {
-            used_at[uc as usize].push(i);
+        for &use_cycle in &uses[i] {
+            used_at[use_cycle as usize].push(i);
         }
     }
 
-    let mut use_ptr = vec![0usize; n];
-    let mut resident = vec![false; n];
+    let mut use_ptr = vec![0usize; node_count];
+    let mut resident = vec![false; node_count];
     let mut plan = SpillPlan {
-        stored: vec![false; n],
-        reload_cycles: vec![Vec::new(); n],
+        stored: vec![false; node_count],
+        reload_cycles: vec![Vec::new(); node_count],
         stored_values: 0,
         reloads: 0,
     };
     let mut resident_count = 0usize;
     let mut heap: BinaryHeap<(u32, NodeId)> = BinaryHeap::new();
-    let next_use = |v: NodeId, use_ptr: &[usize]| -> u32 {
-        uses[v].get(use_ptr[v]).copied().unwrap_or(u32::MAX)
+    let next_use = |value: NodeId, use_ptr: &[usize]| -> u32 {
+        uses[value].get(use_ptr[value]).copied().unwrap_or(u32::MAX)
     };
 
-    for c in 0..=max_cycle {
-        let used_now = std::mem::take(&mut used_at[c]);
-        for &v in &used_now {
-            while use_ptr[v] < uses[v].len() && uses[v][use_ptr[v]] <= c as u32 {
-                use_ptr[v] += 1;
+    for cycle in 0..=max_cycle {
+        let used_now = std::mem::take(&mut used_at[cycle]);
+        for &value in &used_now {
+            while use_ptr[value] < uses[value].len() && uses[value][use_ptr[value]] <= cycle as u32 {
+                use_ptr[value] += 1;
             }
-            if !resident[v] {
+            if !resident[value] {
                 plan.reloads += 1;
-                plan.reload_cycles[v].push(c as u32);
+                plan.reload_cycles[value].push(cycle as u32);
                 evict_until(
                     capacity - 1,
                     &mut resident_count,
@@ -145,12 +145,12 @@ pub fn plan_spills(dag: &Dag, result: &ScheduleResult, capacity: usize) -> Spill
                     &use_ptr,
                     &uses,
                 );
-                resident[v] = true;
+                resident[value] = true;
                 resident_count += 1;
             }
-            heap.push((next_use(v, &use_ptr), v));
+            heap.push((next_use(value, &use_ptr), value));
         }
-        for &v in &born_at[c] {
+        for &value in &born_at[cycle] {
             evict_until(
                 capacity - 1,
                 &mut resident_count,
@@ -160,9 +160,9 @@ pub fn plan_spills(dag: &Dag, result: &ScheduleResult, capacity: usize) -> Spill
                 &use_ptr,
                 &uses,
             );
-            resident[v] = true;
+            resident[value] = true;
             resident_count += 1;
-            heap.push((next_use(v, &use_ptr), v));
+            heap.push((next_use(value, &use_ptr), value));
         }
     }
 
@@ -174,7 +174,7 @@ pub fn plan_spills(dag: &Dag, result: &ScheduleResult, capacity: usize) -> Spill
 
 #[allow(clippy::too_many_arguments)]
 fn evict_until(
-    target: usize,
+    target_resident_count: usize,
     resident_count: &mut usize,
     resident: &mut [bool],
     plan: &mut SpillPlan,
@@ -182,16 +182,16 @@ fn evict_until(
     use_ptr: &[usize],
     uses: &[Vec<u32>],
 ) {
-    let cur_next_use = |v: NodeId| uses[v].get(use_ptr[v]).copied().unwrap_or(u32::MAX);
-    while *resident_count > target {
-        let Some((nu, v)) = heap.pop() else { break };
-        if !resident[v] || nu != cur_next_use(v) {
+    let cur_next_use = |value: NodeId| uses[value].get(use_ptr[value]).copied().unwrap_or(u32::MAX);
+    while *resident_count > target_resident_count {
+        let Some((next_use_cycle, value)) = heap.pop() else { break };
+        if !resident[value] || next_use_cycle != cur_next_use(value) {
             continue;
         }
-        resident[v] = false;
+        resident[value] = false;
         *resident_count -= 1;
-        if nu != u32::MAX && !plan.stored[v] {
-            plan.stored[v] = true;
+        if next_use_cycle != u32::MAX && !plan.stored[value] {
+            plan.stored[value] = true;
             plan.stored_values += 1;
         }
     }
@@ -218,7 +218,7 @@ pub struct SpilledDag {
 /// each) -- the honest, conservative choice matching `simulate_spilling`.
 pub fn build_spilled_dag(dag: &Dag, result: &ScheduleResult, capacity: usize) -> SpilledDag {
     let plan = plan_spills(dag, result, capacity);
-    let n = dag.nodes.len();
+    let node_count = dag.nodes.len();
 
     // Enumerate reload events (value, cycle); track each reload's earliest
     // served use so it can be emitted before that use.
@@ -228,116 +228,117 @@ pub fn build_spilled_dag(dag: &Dag, result: &ScheduleResult, capacity: usize) ->
         first_use_old: NodeId,
     }
     let mut reloads: Vec<Reload> = Vec::new();
-    let mut reload_index_by_value: Vec<Vec<usize>> = vec![Vec::new(); n];
-    for (v, cycles) in plan.reload_cycles.iter().enumerate() {
-        for &cyc in cycles {
-            let ri = reloads.len();
+    let mut reload_index_by_value: Vec<Vec<usize>> = vec![Vec::new(); node_count];
+    for (value, cycles) in plan.reload_cycles.iter().enumerate() {
+        for &cycle in cycles {
+            let reload_index = reloads.len();
             reloads.push(Reload {
-                value: v,
-                cycle: cyc,
+                value,
+                cycle,
                 first_use_old: usize::MAX,
             });
-            reload_index_by_value[v].push(ri);
+            reload_index_by_value[value].push(reload_index);
         }
     }
 
-    // Assign each rewired use to the reload that serves it. A use U of value V
-    // at cycle c is served by V itself if c precedes V's first reload, else by
-    // the reload whose cycle is the largest <= c.
+    // Assign each rewired use to the reload that serves it. A use by consumer
+    // of dependency at use_cycle is served by dependency itself if use_cycle
+    // precedes dependency's first reload, else by the reload whose cycle is
+    // the largest <= use_cycle.
     let mut serve: std::collections::HashMap<(NodeId, NodeId), usize> =
         std::collections::HashMap::new();
-    for (u, node) in dag.nodes.iter().enumerate() {
-        let uc = result.node_cycle[u];
-        for &d in &node.deps {
-            let cyc_list = &plan.reload_cycles[d];
-            if cyc_list.is_empty() {
+    for (consumer, node) in dag.nodes.iter().enumerate() {
+        let use_cycle = result.node_cycle[consumer];
+        for &dependency in &node.deps {
+            let dep_reload_cycles = &plan.reload_cycles[dependency];
+            if dep_reload_cycles.is_empty() {
                 continue;
             }
-            let pos = cyc_list.partition_point(|&t| t <= uc);
+            let pos = dep_reload_cycles.partition_point(|&reload_cycle| reload_cycle <= use_cycle);
             if pos == 0 {
                 continue; // pre-first-reload use keeps depending on the value
             }
-            let ri = reload_index_by_value[d][pos - 1];
-            serve.insert((u, d), ri);
-            if u < reloads[ri].first_use_old {
-                reloads[ri].first_use_old = u;
+            let reload_index = reload_index_by_value[dependency][pos - 1];
+            serve.insert((consumer, dependency), reload_index);
+            if consumer < reloads[reload_index].first_use_old {
+                reloads[reload_index].first_use_old = consumer;
             }
         }
     }
 
-    let mut reloads_before: Vec<Vec<usize>> = vec![Vec::new(); n];
-    for (ri, r) in reloads.iter().enumerate() {
-        if r.first_use_old != usize::MAX {
-            reloads_before[r.first_use_old].push(ri);
+    let mut reloads_before: Vec<Vec<usize>> = vec![Vec::new(); node_count];
+    for (reload_index, reload) in reloads.iter().enumerate() {
+        if reload.first_use_old != usize::MAX {
+            reloads_before[reload.first_use_old].push(reload_index);
         }
     }
 
     // Reconstruct in a valid topological order.
-    let mut out = Dag::new();
-    let extra = reloads.len() + plan.stored_values as usize + 1;
-    out.nodes.reserve(n + extra);
-    out.walker_of.reserve(n + extra);
-    out.category.reserve(n + extra);
-    let mut priority_class: Vec<u8> = Vec::with_capacity(n + extra);
-    let mut release_cycle: Vec<u32> = Vec::with_capacity(n + extra);
+    let mut new_dag = Dag::new();
+    let extra_node_count = reloads.len() + plan.stored_values as usize + 1;
+    new_dag.nodes.reserve(node_count + extra_node_count);
+    new_dag.walker_of.reserve(node_count + extra_node_count);
+    new_dag.category.reserve(node_count + extra_node_count);
+    let mut priority_class: Vec<u8> = Vec::with_capacity(node_count + extra_node_count);
+    let mut release_cycle: Vec<u32> = Vec::with_capacity(node_count + extra_node_count);
 
-    let mut push = |out: &mut Dag,
-                    kind: ResKind,
+    let mut push = |new_dag: &mut Dag,
+                    kind: NodeKind,
                     deps: Vec<NodeId>,
                     walker: u32,
-                    cat: NodeCat,
-                    tier: u8,
-                    release: u32|
+                    category: NodeCategory,
+                    priority_tier: u8,
+                    release_floor: u32|
      -> NodeId {
-        let id = out.nodes.len();
-        out.nodes.push(Node { kind, deps });
-        out.walker_of.push(walker);
-        out.category.push(cat);
-        priority_class.push(tier);
-        release_cycle.push(release);
+        let id = new_dag.nodes.len();
+        new_dag.nodes.push(Node { kind, deps });
+        new_dag.walker_of.push(walker);
+        new_dag.category.push(category);
+        priority_class.push(priority_tier);
+        release_cycle.push(release_floor);
         id
     };
 
     // One shared constant word for the whole (coalesced) `Free` pool.
     let mut coalesced_free = 0usize;
     let shared_free = push(
-        &mut out,
-        ResKind::Free,
+        &mut new_dag,
+        NodeKind::Free,
         vec![],
         u32::MAX,
-        NodeCat::Setup,
+        NodeCategory::Setup,
         1,
         0,
     );
 
-    let mut new_of = vec![usize::MAX; n];
-    let mut store_new = vec![usize::MAX; n];
+    let mut node_new = vec![usize::MAX; node_count];
+    let mut store_new = vec![usize::MAX; node_count];
     let mut reload_new = vec![usize::MAX; reloads.len()];
 
-    for i in 0..n {
+    for i in 0..node_count {
         // Coalesce every Free node into the single shared constant.
-        if matches!(dag.nodes[i].kind, ResKind::Free) {
-            new_of[i] = shared_free;
+        if matches!(dag.nodes[i].kind, NodeKind::Free) {
+            node_new[i] = shared_free;
             coalesced_free += 1;
             continue;
         }
 
         // Reloads that must precede this node (their store already emitted).
-        for &ri in &reloads_before[i] {
-            let r = &reloads[ri];
-            let s_new = store_new[r.value];
+        for &reload_index in &reloads_before[i] {
+            let reload = &reloads[reload_index];
+            let s_new = store_new[reload.value];
             debug_assert_ne!(s_new, usize::MAX, "reload emitted before its store");
-            let release = r.cycle.saturating_sub(1);
+            let release_floor = reload.cycle.saturating_sub(1);
             let id = push(
-                &mut out,
-                ResKind::GatherLoad,
+                &mut new_dag,
+                NodeKind::GatherLoad,
                 vec![s_new],
-                dag.walker_of[r.value],
-                NodeCat::Routing,
-                2, // lazy tier
-                release,
+                dag.walker_of[reload.value],
+                NodeCategory::Routing,
+                2, // lazy priority tier
+                release_floor,
             );
-            reload_new[ri] = id;
+            reload_new[reload_index] = id;
         }
 
         // The node, with deps rewired to reloads / the shared constant.
@@ -345,41 +346,41 @@ pub fn build_spilled_dag(dag: &Dag, result: &ScheduleResult, capacity: usize) ->
         let new_deps: Vec<NodeId> = node
             .deps
             .iter()
-            .map(|&d| match serve.get(&(i, d)) {
-                Some(&ri) => reload_new[ri],
-                None => new_of[d],
+            .map(|&dependency| match serve.get(&(i, dependency)) {
+                Some(&reload_index) => reload_new[reload_index],
+                None => node_new[dependency],
             })
             .collect();
         let id = push(
-            &mut out,
+            &mut new_dag,
             node.kind,
             new_deps,
             dag.walker_of[i],
             dag.category[i],
-            1, // normal tier
+            1, // normal priority tier
             0,
         );
-        new_of[i] = id;
+        node_new[i] = id;
 
-        // Its spill-store, if spilled: urgent tier, no release floor.
+        // Its spill-store, if spilled: urgent priority tier, no release floor.
         if plan.stored[i] {
-            let s = push(
-                &mut out,
-                ResKind::Store,
+            let store_id = push(
+                &mut new_dag,
+                NodeKind::Store,
                 vec![id],
                 dag.walker_of[i],
-                NodeCat::Store,
-                0, // urgent tier
+                NodeCategory::Store,
+                0, // urgent priority tier
                 0,
             );
-            store_new[i] = s;
+            store_new[i] = store_id;
         }
     }
 
     SpilledDag {
-        dag: out,
+        dag: new_dag,
         overrides: ScheduleOverrides {
-            priority_class,
+            priority_tier: priority_class,
             release_cycle,
         },
         coalesced_free,
@@ -397,10 +398,10 @@ mod tests {
 
     fn deps_point_backward(dag: &Dag) {
         for (i, node) in dag.nodes.iter().enumerate() {
-            for &d in &node.deps {
+            for &dependency in &node.deps {
                 assert!(
-                    d < i,
-                    "node {i} deps on {d}, which is not earlier -- cyclic"
+                    dependency < i,
+                    "node {i} deps on {dependency}, which is not earlier -- cyclic"
                 );
             }
         }
@@ -417,26 +418,26 @@ mod tests {
             gather_batchable: false,
             walker_window: Some(16),
         };
-        let r = schedule(&dag, cfg);
-        let (orig_peak, _) = peak_register_pressure(&dag, &r);
+        let result = schedule(&dag, cfg);
+        let (original_peak, _) = peak_register_pressure(&dag, &result);
         assert!(
-            orig_peak > SCRATCH_SIZE as u64,
-            "target config must be register-OVER as measured (peak {orig_peak})"
+            original_peak > SCRATCH_SIZE as u64,
+            "target config must be register-OVER as measured (peak {original_peak})"
         );
 
-        let spilled = build_spilled_dag(&dag, &r, SCRATCH_SIZE);
+        let spilled = build_spilled_dag(&dag, &result, SCRATCH_SIZE);
         deps_point_backward(&spilled.dag);
 
-        let sr = schedule_with(&spilled.dag, cfg, &spilled.overrides);
-        let (peak, _) = peak_register_pressure(&spilled.dag, &sr);
+        let spilled_result = schedule_with(&spilled.dag, cfg, &spilled.overrides);
+        let (spilled_peak, _) = peak_register_pressure(&spilled.dag, &spilled_result);
         assert!(
-            peak <= SCRATCH_SIZE as u64,
-            "re-scheduled spilled peak ({peak}) must fit SCRATCH_SIZE ({SCRATCH_SIZE})"
+            spilled_peak <= SCRATCH_SIZE as u64,
+            "re-scheduled spilled peak ({spilled_peak}) must fit SCRATCH_SIZE ({SCRATCH_SIZE})"
         );
         assert!(
-            sr.cycles < 1356,
+            spilled_result.cycles < 1356,
             "spilled+rescheduled ({}) should beat the ~1356 no-spill windowed floor",
-            sr.cycles
+            spilled_result.cycles
         );
     }
 
@@ -452,17 +453,17 @@ mod tests {
             gather_batchable: false,
             walker_window: Some(16),
         };
-        let r = schedule(&dag, cfg);
+        let result = schedule(&dag, cfg);
 
         // Baseline: coalesce constants only (capacity huge -> no data spill).
-        let base = build_spilled_dag(&dag, &r, SCRATCH_SIZE);
+        let base = build_spilled_dag(&dag, &result, SCRATCH_SIZE);
         let base_sr = schedule_with(&base.dag, cfg, &base.overrides);
         let (base_peak, _) = peak_register_pressure(&base.dag, &base_sr);
         assert_eq!(base.num_reloads, 0, "should not spill data when it fits");
 
         // Now cap data at 384 words -> must spill.
-        let cap = 384usize;
-        let tight = build_spilled_dag(&dag, &r, cap);
+        let tight_capacity = 384usize;
+        let tight = build_spilled_dag(&dag, &result, tight_capacity);
         deps_point_backward(&tight.dag);
         assert!(
             tight.num_stores > 0 && tight.num_reloads > 0,
@@ -494,18 +495,18 @@ mod tests {
             gather_batchable: false,
             walker_window: Some(16),
         };
-        let r = schedule(&dag, cfg);
+        let result = schedule(&dag, cfg);
         let free_before = dag
             .nodes
             .iter()
-            .filter(|n| matches!(n.kind, ResKind::Free))
+            .filter(|node| matches!(node.kind, NodeKind::Free))
             .count();
-        let spilled = build_spilled_dag(&dag, &r, SCRATCH_SIZE);
+        let spilled = build_spilled_dag(&dag, &result, SCRATCH_SIZE);
         let free_after = spilled
             .dag
             .nodes
             .iter()
-            .filter(|n| matches!(n.kind, ResKind::Free))
+            .filter(|node| matches!(node.kind, NodeKind::Free))
             .count();
         assert_eq!(free_before, 2048, "8 Free/walker x 256 walkers");
         assert_eq!(free_after, 1, "all Free coalesced to one shared word");

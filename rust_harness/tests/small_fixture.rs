@@ -14,15 +14,15 @@ fn fixture_path(name: &str) -> String {
 #[test]
 fn naive_kernel_passes_every_debug_compare_on_the_small_fixture() {
     let fixture = Fixture::load(fixture_path("small"));
-    let p = &fixture.params;
+    let params = &fixture.params;
     assert!(
         !fixture.trace.is_empty(),
         "small fixture should carry a value trace"
     );
 
-    let program = build_kernel_naive(p.forest_height, p.n_nodes, p.batch_size, p.rounds);
+    let program = build_kernel_naive(params.forest_height, params.n_nodes, params.batch_size, params.rounds);
     let mut machine =
-        Machine::new(fixture.mem_in.clone(), program).with_trace(fixture.trace.clone());
+        Machine::new(fixture.mem_in.clone(), program).with_value_trace(fixture.trace.clone());
 
     machine.run();
     machine.run();

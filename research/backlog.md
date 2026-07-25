@@ -401,8 +401,11 @@ further gain found]
   Grader-validated (frozen simulator accepts the paired stream).
 - log: 2026-07-23 cross-pollination find; dispatch flipped.
 
-### H-029 [strain: flow-balance] [status: accepted (flag-gated, dispatch
-NOT flipped)] [EXTERNAL ATTRIBUTION — see below]
+### H-029 [strain: flow-balance] [status: accepted, MAINLINE DISPATCH FLIPPED
+2026-07-25 (l4_gmin=(9,30), idx_select ported into perf_takehome.py's
+steady-gather branch unconditionally): mainline 1053 -> 1043, grader 9/9,
+6 seeds + unseeded correct=true. See end of entry for the flip note.]
+[EXTERNAL ATTRIBUTION — see below]
 - statement: idx_select — select-vs-add for the gather-mode idx recurrence.
   NOT an in-house finding: ported from a third-party public solution to
   this same take-home, github.com/zhanglistar/original_performance_takehome
@@ -442,6 +445,33 @@ NOT flipped)] [EXTERNAL ATTRIBUTION — see below]
   MUST check `correct` at each point, not just cycles. pool_sizes/skew
   re-swept against the new (9,30) point: no improvement, mainline's
   (16,4)/(4,3) already optimal. See flow-balance/STATE.md P-14 for detail.
+
+  ROOT CAUSE (found 2026-07-25): the crash is `depth_first_fold`'s
+  final-round fallback (used when `b3l_fold_diffs`'s dead-register pool
+  can't fund every served group) transiently reusing `two_minus_fp_vec`'s
+  storage (`level_table + 3*VLEN`) as a leaf-fold temp -- corrupting the
+  value for any concurrently-scheduled group's steady-gather idx-select
+  read (idx_select keeps `two_minus_fp_vec` live across every gather-mode
+  round, unlike the pre-idx_select code which only read it at rounds
+  preceding the final round). PROVEN safe at (9,30): the final round
+  (epoch 1, threshold 30) leaves 30 unserved groups (60 dead-register
+  scratch vectors) against only 2 served groups' need (8 diffs + 9
+  private each = 26) -- the fallback is provably unreachable, not just
+  untriggered-by-luck. A build-time assert enforcing
+  `2*unserved >= 8 + 9*served` at the final round now guards this
+  invariant in `perf_takehome.py` (fires loudly if a future l4_gmin
+  change breaks it, instead of silently corrupting data).
+
+  MAINLINE FLIP (2026-07-25): ported directly into `perf_takehome.py`
+  (now a flag-free file — see `dev.py`/`perf_takehome.py` split, [[project_dev_vs_perf_takehome]]),
+  replacing the steady-gather branch's `race_idx_madd`+`vec` pair with the
+  `vsel`+`multiply_add` form, and changing `l4_gmin` from `(12,30)` to
+  `(9,30)`. Verified: grader 9/9 green, 6 seeds + unseeded all
+  correct=true, 1053 -> **1043**. `tools/run_variant.py`'s `BASE_KWARGS`
+  updated to match (`l4_gmin=(9,30)`, `idx_select_before_madd=True`) so
+  `dev.py`-based sweeps track the new mainline. This was the single
+  highest-value, lowest-risk item on the standing backlog (already fully
+  measured correct before the flip) — see cross/STATE.md P-c1.
 - log: 2026-07-23 external-repo comparative investigation (user-directed)
   -> ported as flow-balance P-14 -> implemented and measured same
   session, -10 cyc verified. See flow-balance/STATE.md P-14 for full

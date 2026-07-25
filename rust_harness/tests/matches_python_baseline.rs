@@ -27,12 +27,12 @@ const PYTHON_BASELINE_CYCLES: u64 = 147_734;
 #[test]
 fn naive_kernel_matches_python_cycle_count_and_output() {
     let fixture = Fixture::load(fixture_path("baseline"));
-    let p = &fixture.params;
-    assert_eq!(p.forest_height, 10);
-    assert_eq!(p.batch_size, 256);
-    assert_eq!(p.rounds, 16);
+    let params = &fixture.params;
+    assert_eq!(params.forest_height, 10);
+    assert_eq!(params.batch_size, 256);
+    assert_eq!(params.rounds, 16);
 
-    let program = build_kernel_naive(p.forest_height, p.n_nodes, p.batch_size, p.rounds);
+    let program = build_kernel_naive(params.forest_height, params.n_nodes, params.batch_size, params.rounds);
 
     let mut machine = Machine::new(fixture.mem_in.clone(), program);
     machine.enable_debug = false; // no trace loaded for this (large) fixture

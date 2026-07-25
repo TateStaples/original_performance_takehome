@@ -14,6 +14,8 @@ and puts them through the full grader accept gate.
 Usage: python tools/sweep.py [--limit N] [--phase 1]
 """
 
+from __future__ import annotations
+
 import argparse
 import hashlib
 import itertools
@@ -21,6 +23,8 @@ import json
 import os
 import sys
 import time
+from collections.abc import Callable, Iterator
+from typing import Any
 
 TOOLS = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(TOOLS)
@@ -30,19 +34,19 @@ sys.path.insert(0, TOOLS)
 from run_variant import measure  # noqa: E402
 
 
-def current_best():
+def current_best() -> int:
     """Mainline best from the progress log (last recorded entry)."""
     with open(os.path.join(REPO_ROOT, "tools", "progress_log.json")) as f:
         return json.load(f)[-1]["cycles"]
 
 
-def config_key(cfg):
+def config_key(cfg: dict[str, Any]) -> str:
     return hashlib.sha1(
         json.dumps({k: repr(v) for k, v in sorted(cfg.items())}).encode()
     ).hexdigest()[:16]
 
 
-def phase1_grid():
+def phase1_grid() -> Iterator[dict[str, Any]]:
     """Priority-ordered configs: cheap high-signal dimensions first.
     Yields override dicts (relative to run_variant.BASE_KWARGS)."""
     # 1. skew shapes around the (4,3) optimum, incl. asymmetric lag lists.
@@ -56,7 +60,7 @@ def phase1_grid():
         yield {"l4_gmin": (a, b)}
     # 3. pool sizes.
     for tp, cp in itertools.product(range(13, 22), (3, 4, 5, 6)):
-        yield {"pool_sizes": (tp, cp)}
+        yield {"temp_and_cond_pool_sizes": (tp, cp)}
     # 4. cross products of the best-known regions (coarse).
     for skew, gmin in itertools.product(
         ((4, 2), (4, 3), (4, 4), (8, 2)),
@@ -65,11 +69,11 @@ def phase1_grid():
         yield {"skew": skew, "l4_gmin": gmin}
     # 5. tournament-level subsets (sanity: is (1,2,3) still right?).
     for tl in ((1,), (1, 2), (1, 2, 3)):
-        for off in (True, False):
-            yield {"tournament_levels": tl, "alu_offload": off}
+        for offload in (True, False):
+            yield {"tournament_levels": tl, "alu_offload": offload}
 
 
-def phase2_grid():
+def phase2_grid() -> Iterator[dict[str, Any]]:
     """Dense follow-up after phase 1 found the defaults locally optimal:
     exhaustive 4-block asymmetric lag lists, dense l4_gmin (incl. 0 =
     full-serve), dense pools, and cross-products in the good regions."""
@@ -84,23 +88,23 @@ def phase2_grid():
         yield {"l4_gmin": (a, b)}
     # 3. Dense pools.
     for tp, cp in itertools.product(range(10, 25), range(2, 9)):
-        yield {"pool_sizes": (tp, cp)}
+        yield {"temp_and_cond_pool_sizes": (tp, cp)}
     # 4. Cross products near the optimum.
     for skew, gmin, pools in itertools.product(
         ((4, 3), (4, 2), [0, 3, 6, 9], [0, 2, 5, 8], (8, 1), (8, 2)),
         ((20, 26), (22, 28), (24, 28), (22, 30)),
         ((17, 4), (17, 3), (16, 4), (18, 4)),
     ):
-        yield {"skew": skew, "l4_gmin": gmin, "pool_sizes": pools}
+        yield {"skew": skew, "l4_gmin": gmin, "temp_and_cond_pool_sizes": pools}
 
 
-def phase3_grid():
+def phase3_grid() -> Iterator[dict[str, Any]]:
     """Under the 1088 mainline (parity_conds + c5_prexor + vsel_auto):
     flag-combo dimensions the structural accepts opened up."""
     # vsel_auto subsets x l4_gmin dense around (15,29)
     for va in ((1, 2), (1, 2, 3), (1,), (2,), (3,), (1, 3), (2, 3), ()):
         for gmin in ((15, 29), (13, 29), (15, 28), (17, 29), (11, 29), (15, 31)):
-            yield {"vsel_auto": va, "l4_gmin": gmin}
+            yield {"auto_raced_first_fold_levels": va, "l4_gmin": gmin}
     # gmin fully dense both epochs under the composed flags
     for a in range(9, 22):
         for b in range(25, 33):
@@ -108,7 +112,7 @@ def phase3_grid():
     # pools under the double cond-trade
     for tp in range(14, 20):
         for cp in (4, 5, 6):
-            yield {"pool_sizes": (tp, cp)}
+            yield {"temp_and_cond_pool_sizes": (tp, cp)}
     # skew under the new balance
     for blocks, lag in ((2, 1), (2, 2), (4, 1), (4, 2), (4, 3), (4, 4), (8, 1), (8, 2)):
         yield {"skew": (blocks, lag)}
@@ -121,22 +125,22 @@ def phase3_grid():
         yield {"tournament_levels": tl}
 
 
-def phase4_grid():
+def phase4_grid() -> Iterator[dict[str, Any]]:
     """Under the 1070 mainline (u_race/l4_race/idx_race landed): race-flag
     subsets x the drifting l4_gmin x pools x va."""
     for ur in (True, False):
         for lr in (0, 1, 2, 3, 4):
             for ir in (True, False):
-                yield {"u_race": ur, "l4_race": lr, "idx_race": ir}
+                yield {"pair_tournament_second_fold_race": ur, "pair_tournament_first_fold_race": lr, "idx_recurrence_race": ir}
     for a in range(7, 20):
         for b in range(24, 32):
             yield {"l4_gmin": (a, b)}
     for va in ((1, 2), (1, 3), (1, 2, 3), (2,), (1,), (2, 3), ()):
         for gmin in ((13, 28), (11, 28), (13, 27), (15, 28)):
-            yield {"vsel_auto": va, "l4_gmin": gmin}
+            yield {"auto_raced_first_fold_levels": va, "l4_gmin": gmin}
     for tp in range(14, 19):
         for cp in (3, 4, 5):
-            yield {"pool_sizes": (tp, cp)}
+            yield {"temp_and_cond_pool_sizes": (tp, cp)}
     for blocks, lag in ((4, 2), (4, 3), (4, 4), (8, 1), (8, 2), (2, 5)):
         yield {"skew": (blocks, lag)}
     for a in range(1, 9):
@@ -145,35 +149,36 @@ def phase4_grid():
                 yield {"skew": [0, a, bb, c]}
 
 
-def phase5_grid():
+def phase5_grid() -> Iterator[dict[str, Any]]:
     """Under the 1053 mainline (cross-pollination stack landed): the new
     flag dimensions x the drifted tunables."""
     for mp in ((), (5,), (5, 6), (6,)):
         for sp in (True, False):
-            yield {"mem_prime": mp, "store_pair": sp}
+            yield {"c5_primed_gather_levels": mp, "store_pair": sp}
     for b3 in ((), (15,), (4, 15)):
         for bd in (True, False):
-            yield {"b3_last": b3, "b3l_diffs": bd}
+            yield {"reverse_newest_parity_fold": b3, "newest_parity_last_leaf_diff_tables": bd}
     for a in range(8, 17):
         for b in range(26, 33):
             yield {"l4_gmin": (a, b)}
     for va in ((1, 2), (1, 3), (1, 2, 3), (2,)):
         for gmin in ((12, 30), (12, 28), (10, 30), (14, 30)):
-            yield {"vsel_auto": va, "l4_gmin": gmin}
+            yield {"auto_raced_first_fold_levels": va, "l4_gmin": gmin}
     for tp in range(14, 19):
         for cp in (3, 4, 5):
-            yield {"pool_sizes": (tp, cp)}
+            yield {"temp_and_cond_pool_sizes": (tp, cp)}
     for lr in (0, 1, 2, 3, 4, True):
-        yield {"l4_race": lr}
+        yield {"pair_tournament_first_fold_race": lr}
     for blocks, lag in ((4, 2), (4, 3), (4, 4), (8, 1), (8, 2)):
         yield {"skew": (blocks, lag)}
 
 
-PHASES = {1: phase1_grid, 2: phase2_grid, 3: phase3_grid, 4: phase4_grid,
-          5: phase5_grid}
+PHASES: dict[int, Callable[[], Iterator[dict[str, Any]]]] = {
+    1: phase1_grid, 2: phase2_grid, 3: phase3_grid, 4: phase4_grid,
+    5: phase5_grid}
 
 
-def main():
+def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=0, help="stop after N new runs")
     ap.add_argument("--phase", type=int, default=1)
@@ -181,12 +186,12 @@ def main():
 
     baseline = current_best()
     os.makedirs(RESULTS, exist_ok=True)
-    done = {f[:-5] for f in os.listdir(RESULTS) if f.endswith(".json")}
-    ran = best = 0
-    t0 = time.time()
+    done_keys = {f[:-5] for f in os.listdir(RESULTS) if f.endswith(".json")}
+    new_run_count = winner_count = 0
+    start_time = time.time()
     for cfg in PHASES[args.phase]():
         key = config_key(cfg)
-        if key in done:
+        if key in done_keys:
             continue
         try:
             cycles, correct = measure(cfg, seed=123)
@@ -195,20 +200,20 @@ def main():
             err = repr(e)
         else:
             err = None
-        rec = {"config": {k: repr(v) for k, v in cfg.items()},
-               "cycles": cycles, "correct": correct, "baseline": baseline}
+        sweep_result: dict[str, Any] = {"config": {k: repr(v) for k, v in cfg.items()},
+                         "cycles": cycles, "correct": correct, "baseline": baseline}
         if err:
-            rec["error"] = err
+            sweep_result["error"] = err
         with open(os.path.join(RESULTS, key + ".json"), "w") as f:
-            json.dump(rec, f)
-        ran += 1
+            json.dump(sweep_result, f)
+        new_run_count += 1
         if correct and 0 < cycles < baseline:
-            best += 1
+            winner_count += 1
             print(f"WINNER {cycles} {cfg}", flush=True)
-        if args.limit and ran >= args.limit:
+        if args.limit and new_run_count >= args.limit:
             break
-    print(f"sweep: {ran} new runs, {best} beat baseline, "
-          f"{time.time() - t0:.0f}s", flush=True)
+    print(f"sweep: {new_run_count} new runs, {winner_count} beat baseline, "
+          f"{time.time() - start_time:.0f}s", flush=True)
 
 
 if __name__ == "__main__":

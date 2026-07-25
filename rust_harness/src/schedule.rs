@@ -25,7 +25,7 @@
 //! consume 1 slot) -- otherwise it could stall waiting for an 8th peer that
 //! never arrives.
 
-use crate::dag::{Dag, NodeId, ResKind};
+use crate::dag::{Dag, NodeId, NodeKind};
 use crate::isa::{slot_limits, AluOp, VLEN};
 use std::collections::BTreeMap;
 
@@ -37,7 +37,7 @@ use std::collections::BTreeMap;
 /// traffic precisely, which is the whole difficulty of turning a spill
 /// *count* into a spill *schedule*:
 ///
-/// * `priority_class` -- a coarse tier that dominates the height/window key:
+/// * `priority_tier` -- a coarse tier that dominates the height/window key:
 ///   `0` = urgent (wins every slot it is ready for), `1` = normal, `2` = lazy
 ///   (only ever fills slots nothing else wants). Spill-stores go in tier 0 so
 ///   they fire the instant their value exists (freeing its scratch word ASAP);
@@ -54,7 +54,7 @@ use std::collections::BTreeMap;
 pub struct ScheduleOverrides {
     /// Priority tier per node (see struct docs). Values outside `0..=2` are
     /// accepted and simply sort in the obvious order; empty = all-zero.
-    pub priority_class: Vec<u8>,
+    pub priority_tier: Vec<u8>,
     /// Earliest cycle each node may be scheduled (see struct docs). `0` = none;
     /// empty = no floors at all.
     pub release_cycle: Vec<u32>,
@@ -152,7 +152,7 @@ impl std::fmt::Display for ScheduleResult {
 
 // The helpers below rank candidates by a composite `key` (see `schedule`),
 // not raw height: lower key = scheduled sooner. The key packs the walker
-// window in its high bits and (hmax - height) in its low bits, so ascending
+// window in its high bits and (max_height - height) in its low bits, so ascending
 // key = earlier-window-first, then taller-first -- and with no window it is
 // exactly descending height, identical to the pre-windowing behavior. A
 // chunk's priority is its MIN key (its most-urgent member).
@@ -183,8 +183,8 @@ fn batch_or_scalar_candidates(
     if batchable {
         while ready.len() >= VLEN {
             let chunk: Vec<NodeId> = ready.drain(0..VLEN).collect();
-            let p = chunk.iter().map(|&n| key[n]).min().unwrap();
-            out.push((p, chunk));
+            let priority = chunk.iter().map(|&n| key[n]).min().unwrap();
+            out.push((priority, chunk));
         }
     }
     out.extend(ready.into_iter().map(|n| (key[n], vec![n])));
@@ -201,8 +201,8 @@ fn partial_valu_candidates(mut ready: Vec<NodeId>, key: &[u64]) -> Vec<(u64, Vec
     while !ready.is_empty() {
         let take = ready.len().min(VLEN);
         let chunk: Vec<NodeId> = ready.drain(0..take).collect();
-        let p = chunk.iter().map(|&n| key[n]).min().unwrap();
-        out.push((p, chunk));
+        let priority = chunk.iter().map(|&n| key[n]).min().unwrap();
+        out.push((priority, chunk));
     }
     out
 }
@@ -218,23 +218,23 @@ pub fn schedule_with(
     config: SchedulerConfig,
     overrides: &ScheduleOverrides,
 ) -> ScheduleResult {
-    let n = dag.nodes.len();
+    let node_count = dag.nodes.len();
 
-    let mut dependents: Vec<Vec<NodeId>> = vec![Vec::new(); n];
-    let mut remaining_deps: Vec<u32> = vec![0; n];
+    let mut dependents: Vec<Vec<NodeId>> = vec![Vec::new(); node_count];
+    let mut remaining_deps: Vec<u32> = vec![0; node_count];
     for (i, node) in dag.nodes.iter().enumerate() {
         remaining_deps[i] = node.deps.len() as u32;
-        for &d in &node.deps {
-            dependents[d].push(i);
+        for &dependency in &node.deps {
+            dependents[dependency].push(i);
         }
     }
 
     // Longest path (in nodes) from each node to a sink -- deps always point
     // to smaller indices (see dag.rs's is_acyclic_and_deps_point_backward
     // test), so a single reverse pass suffices.
-    let mut height = vec![1u32; n];
-    for i in (0..n).rev() {
-        let h = dependents[i].iter().map(|&d| height[d]).max().unwrap_or(0) + 1;
+    let mut height = vec![1u32; node_count];
+    for i in (0..node_count).rev() {
+        let h = dependents[i].iter().map(|&dependent| height[dependent]).max().unwrap_or(0) + 1;
         height[i] = h;
     }
 
@@ -242,17 +242,17 @@ pub fn schedule_with(
     // windows first), secondary = height (descending). Packed into one u64 so
     // a single ascending sort orders both -- lower key = scheduled sooner.
     // With walker_window == None every window is 0 and the key is exactly
-    // (hmax - height), i.e. plain descending height, so the schedule is
+    // (max_height - height), i.e. plain descending height, so the schedule is
     // byte-identical to the pre-windowing behavior.
-    let hmax = height.iter().copied().max().unwrap_or(0);
-    let group_of = |nd: NodeId| -> u32 {
+    let max_height = height.iter().copied().max().unwrap_or(0);
+    let walker_window_index_of = |nd: NodeId| -> u32 {
         match config.walker_window {
             Some(w) if w > 0 => {
-                let wi = dag.walker_of[nd];
-                if wi == u32::MAX {
+                let walker_index = dag.walker_of[nd];
+                if walker_index == u32::MAX {
                     0
                 } else {
-                    wi / w
+                    walker_index / w
                 }
             }
             _ => 0,
@@ -261,58 +261,58 @@ pub fn schedule_with(
     // Priority tier (see ScheduleOverrides) occupies the top byte, above the
     // walker window and height, so it dominates both. An empty override vector
     // yields tier 0 everywhere, leaving the key exactly `(group << 32) |
-    // (hmax - height)` -- the pre-override packing, bit-for-bit. Groups here
+    // (max_height - height)` -- the pre-override packing, bit-for-bit. Groups here
     // are tiny (walker/window <= a few hundred), so they never spill past bit
     // 55 into the tier byte.
     let tier_of =
-        |nd: NodeId| -> u64 { overrides.priority_class.get(nd).copied().unwrap_or(0) as u64 };
-    let key: Vec<u64> = (0..n)
+        |nd: NodeId| -> u64 { overrides.priority_tier.get(nd).copied().unwrap_or(0) as u64 };
+    let key: Vec<u64> = (0..node_count)
         .map(|nd| {
-            (tier_of(nd) << 56) | ((group_of(nd) as u64) << 32) | ((hmax - height[nd]) as u64)
+            (tier_of(nd) << 56) | ((walker_window_index_of(nd) as u64) << 32) | ((max_height - height[nd]) as u64)
         })
         .collect();
 
     // Earliest-cycle floor per node (see ScheduleOverrides::release_cycle).
-    let rel_of = |nd: NodeId| -> u32 { overrides.release_cycle.get(nd).copied().unwrap_or(0) };
+    let release_cycle_of = |nd: NodeId| -> u32 { overrides.release_cycle.get(nd).copied().unwrap_or(0) };
     // Nodes whose deps are satisfied but whose release cycle hasn't arrived,
     // keyed by (and drained at) that release cycle.
     let mut held: BTreeMap<u32, Vec<NodeId>> = BTreeMap::new();
 
-    let mut scheduled = vec![false; n];
+    let mut scheduled = vec![false; node_count];
     let mut done_count: u64 = 0;
 
     // Resolve Free nodes instantly (no engine, no cycle) before scheduling begins.
     let mut pool: Vec<NodeId> = Vec::new();
-    let mut queue: Vec<NodeId> = (0..n).filter(|&i| remaining_deps[i] == 0).collect();
-    while let Some(i) = queue.pop() {
-        if matches!(dag.nodes[i].kind, ResKind::Free) && !scheduled[i] {
+    let mut stack: Vec<NodeId> = (0..node_count).filter(|&i| remaining_deps[i] == 0).collect();
+    while let Some(i) = stack.pop() {
+        if matches!(dag.nodes[i].kind, NodeKind::Free) && !scheduled[i] {
             scheduled[i] = true;
             done_count += 1;
-            for &dep in &dependents[i] {
-                remaining_deps[dep] -= 1;
-                if remaining_deps[dep] == 0 {
-                    queue.push(dep);
+            for &dependent in &dependents[i] {
+                remaining_deps[dependent] -= 1;
+                if remaining_deps[dependent] == 0 {
+                    stack.push(dependent);
                 }
             }
         } else if !scheduled[i] {
             // Release-gate even the initial ready set (a release floor > cycle
             // 1 holds the node back). Reloads never land here -- they depend on
             // their spill-store -- but keep the path uniform for correctness.
-            let r = rel_of(i);
-            if r <= 1 {
+            let release_cycle = release_cycle_of(i);
+            if release_cycle <= 1 {
                 pool.push(i);
             } else {
-                held.entry(r).or_default().push(i);
+                held.entry(release_cycle).or_default().push(i);
             }
         }
     }
 
     let mut result = ScheduleResult {
-        node_cycle: vec![0u32; n],
+        node_cycle: vec![0u32; node_count],
         ..Default::default()
     };
 
-    while done_count < n as u64 {
+    while done_count < node_count as u64 {
         result.cycles += 1;
 
         // Admit any release-floored nodes whose cycle has now arrived.
@@ -345,7 +345,7 @@ pub fn schedule_with(
             } else {
                 panic!(
                     "deadlock: {} nodes unscheduled with empty pool and no held work",
-                    n as u64 - done_count
+                    node_count as u64 - done_count
                 );
             }
         }
@@ -363,13 +363,13 @@ pub fn schedule_with(
 
         for &node in &pool {
             match dag.nodes[node].kind {
-                ResKind::Alu(op) => alu_groups.entry(op).or_default().push(node),
-                ResKind::MultiplyAdd => multiply_add_ready.push(node),
-                ResKind::Flow => flow_ready.push(node),
-                ResKind::ContiguousLoad => contiguous_load_ready.push(node),
-                ResKind::GatherLoad => gather_load_ready.push(node),
-                ResKind::Store => store_ready.push(node),
-                ResKind::Free => unreachable!("Free nodes are resolved before scheduling"),
+                NodeKind::Alu(op) => alu_groups.entry(op).or_default().push(node),
+                NodeKind::MultiplyAdd => multiply_add_ready.push(node),
+                NodeKind::Flow => flow_ready.push(node),
+                NodeKind::ContiguousLoad => contiguous_load_ready.push(node),
+                NodeKind::GatherLoad => gather_load_ready.push(node),
+                NodeKind::Store => store_ready.push(node),
+                NodeKind::Free => unreachable!("Free nodes are resolved before scheduling"),
             }
         }
 
@@ -392,14 +392,14 @@ pub fn schedule_with(
             .collect();
         let mut valu_candidates: Vec<(u64, bool, Vec<NodeId>)> = alu_full_batches
             .into_iter()
-            .map(|(p, c)| (p, false, c)) // false = alu batch (has scalar fallback)
+            .map(|(priority, chunk)| (priority, false, chunk)) // false = alu batch (has scalar fallback)
             .collect();
         valu_candidates.extend(
             partial_valu_candidates(multiply_add_ready, &key)
                 .into_iter()
-                .map(|(p, c)| (p, true, c)), // true = MultiplyAdd (valu-only)
+                .map(|(priority, chunk)| (priority, true, chunk)), // true = MultiplyAdd (valu-only)
         );
-        valu_candidates.sort_unstable_by_key(|(p, ..)| *p);
+        valu_candidates.sort_unstable_by_key(|(priority, ..)| *priority);
         let mut valu_slots_used = 0usize;
         for (_, is_multiply_add, chunk) in valu_candidates {
             if valu_slots_used < slot_limits::VALU {
@@ -434,21 +434,21 @@ pub fn schedule_with(
             if valu_slots_used < slot_limits::VALU {
                 let mut by_op: BTreeMap<AluOp, Vec<NodeId>> = BTreeMap::new();
                 for &node in &deferred_alu {
-                    if let ResKind::Alu(op) = dag.nodes[node].kind {
+                    if let NodeKind::Alu(op) = dag.nodes[node].kind {
                         by_op.entry(op).or_default().push(node);
                     }
                 }
-                let mut ovf: Vec<(u64, Vec<NodeId>)> = Vec::new();
+                let mut overflow_candidates: Vec<(u64, Vec<NodeId>)> = Vec::new();
                 for group in by_op.values_mut() {
                     group.sort_unstable_by_key(|&n| key[n]);
                     for chunk in group.chunks(VLEN) {
-                        let p = chunk.iter().map(|&n| key[n]).min().unwrap();
-                        ovf.push((p, chunk.to_vec()));
+                        let priority = chunk.iter().map(|&n| key[n]).min().unwrap();
+                        overflow_candidates.push((priority, chunk.to_vec()));
                     }
                 }
-                ovf.sort_unstable_by_key(|(p, _)| *p);
+                overflow_candidates.sort_unstable_by_key(|(priority, _)| *priority);
                 let mut taken: std::collections::HashSet<NodeId> = std::collections::HashSet::new();
-                for (_, chunk) in ovf {
+                for (_, chunk) in overflow_candidates {
                     if valu_slots_used >= slot_limits::VALU {
                         break;
                     }
@@ -500,14 +500,14 @@ pub fn schedule_with(
         let mut load_candidates: Vec<(u64, bool, Vec<NodeId>)> =
             batch_or_scalar_candidates(contiguous_load_ready, &key, true)
                 .into_iter()
-                .map(|(p, c)| (p, true, c))
+                .map(|(priority, chunk)| (priority, true, chunk))
                 .collect();
         load_candidates.extend(
             batch_or_scalar_candidates(gather_load_ready, &key, config.gather_batchable)
                 .into_iter()
-                .map(|(p, c)| (p, false, c)),
+                .map(|(priority, chunk)| (priority, false, chunk)),
         );
-        load_candidates.sort_unstable_by_key(|(p, ..)| *p);
+        load_candidates.sort_unstable_by_key(|(priority, ..)| *priority);
         let (mut contiguous_busy, mut gather_busy) = (false, false);
         for (_, is_contiguous, chunk) in load_candidates.into_iter().take(slot_limits::LOAD) {
             let totals = if is_contiguous {
@@ -532,7 +532,7 @@ pub fn schedule_with(
         let store_candidates = batch_or_scalar_candidates(store_ready, &key, true);
         let mut store_slots_used = 0u64;
         let mut sorted_store = store_candidates;
-        sorted_store.sort_unstable_by_key(|(p, _)| *p);
+        sorted_store.sort_unstable_by_key(|(priority, _)| *priority);
         for (_, chunk) in sorted_store.into_iter().take(slot_limits::STORE) {
             store_slots_used += 1;
             result.store.nodes_done += chunk.len() as u64;
@@ -559,18 +559,18 @@ pub fn schedule_with(
         pool.retain(|&n| !scheduled[n]);
         for &node in &this_cycle {
             done_count += 1;
-            for &dep in &dependents[node] {
-                remaining_deps[dep] -= 1;
-                if remaining_deps[dep] == 0 {
+            for &dependent in &dependents[node] {
+                remaining_deps[dependent] -= 1;
+                if remaining_deps[dependent] == 0 {
                     // Natural earliest = next cycle (single-cycle latency). A
                     // release floor beyond that parks the node in `held` until
                     // its cycle arrives; otherwise it joins the ready pool now.
-                    let natural = result.cycles as u32 + 1;
-                    let r = rel_of(dep);
-                    if r <= natural {
-                        pool.push(dep);
+                    let natural_ready_cycle = result.cycles as u32 + 1;
+                    let release_cycle = release_cycle_of(dependent);
+                    if release_cycle <= natural_ready_cycle {
+                        pool.push(dependent);
                     } else {
-                        held.entry(r).or_default().push(dep);
+                        held.entry(release_cycle).or_default().push(dependent);
                     }
                 }
             }
@@ -599,24 +599,24 @@ pub fn schedule_with(
 /// of its dependents consumes it (inclusive); `Store` nodes don't produce a
 /// readable value and are excluded.
 pub fn peak_register_pressure(dag: &Dag, result: &ScheduleResult) -> (u64, u32) {
-    let n = dag.nodes.len();
-    let mut dependents: Vec<Vec<NodeId>> = vec![Vec::new(); n];
+    let node_count = dag.nodes.len();
+    let mut dependents: Vec<Vec<NodeId>> = vec![Vec::new(); node_count];
     for (i, node) in dag.nodes.iter().enumerate() {
-        for &d in &node.deps {
-            dependents[d].push(i);
+        for &dependency in &node.deps {
+            dependents[dependency].push(i);
         }
     }
 
     let max_cycle = result.cycles as usize;
     let mut delta = vec![0i64; max_cycle + 2];
-    for (i, deps_of_i) in dependents.iter().enumerate() {
-        if matches!(dag.nodes[i].kind, ResKind::Store) {
+    for (i, dependents_of_i) in dependents.iter().enumerate() {
+        if matches!(dag.nodes[i].kind, NodeKind::Store) {
             continue;
         }
         let birth = result.node_cycle[i] as usize;
-        let death = deps_of_i
+        let death = dependents_of_i
             .iter()
-            .map(|&d| result.node_cycle[d] as usize)
+            .map(|&dependent| result.node_cycle[dependent] as usize)
             .max()
             .unwrap_or(birth);
         delta[birth] += 1;
@@ -660,24 +660,24 @@ pub fn allocate_registers(dag: &Dag, result: &ScheduleResult) -> (u64, Vec<Optio
     use std::cmp::Reverse;
     use std::collections::BinaryHeap;
 
-    let n = dag.nodes.len();
-    let mut dependents: Vec<Vec<NodeId>> = vec![Vec::new(); n];
+    let node_count = dag.nodes.len();
+    let mut dependents: Vec<Vec<NodeId>> = vec![Vec::new(); node_count];
     for (i, node) in dag.nodes.iter().enumerate() {
-        for &d in &node.deps {
-            dependents[d].push(i);
+        for &dependency in &node.deps {
+            dependents[dependency].push(i);
         }
     }
 
     // (birth, death, node) for every value-producing node, sorted by birth.
-    let mut intervals: Vec<(u32, u32, NodeId)> = Vec::with_capacity(n);
-    for (i, deps) in dependents.iter().enumerate() {
-        if matches!(dag.nodes[i].kind, ResKind::Store) {
+    let mut intervals: Vec<(u32, u32, NodeId)> = Vec::with_capacity(node_count);
+    for (i, dependents_of_i) in dependents.iter().enumerate() {
+        if matches!(dag.nodes[i].kind, NodeKind::Store) {
             continue;
         }
         let birth = result.node_cycle[i];
-        let death = deps
+        let death = dependents_of_i
             .iter()
-            .map(|&d| result.node_cycle[d])
+            .map(|&dependent| result.node_cycle[dependent])
             .max()
             .unwrap_or(birth);
         intervals.push((birth, death, i));
@@ -687,7 +687,7 @@ pub fn allocate_registers(dag: &Dag, result: &ScheduleResult) -> (u64, Vec<Optio
     let mut free: BinaryHeap<Reverse<u32>> = BinaryHeap::new(); // freed slots (min)
     let mut active: BinaryHeap<Reverse<(u32, u32)>> = BinaryHeap::new(); // (death, slot)
     let mut next_slot: u32 = 0;
-    let mut addr: Vec<Option<u32>> = vec![None; n];
+    let mut addr: Vec<Option<u32>> = vec![None; node_count];
 
     for &(birth, death, node) in &intervals {
         // Return slots of values that died strictly before this birth.
@@ -739,54 +739,54 @@ pub struct SpillStats {
 pub fn simulate_spilling(dag: &Dag, result: &ScheduleResult, capacity: usize) -> SpillStats {
     use std::collections::BinaryHeap;
 
-    let n = dag.nodes.len();
-    // uses[v] = ascending distinct cycles at which value v is read.
-    let mut uses: Vec<Vec<u32>> = vec![Vec::new(); n];
+    let node_count = dag.nodes.len();
+    // uses[value] = ascending distinct cycles at which the value is read.
+    let mut uses: Vec<Vec<u32>> = vec![Vec::new(); node_count];
     for (i, node) in dag.nodes.iter().enumerate() {
-        let c = result.node_cycle[i];
-        for &d in &node.deps {
-            uses[d].push(c);
+        let cycle = result.node_cycle[i];
+        for &dependency in &node.deps {
+            uses[dependency].push(cycle);
         }
     }
-    for u in uses.iter_mut() {
-        u.sort_unstable();
-        u.dedup();
+    for use_cycles in uses.iter_mut() {
+        use_cycles.sort_unstable();
+        use_cycles.dedup();
     }
 
     let max_cycle = result.cycles as usize;
     let mut born_at: Vec<Vec<NodeId>> = vec![Vec::new(); max_cycle + 2];
     let mut used_at: Vec<Vec<NodeId>> = vec![Vec::new(); max_cycle + 2];
-    for i in 0..n {
-        if matches!(dag.nodes[i].kind, ResKind::Store) {
+    for i in 0..node_count {
+        if matches!(dag.nodes[i].kind, NodeKind::Store) {
             continue;
         }
         born_at[result.node_cycle[i] as usize].push(i);
-        for &uc in &uses[i] {
-            used_at[uc as usize].push(i);
+        for &use_cycle in &uses[i] {
+            used_at[use_cycle as usize].push(i);
         }
     }
 
-    let mut use_ptr = vec![0usize; n]; // index of next unconsumed use in uses[v]
-    let mut resident = vec![false; n];
-    let mut stored = vec![false; n];
+    let mut next_use_index = vec![0usize; node_count]; // index of next unconsumed use in uses[value]
+    let mut resident = vec![false; node_count];
+    let mut stored = vec![false; node_count];
     let mut resident_count = 0usize;
     // max-heap of (next_use, node); lazily validated (stale entries discarded).
     let mut heap: BinaryHeap<(u32, NodeId)> = BinaryHeap::new();
-    let next_use = |v: NodeId, use_ptr: &[usize]| -> u32 {
-        uses[v].get(use_ptr[v]).copied().unwrap_or(u32::MAX)
+    let next_use = |value: NodeId, next_use_index: &[usize]| -> u32 {
+        uses[value].get(next_use_index[value]).copied().unwrap_or(u32::MAX)
     };
 
     let mut stats = SpillStats::default();
 
-    for c in 0..=max_cycle {
+    for cycle in 0..=max_cycle {
         // Uses this cycle: each read value must be resident.
-        let used_now = std::mem::take(&mut used_at[c]);
-        for &v in &used_now {
+        let used_now = std::mem::take(&mut used_at[cycle]);
+        for &value in &used_now {
             // advance past this cycle's uses (there may be several this cycle).
-            while use_ptr[v] < uses[v].len() && uses[v][use_ptr[v]] <= c as u32 {
-                use_ptr[v] += 1;
+            while next_use_index[value] < uses[value].len() && uses[value][next_use_index[value]] <= cycle as u32 {
+                next_use_index[value] += 1;
             }
-            if !resident[v] {
+            if !resident[value] {
                 stats.reloads += 1;
                 evict_until(
                     capacity - 1,
@@ -795,16 +795,16 @@ pub fn simulate_spilling(dag: &Dag, result: &ScheduleResult, capacity: usize) ->
                     &mut stored,
                     &mut stats,
                     &mut heap,
-                    &use_ptr,
+                    &next_use_index,
                     &uses,
                 );
-                resident[v] = true;
+                resident[value] = true;
                 resident_count += 1;
             }
-            heap.push((next_use(v, &use_ptr), v)); // refreshed next-use
+            heap.push((next_use(value, &next_use_index), value)); // refreshed next-use
         }
         // Productions this cycle: value enters residents.
-        for &v in &born_at[c] {
+        for &value in &born_at[cycle] {
             evict_until(
                 capacity - 1,
                 &mut resident_count,
@@ -812,44 +812,44 @@ pub fn simulate_spilling(dag: &Dag, result: &ScheduleResult, capacity: usize) ->
                 &mut stored,
                 &mut stats,
                 &mut heap,
-                &use_ptr,
+                &next_use_index,
                 &uses,
             );
-            resident[v] = true;
+            resident[value] = true;
             resident_count += 1;
-            heap.push((next_use(v, &use_ptr), v));
+            heap.push((next_use(value, &next_use_index), value));
         }
     }
 
     stats
 }
 
-/// Evict Belady victims until `resident_count <= target`. Victim = resident
+/// Evict Belady victims until `resident_count <= target_resident_count`. Victim = resident
 /// value with the furthest next-use (heap top, lazily validated). A victim
 /// with remaining uses is stored once.
 #[allow(clippy::too_many_arguments)]
 fn evict_until(
-    target: usize,
+    target_resident_count: usize,
     resident_count: &mut usize,
     resident: &mut [bool],
     stored: &mut [bool],
     stats: &mut SpillStats,
     heap: &mut std::collections::BinaryHeap<(u32, NodeId)>,
-    use_ptr: &[usize],
+    next_use_index: &[usize],
     uses: &[Vec<u32>],
 ) {
-    let cur_next_use = |v: NodeId| uses[v].get(use_ptr[v]).copied().unwrap_or(u32::MAX);
-    while *resident_count > target {
-        let Some((nu, v)) = heap.pop() else { break };
+    let current_next_use = |value: NodeId| uses[value].get(next_use_index[value]).copied().unwrap_or(u32::MAX);
+    while *resident_count > target_resident_count {
+        let Some((next_use_cycle, value)) = heap.pop() else { break };
         // Discard stale entries: not resident, or a newer next-use was pushed.
-        if !resident[v] || nu != cur_next_use(v) {
+        if !resident[value] || next_use_cycle != current_next_use(value) {
             continue;
         }
-        resident[v] = false;
+        resident[value] = false;
         *resident_count -= 1;
         // If it still has future uses, it must be saved (once) to be reloaded.
-        if nu != u32::MAX && !stored[v] {
-            stored[v] = true;
+        if next_use_cycle != u32::MAX && !stored[value] {
+            stored[value] = true;
             stats.stored_values += 1;
         }
     }
@@ -860,12 +860,12 @@ mod tests {
     use super::*;
     use crate::dag::{build_problem_dag, build_problem_dag_smart};
 
-    fn total_nodes_done(r: &ScheduleResult) -> u64 {
-        r.alu.nodes_done
-            + r.valu.nodes_done
-            + r.load().nodes_done
-            + r.store.nodes_done
-            + r.flow.nodes_done
+    fn total_nodes_done(result: &ScheduleResult) -> u64 {
+        result.alu.nodes_done
+            + result.valu.nodes_done
+            + result.load().nodes_done
+            + result.store.nodes_done
+            + result.flow.nodes_done
     }
 
     #[test]
@@ -877,14 +877,14 @@ mod tests {
         let mut dag = Dag::new();
         let root = dag.free();
         for _ in 0..60 {
-            dag.add(ResKind::Alu(AluOp::Add), vec![root]);
+            dag.add(NodeKind::Alu(AluOp::Add), vec![root]);
         }
-        let r = schedule(&dag, SchedulerConfig::default());
+        let result = schedule(&dag, SchedulerConfig::default());
         assert_eq!(
-            r.cycles, 1,
+            result.cycles, 1,
             "load balancing should retire all 60 in one cycle"
         );
-        assert_eq!(r.alu.nodes_done + r.valu.nodes_done, 60);
+        assert_eq!(result.alu.nodes_done + result.valu.nodes_done, 60);
     }
 
     #[test]
@@ -896,16 +896,16 @@ mod tests {
         let root = dag.free();
         for op in [AluOp::Add, AluOp::Xor, AluOp::Mul] {
             for _ in 0..5 {
-                dag.add(ResKind::Alu(op), vec![root]);
+                dag.add(NodeKind::Alu(op), vec![root]);
             }
         }
-        let r = schedule(&dag, SchedulerConfig::default());
+        let result = schedule(&dag, SchedulerConfig::default());
         assert_eq!(
-            r.cycles, 1,
+            result.cycles, 1,
             "idle valu slots should absorb the alu overflow"
         );
         assert!(
-            r.valu.nodes_done >= 3,
+            result.valu.nodes_done >= 3,
             "some alu work must have landed on valu"
         );
     }
@@ -938,10 +938,10 @@ mod tests {
             relaxed.cycles
         );
         // total scheduled nodes must be unchanged (correctness, not just speed)
-        let non_free = dag
+        let non_free_count = dag
             .nodes
             .iter()
-            .filter(|n| !matches!(n.kind, ResKind::Free))
+            .filter(|n| !matches!(n.kind, NodeKind::Free))
             .count() as u64;
         assert_eq!(
             realistic.alu.nodes_done
@@ -949,7 +949,7 @@ mod tests {
                 + realistic.load().nodes_done
                 + realistic.store.nodes_done
                 + realistic.flow.nodes_done,
-            non_free
+            non_free_count
         );
     }
 
@@ -959,7 +959,7 @@ mod tests {
         let free_count = dag
             .nodes
             .iter()
-            .filter(|n| matches!(n.kind, crate::dag::ResKind::Free))
+            .filter(|n| matches!(n.kind, crate::dag::NodeKind::Free))
             .count();
         let result = schedule(&dag, SchedulerConfig::default());
         assert_eq!(
@@ -974,7 +974,7 @@ mod tests {
         let free_count = dag
             .nodes
             .iter()
-            .filter(|n| matches!(n.kind, crate::dag::ResKind::Free))
+            .filter(|n| matches!(n.kind, crate::dag::NodeKind::Free))
             .count();
         let result = schedule(&dag, SchedulerConfig::default());
         assert_eq!(
@@ -1126,31 +1126,31 @@ mod tests {
             gather_batchable: false,
             walker_window: None,
         };
-        let alg = schedule(
+        let algebraic_result = schedule(
             &build_problem_dag_smart_with(10, 256, 16, SelectImpl::Algebraic),
             cfg,
         );
-        let flw = schedule(
+        let flow_result = schedule(
             &build_problem_dag_smart_with(10, 256, 16, SelectImpl::Flow),
             cfg,
         );
         // Mechanism: flow selects genuinely move batch demand off valu...
         assert!(
-            flw.valu.slot_uses < alg.valu.slot_uses,
-            "flow should relieve valu: flow {} vs alg {}",
-            flw.valu.slot_uses,
-            alg.valu.slot_uses
+            flow_result.valu.slot_uses < algebraic_result.valu.slot_uses,
+            "flow should relieve valu: flow {} vs algebraic_result {}",
+            flow_result.valu.slot_uses,
+            algebraic_result.valu.slot_uses
         );
         // ...and onto the flow engine.
-        assert!(flw.flow.slot_uses > alg.flow.slot_uses);
+        assert!(flow_result.flow.slot_uses > algebraic_result.flow.slot_uses);
         // But with the overflow pass balancing algebraic across alu+valu, the
         // flexible algebraic placement is at least as fast as pinning work to
         // the 1-slot flow engine.
         assert!(
-            alg.cycles <= flw.cycles,
+            algebraic_result.cycles <= flow_result.cycles,
             "with balancing, algebraic ({}) should be <= flow ({})",
-            alg.cycles,
-            flw.cycles
+            algebraic_result.cycles,
+            flow_result.cycles
         );
     }
 
@@ -1222,20 +1222,20 @@ mod tests {
                 walker_window: Some(16),
             },
         );
-        let (unw_peak, _) = peak_register_pressure(&smart, &unwindowed);
-        let (win_peak, _) = peak_register_pressure(&smart, &windowed);
+        let (unwindowed_peak, _) = peak_register_pressure(&smart, &unwindowed);
+        let (windowed_peak, _) = peak_register_pressure(&smart, &windowed);
         assert!(
-            unw_peak > crate::isa::SCRATCH_SIZE as u64,
-            "un-windowed smart peak ({unw_peak}) should exceed SCRATCH_SIZE -- \
+            unwindowed_peak > crate::isa::SCRATCH_SIZE as u64,
+            "un-windowed smart peak ({unwindowed_peak}) should exceed SCRATCH_SIZE -- \
              windowing is what makes it fit"
         );
         assert!(
-            win_peak <= crate::isa::SCRATCH_SIZE as u64,
-            "windowed(16) smart peak ({win_peak}) should fit SCRATCH_SIZE ({})",
+            windowed_peak <= crate::isa::SCRATCH_SIZE as u64,
+            "windowed(16) smart peak ({windowed_peak}) should fit SCRATCH_SIZE ({})",
             crate::isa::SCRATCH_SIZE
         );
         let plain = build_problem_dag(10, 256, 16);
-        let plain_res = schedule(
+        let plain_result = schedule(
             &plain,
             SchedulerConfig {
                 gather_batchable: false,
@@ -1243,10 +1243,10 @@ mod tests {
             },
         );
         assert!(
-            windowed.cycles <= plain_res.cycles,
+            windowed.cycles <= plain_result.cycles,
             "windowed smart ({}) should still beat the plain realizable baseline ({})",
             windowed.cycles,
-            plain_res.cycles
+            plain_result.cycles
         );
     }
 
@@ -1262,17 +1262,17 @@ mod tests {
         // the fastest realistic schedule AND realizable (fits SCRATCH_SIZE),
         // beating every other realizable option here.
         use crate::dag::{build_problem_dag_smart_with, SelectImpl};
-        let win = SchedulerConfig {
+        let windowed_cfg = SchedulerConfig {
             gather_batchable: false,
             walker_window: Some(16),
         };
-        let flow_win = schedule(
+        let flow_windowed = schedule(
             &build_problem_dag_smart_with(10, 256, 16, SelectImpl::Flow),
-            win,
+            windowed_cfg,
         );
-        let alg_win = schedule(
+        let algebraic_windowed = schedule(
             &build_problem_dag_smart_with(10, 256, 16, SelectImpl::Algebraic),
-            win,
+            windowed_cfg,
         );
         let plain = schedule(
             &build_problem_dag(10, 256, 16),
@@ -1283,7 +1283,7 @@ mod tests {
         );
         let (flow_peak, _) = peak_register_pressure(
             &build_problem_dag_smart_with(10, 256, 16, SelectImpl::Flow),
-            &flow_win,
+            &flow_windowed,
         );
         // Realizable: fits scratch on pure capacity grounds.
         assert!(
@@ -1293,15 +1293,15 @@ mod tests {
         );
         // Fastest realizable: beats the algebraic-windowed and plain baselines.
         assert!(
-            flow_win.cycles < alg_win.cycles,
+            flow_windowed.cycles < algebraic_windowed.cycles,
             "flow+window ({}) should beat algebraic+window ({})",
-            flow_win.cycles,
-            alg_win.cycles
+            flow_windowed.cycles,
+            algebraic_windowed.cycles
         );
         assert!(
-            flow_win.cycles < plain.cycles,
+            flow_windowed.cycles < plain.cycles,
             "flow+window ({}) should beat plain realizable ({})",
-            flow_win.cycles,
+            flow_windowed.cycles,
             plain.cycles
         );
     }
@@ -1360,7 +1360,7 @@ mod tests {
         );
         // Store nodes produce no value -> no address.
         for (i, node) in dag.nodes.iter().enumerate() {
-            if matches!(node.kind, ResKind::Store) {
+            if matches!(node.kind, NodeKind::Store) {
                 assert!(addr[i].is_none());
             }
         }
@@ -1369,24 +1369,24 @@ mod tests {
     #[test]
     fn spilling_is_zero_when_it_fits_and_positive_when_tight() {
         let dag = build_problem_dag(10, 256, 16);
-        let r = schedule(
+        let result = schedule(
             &dag,
             SchedulerConfig {
                 gather_batchable: false,
                 walker_window: None,
             },
         );
-        let (peak, _) = peak_register_pressure(&dag, &r);
+        let (peak, _) = peak_register_pressure(&dag, &result);
         assert!(peak <= crate::isa::SCRATCH_SIZE as u64);
         // Fits SCRATCH_SIZE -> Belady needs no spill traffic at all.
-        let fits = simulate_spilling(&dag, &r, crate::isa::SCRATCH_SIZE);
+        let fits = simulate_spilling(&dag, &result, crate::isa::SCRATCH_SIZE);
         assert_eq!(
             fits.stored_values + fits.reloads,
             0,
             "no spills expected when peak fits capacity"
         );
         // A tight capacity forces both stores and reloads.
-        let tight = simulate_spilling(&dag, &r, 64);
+        let tight = simulate_spilling(&dag, &result, 64);
         assert!(
             tight.reloads > 0 && tight.stored_values > 0,
             "tiny capacity must force spills, got {tight:?}"
@@ -1410,42 +1410,42 @@ mod tests {
         // this config; the ~1065 arithmetic-balanced target is realizable
         // (throughput-wise), well under the ~1356 no-spill floor.
         let dag = build_problem_dag_hybrid(10, 256, 16, 5);
-        let r = schedule(
+        let result = schedule(
             &dag,
             SchedulerConfig {
                 gather_batchable: false,
                 walker_window: Some(16),
             },
         );
-        let (peak, _) = peak_register_pressure(&dag, &r);
+        let (peak, _) = peak_register_pressure(&dag, &result);
         assert!(
             peak > SCRATCH_SIZE as u64,
             "config must be register-OVER for the spill question to be meaningful (peak {peak})"
         );
-        let s = simulate_spilling(&dag, &r, SCRATCH_SIZE);
+        let spill_stats = simulate_spilling(&dag, &result, SCRATCH_SIZE);
         assert!(
-            s.reloads > 0 && s.stored_values > 0,
-            "overflow must actually spill, got {s:?}"
+            spill_stats.reloads > 0 && spill_stats.stored_values > 0,
+            "overflow must actually spill, got {spill_stats:?}"
         );
         // Adding the spill traffic to the existing engine slot-uses, do the
         // memory engines still keep up at the original cycle count?
-        let load_floor = (r.load().slot_uses + s.reloads).div_ceil(slot_limits::LOAD as u64);
-        let store_floor = (r.store.slot_uses + s.stored_values).div_ceil(slot_limits::STORE as u64);
+        let load_floor = (result.load().slot_uses + spill_stats.reloads).div_ceil(slot_limits::LOAD as u64);
+        let store_floor = (result.store.slot_uses + spill_stats.stored_values).div_ceil(slot_limits::STORE as u64);
         assert!(
-            load_floor <= r.cycles,
+            load_floor <= result.cycles,
             "spill reloads must fit idle load bandwidth: load_floor {load_floor} > {} cyc",
-            r.cycles
+            result.cycles
         );
         assert!(
-            store_floor <= r.cycles,
+            store_floor <= result.cycles,
             "spill stores must fit idle store bandwidth: store_floor {store_floor} > {} cyc",
-            r.cycles
+            result.cycles
         );
         // And the whole thing stays under the no-spill windowed floor.
         assert!(
-            r.cycles < 1356,
+            result.cycles < 1356,
             "spilled hybrid should beat the ~1356 no-spill floor, got {} cyc",
-            r.cycles
+            result.cycles
         );
     }
 
@@ -1464,26 +1464,26 @@ mod tests {
                 dependents[d].push(i);
             }
         }
-        let mut ivals: Vec<(u32, u32, u32)> = Vec::new(); // (birth, death, slot)
+        let mut intervals: Vec<(u32, u32, u32)> = Vec::new(); // (birth, death, slot)
         for (i, deps) in dependents.iter().enumerate() {
-            if let Some(a) = addr[i] {
-                let b = result.node_cycle[i];
-                let d = deps
+            if let Some(slot) = addr[i] {
+                let birth = result.node_cycle[i];
+                let death = deps
                     .iter()
-                    .map(|&x| result.node_cycle[x])
+                    .map(|&dep| result.node_cycle[dep])
                     .max()
-                    .unwrap_or(b);
-                ivals.push((b, d, a));
+                    .unwrap_or(birth);
+                intervals.push((birth, death, slot));
             }
         }
-        for i in 0..ivals.len() {
-            for j in (i + 1)..ivals.len() {
-                let (b1, d1, a1) = ivals[i];
-                let (b2, d2, a2) = ivals[j];
-                if a1 == a2 {
+        for i in 0..intervals.len() {
+            for j in (i + 1)..intervals.len() {
+                let (birth1, death1, slot1) = intervals[i];
+                let (birth2, death2, slot2) = intervals[j];
+                if slot1 == slot2 {
                     assert!(
-                        d1 < b2 || d2 < b1,
-                        "slot {a1} reused by overlapping live ranges [{b1},{d1}] and [{b2},{d2}]"
+                        death1 < birth2 || death2 < birth1,
+                        "slot {slot1} reused by overlapping live ranges [{birth1},{death1}] and [{birth2},{death2}]"
                     );
                 }
             }

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import http.server
 import os
 from datetime import datetime
@@ -6,8 +8,8 @@ import urllib.request
 
 
 # Define a handler class
-class MyHandler(http.server.BaseHTTPRequestHandler):
-    def do_GET(self):
+class TraceHTTPHandler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
         try:
             # Serve a string constant at the index
             if self.path == "/":
@@ -44,24 +46,24 @@ class MyHandler(http.server.BaseHTTPRequestHandler):
                     self.send_response(response.status)
 
                     self.end_headers()
-                    res = response.read()
+                    response_body = response.read()
                     if self.path.endswith("frontend_bundle.js"):
                         print("Activating replacement")
                         # Fix a bug in Perfetto that they haven't deployed the fix for yet but have fixed internally
-                        res = res.replace(
+                        response_body = response_body.replace(
                             b"throw new Error(`EngineProxy ${this.tag} was disposed.`);",
                             b"return null;",
                         )
                         # Auto-expand tracks by default
-                        res = res.replace(b"collapsed: true", b"collapsed: false")
-                        res = res.replace(
+                        response_body = response_body.replace(b"collapsed: true", b"collapsed: false")
+                        response_body = response_body.replace(
                             b"collapsed: !hasHeapProfiles", b"collapsed: false"
                         )
                     for header in response.headers:
                         if header == "Content-Length":
-                            self.send_header(header, len(res))
+                            self.send_header(header, len(response_body))
                         self.send_header(header, response.headers[header])
-                    self.wfile.write(res)
+                    self.wfile.write(response_body)
 
             else:
                 self.send_error(404, "File Not Found: {}".format(self.path))
@@ -71,7 +73,10 @@ class MyHandler(http.server.BaseHTTPRequestHandler):
 
 
 # Start the server
-def run(server_class=http.server.HTTPServer, handler_class=MyHandler):
+def run(
+    server_class: type[http.server.HTTPServer] = http.server.HTTPServer,
+    handler_class: type[http.server.BaseHTTPRequestHandler] = TraceHTTPHandler,
+) -> None:
     server_address = ("", 8000)
     httpd = server_class(server_address, handler_class)
     print("Starting httpd...")

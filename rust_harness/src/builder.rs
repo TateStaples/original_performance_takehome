@@ -14,7 +14,7 @@ pub struct Builder {
     pub program: Program,
     scratch_ptr: u16,
     const_map: HashMap<u32, Scratch>,
-    named: HashMap<&'static str, Scratch>,
+    scratch: HashMap<&'static str, Scratch>,
 }
 
 impl Builder {
@@ -23,13 +23,13 @@ impl Builder {
             program: Vec::new(),
             scratch_ptr: 0,
             const_map: HashMap::new(),
-            named: HashMap::new(),
+            scratch: HashMap::new(),
         }
     }
 
     pub fn named(&self, name: &str) -> Scratch {
         *self
-            .named
+            .scratch
             .get(name)
             .unwrap_or_else(|| panic!("no scratch slot named {name:?}"))
     }
@@ -48,7 +48,7 @@ impl Builder {
 
     pub fn alloc_named(&mut self, name: &'static str, len: u16) -> Scratch {
         let addr = self.alloc_scratch(len);
-        self.named.insert(name, addr);
+        self.scratch.insert(name, addr);
         addr
     }
 
@@ -58,13 +58,13 @@ impl Builder {
     /// build-time" quirk) as `KernelBuilder.scratch_const` in Python; see
     /// `docs/problem.md` §3 for why that matters for cycle counts.
     pub fn scratch_const(&mut self, val: u32) -> Scratch {
-        if let Some(&s) = self.const_map.get(&val) {
-            return s;
+        if let Some(&dest) = self.const_map.get(&val) {
+            return dest;
         }
-        let s = self.alloc_scratch(1);
-        self.push_load_single(LoadSlot::Const { dest: s, val });
-        self.const_map.insert(val, s);
-        s
+        let dest = self.alloc_scratch(1);
+        self.push_load_single(LoadSlot::Const { dest, val });
+        self.const_map.insert(val, dest);
+        dest
     }
 
     // --- single-slot-per-bundle helpers (mirrors KernelBuilder.add/build) ---
@@ -123,35 +123,35 @@ impl Default for Builder {
 pub fn build_hash(
     b: &mut Builder,
     val_addr: Scratch,
-    tmp1: Scratch,
-    tmp2: Scratch,
+    left: Scratch,
+    right: Scratch,
     round: u32,
     i: u32,
 ) {
-    for (hi, &(op1, val1, op2, op3, val3)) in HASH_STAGES.iter().enumerate() {
+    for (hash_stage_idx, &(op1, val1, op2, op3, val3)) in HASH_STAGES.iter().enumerate() {
         let c1 = b.scratch_const(val1);
         let c3 = b.scratch_const(val3);
         b.push_alu_single(AluSlot {
             op: op1,
-            dest: tmp1,
+            dest: left,
             a1: val_addr,
             a2: c1,
         });
         b.push_alu_single(AluSlot {
             op: op3,
-            dest: tmp2,
+            dest: right,
             a1: val_addr,
             a2: c3,
         });
         b.push_alu_single(AluSlot {
             op: op2,
             dest: val_addr,
-            a1: tmp1,
-            a2: tmp2,
+            a1: left,
+            a2: right,
         });
         b.push_debug_single(DebugSlot::Compare {
             loc: val_addr,
-            key: format!("{round}|{i}|hash_stage|{hi}"),
+            key: format!("{round}|{i}|hash_stage|{hash_stage_idx}"),
         });
     }
 }
@@ -176,7 +176,7 @@ pub fn build_kernel_naive(
 
     let tmp1 = b.alloc_named("tmp1", 1);
     let tmp2 = b.alloc_named("tmp2", 1);
-    let tmp3 = b.alloc_named("tmp3", 1);
+    let branch_offset = b.alloc_named("tmp3", 1);
 
     // Read the 7-word memory header (see docs/problem.md §2.5) into named
     // scratch slots — their *addresses* (0..6) are known at build time,
@@ -223,7 +223,7 @@ pub fn build_kernel_naive(
     let inp_indices_p = b.named("inp_indices_p");
     let inp_values_p = b.named("inp_values_p");
     let forest_values_p = b.named("forest_values_p");
-    let n_nodes_rt = b.named("n_nodes");
+    let n_nodes_runtime = b.named("n_nodes");
 
     for round in 0..rounds {
         for i in 0..batch_size {
@@ -304,7 +304,7 @@ pub fn build_kernel_naive(
                 a2: zero_const,
             });
             b.push_flow_single(FlowSlot::Select {
-                dest: tmp3,
+                dest: branch_offset,
                 cond: tmp1,
                 a: one_const,
                 b: two_const,
@@ -319,7 +319,7 @@ pub fn build_kernel_naive(
                 op: AluOp::Add,
                 dest: tmp_idx,
                 a1: tmp_idx,
-                a2: tmp3,
+                a2: branch_offset,
             });
             b.push_debug_single(DebugSlot::Compare {
                 loc: tmp_idx,
@@ -331,7 +331,7 @@ pub fn build_kernel_naive(
                 op: AluOp::Lt,
                 dest: tmp1,
                 a1: tmp_idx,
-                a2: n_nodes_rt,
+                a2: n_nodes_runtime,
             });
             b.push_flow_single(FlowSlot::Select {
                 dest: tmp_idx,

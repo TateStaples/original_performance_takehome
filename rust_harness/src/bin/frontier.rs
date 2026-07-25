@@ -14,17 +14,22 @@ use perf_harness::isa::SCRATCH_SIZE;
 use perf_harness::schedule::{peak_register_pressure, schedule, ScheduleResult, SchedulerConfig};
 use std::env;
 
-fn binding_engine(r: &ScheduleResult) -> String {
-    let c = r.cycles as f64;
-    let pct = |e: &perf_harness::schedule::EngineTotals| 100.0 * e.busy_cycles as f64 / c;
-    let mut rows = [
-        ("alu", pct(&r.alu)),
-        ("valu", pct(&r.valu)),
-        ("load", pct(&r.load())),
-        ("flow", pct(&r.flow)),
+fn binding_engine(result: &ScheduleResult) -> String {
+    let total_cycles = result.cycles as f64;
+    let busy_percentage = |engine: &perf_harness::schedule::EngineTotals| {
+        100.0 * engine.busy_cycles as f64 / total_cycles
+    };
+    let mut engine_percentages = [
+        ("alu", busy_percentage(&result.alu)),
+        ("valu", busy_percentage(&result.valu)),
+        ("load", busy_percentage(&result.load())),
+        ("flow", busy_percentage(&result.flow)),
     ];
-    rows.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-    format!("{} {:.0}%", rows[0].0, rows[0].1)
+    engine_percentages.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+    format!(
+        "{} {:.0}%",
+        engine_percentages[0].0, engine_percentages[0].1
+    )
 }
 
 fn main() {
@@ -50,11 +55,11 @@ fn main() {
                 gather_batchable: false,
                 walker_window: window,
             };
-            let r = schedule(&dag, cfg);
-            let (peak, _) = peak_register_pressure(&dag, &r);
-            let gathers = r.gather_load.nodes_done;
-            let gfloor = gathers.div_ceil(2);
-            let fits = if peak <= SCRATCH_SIZE as u64 {
+            let result = schedule(&dag, cfg);
+            let (peak, _) = peak_register_pressure(&dag, &result);
+            let gathers = result.gather_load.nodes_done;
+            let gather_floor = gathers.div_ceil(2);
+            let fit_status = if peak <= SCRATCH_SIZE as u64 {
                 "fits"
             } else {
                 "OVER"
@@ -63,12 +68,12 @@ fn main() {
                 "{:>9} {:>10} {:>8} {:>9} {:>7} {:>7} {:>5} {:>6}",
                 threshold,
                 format!("{select:?}"),
-                r.cycles,
+                result.cycles,
                 gathers,
-                gfloor,
+                gather_floor,
                 peak,
-                binding_engine(&r),
-                fits,
+                binding_engine(&result),
+                fit_status,
             );
         }
         println!();

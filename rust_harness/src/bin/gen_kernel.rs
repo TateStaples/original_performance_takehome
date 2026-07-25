@@ -27,7 +27,7 @@ fn main() {
 
     let program = builder::build_kernel_naive(forest_height, n_nodes, batch_size, rounds);
     let json = bridge::program_to_python_json(&program);
-    let text = serde_json::to_string(&json).expect("serialize");
+    let json_text = serde_json::to_string(&json).expect("serialize");
 
     eprintln!(
         "gen_kernel: {} bundles ({} forest_height, {} n_nodes, {} batch_size, {} rounds)",
@@ -39,9 +39,9 @@ fn main() {
     );
 
     if let Some(path) = args.get(5) {
-        fs::write(path, text).unwrap_or_else(|e| panic!("writing {path}: {e}"));
+        fs::write(path, json_text).unwrap_or_else(|e| panic!("writing {path}: {e}"));
         eprintln!("wrote {path}");
     } else {
-        println!("{text}");
+        println!("{json_text}");
     }
 }

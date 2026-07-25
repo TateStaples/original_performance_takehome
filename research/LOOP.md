@@ -24,19 +24,22 @@ continue from whatever step the state implies.
    -> `python tools/diagnose_kernel.py` (delta for the ledger).
    On failure: `git am --abort`, record rejection + evidence.
 7. **Accept rules**:
+
    - ANY commit: full grader green (dormant flags must not change build_kernel()).
    - Mainline default-flip: additionally strictly fewer cycles than current best.
    - Strain-frontier-only win: commit flag-gated OFF; record in strain STATE.md.
 8. **Record**: every mainline accept -> `python tools/plot_progress.py --record
+
    <step> "<label>" "<note>"`. Update backlog (accepted/rejected), move
    rejections to graveyard.md with `evidence:` + `reopen-if:`; promote agents'
    proposed follow-ups into backlog.md (new H-ids); append iteration-log line
    in RESEARCH.md; refresh "Current best" table.
 9. **Commit + push** (trailers: Co-Authored-By: Claude Fable 5
+
    <noreply@anthropic.com> + Claude-Session line). Unpushed work dies with the
    ephemeral container.
 10. **Stall rotation**: strain dry 3 iters -> retire + promote replacement;
     6 global dry iters -> one cross-pollination iteration (single agent reads
-    all STATEs + graveyard). NO auto-stop. User status report every ~5 iters.
+    all /STATEs + graveyard). NO auto-stop. User status report every ~5 iters.
 11. **Stop only when**: grader CYCLES < 1000 all-green (final --record, push,
     milestone report, disarm heartbeat) or the user says stop.

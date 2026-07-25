@@ -29,7 +29,7 @@ pub struct Machine {
     pub enable_pause: bool,
     pub enable_debug: bool,
     state: CoreState,
-    trace: Option<HashMap<String, u32>>,
+    value_trace: Option<HashMap<String, u32>>,
 }
 
 impl Machine {
@@ -43,7 +43,7 @@ impl Machine {
             enable_pause: true,
             enable_debug: true,
             state: CoreState::Running,
-            trace: None,
+            value_trace: None,
         }
     }
 
@@ -51,8 +51,8 @@ impl Machine {
     /// `debug::Compare`/`VCompare` slots can assert against it, exactly like
     /// `reference_kernel2`'s `value_trace` does for the Python harness. See
     /// `tools/export_fixtures.py` for how a trace fixture is produced.
-    pub fn with_trace(mut self, trace: HashMap<String, u32>) -> Self {
-        self.trace = Some(trace);
+    pub fn with_value_trace(mut self, value_trace: HashMap<String, u32>) -> Self {
+        self.value_trace = Some(value_trace);
         self
     }
 
@@ -93,129 +93,130 @@ impl Machine {
         let mut scratch_write: HashMap<u16, u32> = HashMap::new();
         let mut mem_write: HashMap<u32, u32> = HashMap::new();
 
-        for s in &bundle.alu {
-            self.exec_alu(s, &mut scratch_write);
+        for slot in &bundle.alu {
+            self.exec_alu(slot, &mut scratch_write);
         }
-        for s in &bundle.valu {
-            self.exec_valu(s, &mut scratch_write);
+        for slot in &bundle.valu {
+            self.exec_valu(slot, &mut scratch_write);
         }
-        for s in &bundle.load {
-            self.exec_load(s, &mut scratch_write);
+        for slot in &bundle.load {
+            self.exec_load(slot, &mut scratch_write);
         }
-        for s in &bundle.store {
-            self.exec_store(s, &mut mem_write);
+        for slot in &bundle.store {
+            self.exec_store(slot, &mut mem_write);
         }
-        for s in &bundle.flow {
-            self.exec_flow(s, &mut scratch_write);
+        for slot in &bundle.flow {
+            self.exec_flow(slot, &mut scratch_write);
         }
         if self.enable_debug {
-            for s in &bundle.debug {
-                self.exec_debug(s);
+            for slot in &bundle.debug {
+                self.exec_debug(slot);
             }
         }
 
-        for (addr, val) in scratch_write {
-            self.scratch[addr as usize] = val;
+        for (addr, value) in scratch_write {
+            self.scratch[addr as usize] = value;
         }
-        for (addr, val) in mem_write {
-            self.mem[addr as usize] = val;
+        for (addr, value) in mem_write {
+            self.mem[addr as usize] = value;
         }
     }
 
-    fn exec_alu(&self, s: &AluSlot, out: &mut HashMap<u16, u32>) {
-        let a1 = self.scratch[s.a1.0 as usize];
-        let a2 = self.scratch[s.a2.0 as usize];
-        out.insert(s.dest.0, s.op.apply(a1, a2));
+    fn exec_alu(&self, slot: &AluSlot, writes: &mut HashMap<u16, u32>) {
+        let a1 = self.scratch[slot.a1.0 as usize];
+        let a2 = self.scratch[slot.a2.0 as usize];
+        writes.insert(slot.dest.0, slot.op.apply(a1, a2));
     }
 
-    fn exec_valu(&self, s: &ValuSlot, out: &mut HashMap<u16, u32>) {
-        match s {
+    fn exec_valu(&self, slot: &ValuSlot, writes: &mut HashMap<u16, u32>) {
+        match slot {
             ValuSlot::Op { op, dest, a1, a2 } => {
                 for i in 0..VLEN {
                     let x = self.scratch[(a1.0 as usize) + i];
                     let y = self.scratch[(a2.0 as usize) + i];
-                    out.insert(dest.0 + i as u16, op.apply(x, y));
+                    writes.insert(dest.0 + i as u16, op.apply(x, y));
                 }
             }
             ValuSlot::Broadcast { dest, src } => {
-                let v = self.scratch[src.0 as usize];
+                let value = self.scratch[src.0 as usize];
                 for i in 0..VLEN {
-                    out.insert(dest.0 + i as u16, v);
+                    writes.insert(dest.0 + i as u16, value);
                 }
             }
             ValuSlot::MultiplyAdd { dest, a, b, c } => {
                 for i in 0..VLEN {
-                    let x = self.scratch[(a.0 as usize) + i] as u64;
-                    let y = self.scratch[(b.0 as usize) + i] as u64;
-                    let z = self.scratch[(c.0 as usize) + i] as u64;
-                    let mul = (x * y) % (1u64 << 32);
-                    let res = (mul + z) % (1u64 << 32);
-                    out.insert(dest.0 + i as u16, res as u32);
+                    let a_val = self.scratch[(a.0 as usize) + i] as u64;
+                    let b_val = self.scratch[(b.0 as usize) + i] as u64;
+                    let c_val = self.scratch[(c.0 as usize) + i] as u64;
+                    let mul = (a_val * b_val) % (1u64 << 32);
+                    let sum = (mul + c_val) % (1u64 << 32);
+                    writes.insert(dest.0 + i as u16, sum as u32);
                 }
             }
         }
     }
 
-    fn exec_load(&self, s: &LoadSlot, out: &mut HashMap<u16, u32>) {
-        match s {
+    fn exec_load(&self, slot: &LoadSlot, writes: &mut HashMap<u16, u32>) {
+        match slot {
             LoadSlot::Load { dest, addr } => {
                 let a = self.scratch[addr.0 as usize];
-                out.insert(dest.0, self.mem[a as usize]);
+                writes.insert(dest.0, self.mem[a as usize]);
             }
             LoadSlot::LoadOffset { dest, addr, offset } => {
                 let a = self.scratch[(addr.0 + offset) as usize];
-                out.insert(dest.0 + offset, self.mem[a as usize]);
+                writes.insert(dest.0 + offset, self.mem[a as usize]);
             }
             LoadSlot::VLoad { dest, addr } => {
                 let base = self.scratch[addr.0 as usize];
                 for i in 0..VLEN {
-                    out.insert(dest.0 + i as u16, self.mem[base as usize + i]);
+                    writes.insert(dest.0 + i as u16, self.mem[base as usize + i]);
                 }
             }
             LoadSlot::Const { dest, val } => {
-                out.insert(dest.0, *val);
+                writes.insert(dest.0, *val);
             }
         }
     }
 
-    fn exec_store(&self, s: &StoreSlot, out: &mut HashMap<u32, u32>) {
-        match s {
+    fn exec_store(&self, slot: &StoreSlot, writes: &mut HashMap<u32, u32>) {
+        match slot {
             StoreSlot::Store { addr, src } => {
                 let a = self.scratch[addr.0 as usize];
-                out.insert(a, self.scratch[src.0 as usize]);
+                writes.insert(a, self.scratch[src.0 as usize]);
             }
             StoreSlot::VStore { addr, src } => {
                 let base = self.scratch[addr.0 as usize];
                 for i in 0..VLEN {
-                    out.insert(base + i as u32, self.scratch[(src.0 as usize) + i]);
+                    writes.insert(base + i as u32, self.scratch[(src.0 as usize) + i]);
                 }
             }
         }
     }
 
-    fn exec_flow(&mut self, s: &FlowSlot, out: &mut HashMap<u16, u32>) {
-        match s {
+    fn exec_flow(&mut self, slot: &FlowSlot, writes: &mut HashMap<u16, u32>) {
+        match slot {
             FlowSlot::Select { dest, cond, a, b } => {
-                let v = if self.scratch[cond.0 as usize] != 0 {
+                let value = if self.scratch[cond.0 as usize] != 0 {
                     self.scratch[a.0 as usize]
                 } else {
                     self.scratch[b.0 as usize]
                 };
-                out.insert(dest.0, v);
+                writes.insert(dest.0, value);
             }
             FlowSlot::VSelect { dest, cond, a, b } => {
                 for i in 0..VLEN {
-                    let v = if self.scratch[(cond.0 as usize) + i] != 0 {
+                    let value = if self.scratch[(cond.0 as usize) + i] != 0 {
                         self.scratch[(a.0 as usize) + i]
                     } else {
                         self.scratch[(b.0 as usize) + i]
                     };
-                    out.insert(dest.0 + i as u16, v);
+                    writes.insert(dest.0 + i as u16, value);
                 }
             }
             FlowSlot::AddImm { dest, a, imm } => {
-                let v = ((self.scratch[a.0 as usize] as u64 + *imm as u64) % (1u64 << 32)) as u32;
-                out.insert(dest.0, v);
+                let value =
+                    ((self.scratch[a.0 as usize] as u64 + *imm as u64) % (1u64 << 32)) as u32;
+                writes.insert(dest.0, value);
             }
             FlowSlot::Halt => self.state = CoreState::Stopped,
             FlowSlot::Pause => {
@@ -240,20 +241,22 @@ impl Machine {
                 }
             }
             FlowSlot::CoreId { dest } => {
-                out.insert(dest.0, 0);
+                writes.insert(dest.0, 0);
             }
         }
     }
 
-    fn exec_debug(&self, s: &DebugSlot) {
-        match s {
+    fn exec_debug(&self, slot: &DebugSlot) {
+        match slot {
             DebugSlot::Compare { loc, key } => {
-                let trace = self.trace.as_ref().unwrap_or_else(|| {
-                    panic!("debug compare for {key:?} but no trace loaded (Machine::with_trace)")
+                let value_trace = self.value_trace.as_ref().unwrap_or_else(|| {
+                    panic!(
+                        "debug compare for {key:?} but no value_trace loaded (Machine::with_value_trace)"
+                    )
                 });
-                let expected = *trace
+                let expected = *value_trace
                     .get(key)
-                    .unwrap_or_else(|| panic!("no trace entry for key {key:?}"));
+                    .unwrap_or_else(|| panic!("no value_trace entry for key {key:?}"));
                 let actual = self.scratch[loc.0 as usize];
                 assert_eq!(
                     actual,
@@ -264,13 +267,15 @@ impl Machine {
                 );
             }
             DebugSlot::VCompare { loc, keys } => {
-                let trace = self.trace.as_ref().unwrap_or_else(|| {
-                    panic!("debug vcompare for {keys:?} but no trace loaded (Machine::with_trace)")
+                let value_trace = self.value_trace.as_ref().unwrap_or_else(|| {
+                    panic!(
+                        "debug vcompare for {keys:?} but no value_trace loaded (Machine::with_value_trace)"
+                    )
                 });
                 for (i, key) in keys.iter().enumerate() {
-                    let expected = *trace
+                    let expected = *value_trace
                         .get(key)
-                        .unwrap_or_else(|| panic!("no trace entry for key {key:?}"));
+                        .unwrap_or_else(|| panic!("no value_trace entry for key {key:?}"));
                     let actual = self.scratch[(loc.0 as usize) + i];
                     assert_eq!(
                         actual,

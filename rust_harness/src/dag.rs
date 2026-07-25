@@ -27,7 +27,7 @@ pub type NodeId = usize;
 /// -- only same-opcode alu nodes can share a `valu` slot, since a real
 /// `ValuSlot::Op` applies one opcode across all 8 lanes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum ResKind {
+pub enum NodeKind {
     /// No cost, no engine, always available from cycle 0 -- constants,
     /// the initial `idx=0`, and (abstracted away) the header/tree/setup.
     Free,
@@ -55,16 +55,16 @@ pub enum ResKind {
 
 #[derive(Clone, Debug)]
 pub struct Node {
-    pub kind: ResKind,
+    pub kind: NodeKind,
     pub deps: Vec<NodeId>,
 }
 
-/// The *purpose* of a node, orthogonal to which engine it uses (`ResKind`).
+/// The *purpose* of a node, orthogonal to which engine it uses (`NodeKind`).
 /// Lets us ask "what fraction of the arithmetic is the hash vs. the index
 /// bookkeeping vs. getting the tree value to the walker" -- see the
 /// `breakdown` binary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
-pub enum NodeCat {
+pub enum NodeCategory {
     /// Shared constants / setup, initial per-walker value load.
     #[default]
     Setup,
@@ -90,13 +90,13 @@ pub struct Dag {
     /// register-pressure-aware scheduler group work by walker without
     /// re-deriving ownership from node indices.
     pub walker_of: Vec<u32>,
-    /// Purpose of each node (parallel to `nodes`); see `NodeCat`.
-    pub category: Vec<NodeCat>,
+    /// Purpose of each node (parallel to `nodes`); see `NodeCategory`.
+    pub category: Vec<NodeCategory>,
     /// Walker currently being emitted; `add` tags new nodes with it.
     /// `u32::MAX` outside any walker loop.
     cur_walker: u32,
     /// Purpose currently being emitted; `add` tags new nodes with it.
-    cur_category: NodeCat,
+    cur_category: NodeCategory,
 }
 
 impl Dag {
@@ -106,11 +106,11 @@ impl Dag {
             walker_of: Vec::new(),
             category: Vec::new(),
             cur_walker: u32::MAX,
-            cur_category: NodeCat::Setup,
+            cur_category: NodeCategory::Setup,
         }
     }
 
-    pub fn add(&mut self, kind: ResKind, deps: Vec<NodeId>) -> NodeId {
+    pub fn add(&mut self, kind: NodeKind, deps: Vec<NodeId>) -> NodeId {
         let id = self.nodes.len();
         self.nodes.push(Node { kind, deps });
         self.walker_of.push(self.cur_walker);
@@ -119,7 +119,7 @@ impl Dag {
     }
 
     pub fn free(&mut self) -> NodeId {
-        self.add(ResKind::Free, vec![])
+        self.add(NodeKind::Free, vec![])
     }
 }
 
@@ -161,19 +161,19 @@ fn emit_hash(dag: &mut Dag, start: NodeId) -> NodeId {
         if as_multiply_add(op1, op2, op3) && i + 1 < HASH_STAGES.len() {
             let (n1, _nv1, n2, n3, _nv3) = HASH_STAGES[i + 1];
             if as_affine_xor_shift(n1, n2, n3) {
-                let p = dag.add(ResKind::MultiplyAdd, vec![a]);
-                let q = dag.add(ResKind::MultiplyAdd, vec![a]);
-                a = dag.add(ResKind::Alu(n2), vec![p, q]); // n2 == Xor
+                let p = dag.add(NodeKind::MultiplyAdd, vec![a]);
+                let q = dag.add(NodeKind::MultiplyAdd, vec![a]);
+                a = dag.add(NodeKind::Alu(n2), vec![p, q]); // n2 == Xor
                 i += 2;
                 continue;
             }
         }
         if as_multiply_add(op1, op2, op3) {
-            a = dag.add(ResKind::MultiplyAdd, vec![a]);
+            a = dag.add(NodeKind::MultiplyAdd, vec![a]);
         } else {
-            let tmp1 = dag.add(ResKind::Alu(op1), vec![a]);
-            let tmp2 = dag.add(ResKind::Alu(op3), vec![a]);
-            a = dag.add(ResKind::Alu(op2), vec![tmp1, tmp2]);
+            let left = dag.add(NodeKind::Alu(op1), vec![a]);
+            let right = dag.add(NodeKind::Alu(op3), vec![a]);
+            a = dag.add(NodeKind::Alu(op2), vec![left, right]);
         }
         i += 1;
     }
@@ -192,26 +192,26 @@ pub fn build_problem_dag(forest_height: u32, batch_size: u32, rounds: u32) -> Da
     let two = dag.free();
     let levels = forest_height + 1;
 
-    for w in 0..batch_size {
-        dag.cur_walker = w;
-        dag.cur_category = NodeCat::Setup;
+    for walker in 0..batch_size {
+        dag.cur_walker = walker;
+        dag.cur_category = NodeCategory::Setup;
         let mut idx = dag.free();
-        let mut val = dag.add(ResKind::ContiguousLoad, vec![]);
+        let mut val = dag.add(NodeKind::ContiguousLoad, vec![]);
 
         for round in 0..rounds {
             let local_level = round % levels;
-            dag.cur_category = NodeCat::Routing;
-            let addr = dag.add(ResKind::Alu(AluOp::Add), vec![idx, forest_values_p]);
-            let node_val = dag.add(ResKind::GatherLoad, vec![addr]);
-            dag.cur_category = NodeCat::Hash;
-            let xor = dag.add(ResKind::Alu(AluOp::Xor), vec![val, node_val]);
+            dag.cur_category = NodeCategory::Routing;
+            let addr = dag.add(NodeKind::Alu(AluOp::Add), vec![idx, forest_values_p]);
+            let node_val = dag.add(NodeKind::GatherLoad, vec![addr]);
+            dag.cur_category = NodeCategory::Hash;
+            let xor = dag.add(NodeKind::Alu(AluOp::Xor), vec![val, node_val]);
             let val_new = emit_hash(&mut dag, xor);
 
-            dag.cur_category = NodeCat::Idx;
-            let parity = dag.add(ResKind::Alu(AluOp::Mod), vec![val_new, two]);
-            let offset = dag.add(ResKind::Alu(AluOp::Add), vec![parity]);
-            let doubled = dag.add(ResKind::Alu(AluOp::Mul), vec![idx, two]);
-            let idx_new = dag.add(ResKind::Alu(AluOp::Add), vec![doubled, offset]);
+            dag.cur_category = NodeCategory::Idx;
+            let parity = dag.add(NodeKind::Alu(AluOp::Mod), vec![val_new, two]);
+            let offset = dag.add(NodeKind::Alu(AluOp::Add), vec![parity]);
+            let doubled = dag.add(NodeKind::Alu(AluOp::Mul), vec![idx, two]);
+            let idx_new = dag.add(NodeKind::Alu(AluOp::Add), vec![doubled, offset]);
 
             // The tree is exactly full (n_nodes = 2^(forest_height+1) - 1) and
             // every walker starts at the shared root, so the level of `idx` at
@@ -225,25 +225,25 @@ pub fn build_problem_dag(forest_height: u32, batch_size: u32, rounds: u32) -> Da
             idx = if local_level == forest_height {
                 dag.free()
             } else {
-                let cmp = dag.add(ResKind::Alu(AluOp::Lt), vec![idx_new, n_nodes]);
-                dag.add(ResKind::Flow, vec![cmp, idx_new])
+                let cmp = dag.add(NodeKind::Alu(AluOp::Lt), vec![idx_new, n_nodes]);
+                dag.add(NodeKind::Flow, vec![cmp, idx_new])
             };
             val = val_new;
         }
 
-        dag.cur_category = NodeCat::Store;
-        dag.add(ResKind::Store, vec![idx]);
-        dag.add(ResKind::Store, vec![val]);
+        dag.cur_category = NodeCategory::Store;
+        dag.add(NodeKind::Store, vec![idx]);
+        dag.add(NodeKind::Store, vec![val]);
     }
 
     dag.cur_walker = u32::MAX;
-    dag.cur_category = NodeCat::Setup;
+    dag.cur_category = NodeCategory::Setup;
     dag
 }
 
 /// How a 2:1 select in the smart-DAG cascade is lowered. `Algebraic` = 3
 /// alu/valu ops (see `algebraic_select`); `Flow` = one real 8-wide `vselect`
-/// (`ResKind::Flow`, 1 flow slot/cycle x VLEN lanes). Flow is the UNDER-used
+/// (`NodeKind::Flow`, 1 flow slot/cycle x VLEN lanes). Flow is the UNDER-used
 /// engine in smart realistic mode (only the idx-wraparound selects run on it,
 /// ~24-31% busy), while valu is the bind (~99%), so `Flow` trades saturated
 /// 48-lane/cycle valu throughput for idle 8-lane/cycle flow throughput. That
@@ -270,27 +270,27 @@ pub enum SelectImpl {
 /// off whenever `flow` is the scarcer resource. See `build_problem_dag_smart`
 /// for where that trade-off is actually favorable.
 fn algebraic_select(dag: &mut Dag, cond: NodeId, a: NodeId, b: NodeId) -> NodeId {
-    let diff = dag.add(ResKind::Alu(AluOp::Sub), vec![b, a]);
-    let scaled = dag.add(ResKind::Alu(AluOp::Mul), vec![cond, diff]);
-    dag.add(ResKind::Alu(AluOp::Add), vec![a, scaled])
+    let diff = dag.add(NodeKind::Alu(AluOp::Sub), vec![b, a]);
+    let scaled = dag.add(NodeKind::Alu(AluOp::Mul), vec![cond, diff]);
+    dag.add(NodeKind::Alu(AluOp::Add), vec![a, scaled])
 }
 
 /// `select(cond, a, b)` via the flow engine's real 8-wide mux: 1
-/// `ResKind::Flow` node instead of `algebraic_select`'s 3. Deps are
+/// `NodeKind::Flow` node instead of `algebraic_select`'s 3. Deps are
 /// `[cond, a, b]`; the scheduler already models Flow as 1 slot/cycle x VLEN
 /// lanes (see schedule.rs), so no scheduler change is needed. NOTE for any
 /// future lowering to `isa::FlowSlot::VSelect` (`dest = a if cond!=0 else b`):
 /// `algebraic_select(dag, cond, a, b)` computes `a + cond*(b-a) = (cond? b : a)`,
 /// so a faithful VSelect must swap operands (`VSelect{cond, a: b, b: a}`). The
-/// abstract DAG only tracks deps + ResKind, so operand order here does not
+/// abstract DAG only tracks deps + NodeKind, so operand order here does not
 /// affect the scheduler's cycle count.
 fn flow_select(dag: &mut Dag, cond: NodeId, a: NodeId, b: NodeId) -> NodeId {
-    dag.add(ResKind::Flow, vec![cond, a, b])
+    dag.add(NodeKind::Flow, vec![cond, a, b])
 }
 
-/// Extract `arr[index]`, where `index`'s bits are `bits` (one walker's own
+/// Extract `candidates[index]`, where `index`'s bits are `bits` (one walker's own
 /// parity-bit history), via a per-walker reduction cascade: pairwise-select
-/// down from `arr.len()` candidates to 1, `bits.len() = log2(arr.len())`
+/// down from `candidates.len()` candidates to 1, `bits.len() = log2(candidates.len())`
 /// steps. This is a real N-to-1 multiplexer, which costs `Theta(N)` total
 /// select-equivalents per walker (a MUX tree reducing N->N/2->...->1 sums
 /// to `N-1` gates) -- NOT `O(log N)`; a smarter shared gather network
@@ -300,23 +300,23 @@ fn flow_select(dag: &mut Dag, cond: NodeId, a: NodeId, b: NodeId) -> NodeId {
 /// pass doesn't attempt -- see the module docs.
 fn select_cascade(
     dag: &mut Dag,
-    arr: &[NodeId],
+    candidates: &[NodeId],
     bits: &[NodeId],
     select_impl: SelectImpl,
 ) -> NodeId {
     if bits.is_empty() {
-        assert_eq!(arr.len(), 1);
-        return arr[0];
+        assert_eq!(candidates.len(), 1);
+        return candidates[0];
     }
-    let mut cur = arr.to_vec();
+    let mut cur = candidates.to_vec();
     for &bit in bits {
         let mut next = Vec::with_capacity(cur.len() / 2);
         for pair in cur.chunks(2) {
-            let sel = match select_impl {
+            let selected = match select_impl {
                 SelectImpl::Algebraic => algebraic_select(dag, bit, pair[0], pair[1]),
                 SelectImpl::Flow => flow_select(dag, bit, pair[0], pair[1]),
             };
-            next.push(sel);
+            next.push(selected);
         }
         cur = next;
     }
@@ -325,8 +325,8 @@ fn select_cascade(
 }
 
 fn level_array(dag: &mut Dag, cache: &mut HashMap<u32, Vec<NodeId>>, level: u32) -> Vec<NodeId> {
-    if let Some(v) = cache.get(&level) {
-        return v.clone();
+    if let Some(cached_values) = cache.get(&level) {
+        return cached_values.clone();
     }
     let size = 1usize << level;
     // Contiguous in the tree's implicit-heap layout -- genuinely
@@ -334,14 +334,14 @@ fn level_array(dag: &mut Dag, cache: &mut HashMap<u32, Vec<NodeId>>, level: u32)
     // MAX) even though this runs inside a walker iteration: the level array
     // is read once and reused across all walkers/epochs, so it belongs to no
     // single walker's window (see SchedulerConfig::walker_window).
-    let saved = dag.cur_walker;
+    let saved_walker = dag.cur_walker;
     dag.cur_walker = u32::MAX;
-    let arr: Vec<NodeId> = (0..size)
-        .map(|_| dag.add(ResKind::ContiguousLoad, vec![]))
+    let level_values: Vec<NodeId> = (0..size)
+        .map(|_| dag.add(NodeKind::ContiguousLoad, vec![]))
         .collect();
-    dag.cur_walker = saved;
-    cache.insert(level, arr.clone());
-    arr
+    dag.cur_walker = saved_walker;
+    cache.insert(level, level_values.clone());
+    level_values
 }
 
 /// Below this level size, a per-walker select-cascade (see
@@ -428,40 +428,40 @@ pub fn build_problem_dag_smart_tuned(
     let levels = forest_height + 1;
     let mut level_cache: HashMap<u32, Vec<NodeId>> = HashMap::new();
 
-    for w in 0..batch_size {
-        dag.cur_walker = w;
-        dag.cur_category = NodeCat::Setup;
+    for walker in 0..batch_size {
+        dag.cur_walker = walker;
+        dag.cur_category = NodeCategory::Setup;
         let mut idx = dag.free(); // idx = 0
-        let mut val = dag.add(ResKind::ContiguousLoad, vec![]);
+        let mut val = dag.add(NodeKind::ContiguousLoad, vec![]);
         let mut epoch_bits: Vec<NodeId> = Vec::new();
 
-        for r in 0..rounds {
-            let local_level = r % levels;
+        for round in 0..rounds {
+            let local_level = round % levels;
             if local_level == 0 {
                 epoch_bits.clear();
             }
 
-            dag.cur_category = NodeCat::Routing;
+            dag.cur_category = NodeCategory::Routing;
             let node_val =
                 if (1u64 << local_level) < batch_size as u64 && local_level < share_threshold {
-                    let arr = level_array(&mut dag, &mut level_cache, local_level);
-                    select_cascade(&mut dag, &arr, &epoch_bits, select_impl)
+                    let level_values = level_array(&mut dag, &mut level_cache, local_level);
+                    select_cascade(&mut dag, &level_values, &epoch_bits, select_impl)
                 } else {
-                    let addr = dag.add(ResKind::Alu(AluOp::Add), vec![idx, forest_values_p]);
-                    dag.add(ResKind::GatherLoad, vec![addr])
+                    let addr = dag.add(NodeKind::Alu(AluOp::Add), vec![idx, forest_values_p]);
+                    dag.add(NodeKind::GatherLoad, vec![addr])
                 };
 
-            dag.cur_category = NodeCat::Hash;
-            let xor = dag.add(ResKind::Alu(AluOp::Xor), vec![val, node_val]);
+            dag.cur_category = NodeCategory::Hash;
+            let xor = dag.add(NodeKind::Alu(AluOp::Xor), vec![val, node_val]);
             let val_new = emit_hash(&mut dag, xor);
 
-            dag.cur_category = NodeCat::Idx;
-            let parity = dag.add(ResKind::Alu(AluOp::Mod), vec![val_new, two]);
+            dag.cur_category = NodeCategory::Idx;
+            let parity = dag.add(NodeKind::Alu(AluOp::Mod), vec![val_new, two]);
             epoch_bits.push(parity);
 
-            let offset = dag.add(ResKind::Alu(AluOp::Add), vec![parity]);
-            let doubled = dag.add(ResKind::Alu(AluOp::Mul), vec![idx, two]);
-            let idx_new = dag.add(ResKind::Alu(AluOp::Add), vec![doubled, offset]);
+            let offset = dag.add(NodeKind::Alu(AluOp::Add), vec![parity]);
+            let doubled = dag.add(NodeKind::Alu(AluOp::Mul), vec![idx, two]);
+            let idx_new = dag.add(NodeKind::Alu(AluOp::Add), vec![doubled, offset]);
 
             // The tree is exactly full (n_nodes = 2^(forest_height+1) - 1),
             // so stepping past the last level *always* overflows n_nodes
@@ -472,19 +472,19 @@ pub fn build_problem_dag_smart_tuned(
             idx = if local_level == forest_height {
                 dag.free()
             } else {
-                let cmp = dag.add(ResKind::Alu(AluOp::Lt), vec![idx_new, n_nodes]);
-                dag.add(ResKind::Flow, vec![cmp, idx_new])
+                let cmp = dag.add(NodeKind::Alu(AluOp::Lt), vec![idx_new, n_nodes]);
+                dag.add(NodeKind::Flow, vec![cmp, idx_new])
             };
             val = val_new;
         }
 
-        dag.cur_category = NodeCat::Store;
-        dag.add(ResKind::Store, vec![idx]);
-        dag.add(ResKind::Store, vec![val]);
+        dag.cur_category = NodeCategory::Store;
+        dag.add(NodeKind::Store, vec![idx]);
+        dag.add(NodeKind::Store, vec![val]);
     }
 
     dag.cur_walker = u32::MAX;
-    dag.cur_category = NodeCat::Setup;
+    dag.cur_category = NodeCategory::Setup;
     dag
 }
 
@@ -516,42 +516,42 @@ pub fn build_problem_dag_idxlite(
     let levels = forest_height + 1;
     let mut level_cache: HashMap<u32, Vec<NodeId>> = HashMap::new();
 
-    for w in 0..batch_size {
-        dag.cur_walker = w;
-        dag.cur_category = NodeCat::Setup;
-        let mut val = dag.add(ResKind::ContiguousLoad, vec![]);
+    for walker in 0..batch_size {
+        dag.cur_walker = walker;
+        dag.cur_category = NodeCategory::Setup;
+        let mut val = dag.add(NodeKind::ContiguousLoad, vec![]);
         let mut pos = dag.free(); // pos_0 = 0 at the root
         let mut epoch_bits: Vec<NodeId> = Vec::new();
 
-        for r in 0..rounds {
-            let local_level = r % levels;
+        for round in 0..rounds {
+            let local_level = round % levels;
             if local_level == 0 {
                 epoch_bits.clear();
-                dag.cur_category = NodeCat::Setup;
+                dag.cur_category = NodeCategory::Setup;
                 pos = dag.free(); // epoch reset: root position is 0
             }
 
-            dag.cur_category = NodeCat::Routing;
+            dag.cur_category = NodeCategory::Routing;
             let node_val =
                 if (1u64 << local_level) < batch_size as u64 && local_level < share_threshold {
-                    let arr = level_array(&mut dag, &mut level_cache, local_level);
-                    select_cascade(&mut dag, &arr, &epoch_bits, select_impl)
+                    let level_values = level_array(&mut dag, &mut level_cache, local_level);
+                    select_cascade(&mut dag, &level_values, &epoch_bits, select_impl)
                 } else {
                     // addr = pos + (fvp + 2^L - 1); the const is compile-time.
                     let addr_base = dag.free();
-                    let addr = dag.add(ResKind::Alu(AluOp::Add), vec![pos, addr_base]);
-                    dag.add(ResKind::GatherLoad, vec![addr])
+                    let addr = dag.add(NodeKind::Alu(AluOp::Add), vec![pos, addr_base]);
+                    dag.add(NodeKind::GatherLoad, vec![addr])
                 };
 
-            dag.cur_category = NodeCat::Hash;
-            let xor = dag.add(ResKind::Alu(AluOp::Xor), vec![val, node_val]);
+            dag.cur_category = NodeCategory::Hash;
+            let xor = dag.add(NodeKind::Alu(AluOp::Xor), vec![val, node_val]);
             let val_new = emit_hash(&mut dag, xor);
 
             // idx residue: just the parity bit (feeds the router) and the
             // position accumulator (feeds gather addresses). No offset,
             // doubled, idx_new, cmp, or wrap-select.
-            dag.cur_category = NodeCat::Idx;
-            let parity = dag.add(ResKind::Alu(AluOp::And), vec![val_new]); // val & 1
+            dag.cur_category = NodeCategory::Idx;
+            let parity = dag.add(NodeKind::Alu(AluOp::And), vec![val_new]); // val & 1
             epoch_bits.push(parity);
             // `pos` (the within-epoch position) is needed to form gather
             // addresses. Deep levels (2^L >= batch_size) ALWAYS gather, so it
@@ -561,18 +561,18 @@ pub fn build_problem_dag_idxlite(
             // leave the parity bit as the whole idx residue (~85 cyc).
             if local_level != forest_height {
                 // pos = 2*pos + parity, one fused multiply_add on valu.
-                pos = dag.add(ResKind::MultiplyAdd, vec![pos, parity]);
+                pos = dag.add(NodeKind::MultiplyAdd, vec![pos, parity]);
             }
             val = val_new;
         }
 
-        dag.cur_category = NodeCat::Store;
-        dag.add(ResKind::Store, vec![pos]);
-        dag.add(ResKind::Store, vec![val]);
+        dag.cur_category = NodeCategory::Store;
+        dag.add(NodeKind::Store, vec![pos]);
+        dag.add(NodeKind::Store, vec![val]);
     }
 
     dag.cur_walker = u32::MAX;
-    dag.cur_category = NodeCat::Setup;
+    dag.cur_category = NodeCategory::Setup;
     dag
 }
 
@@ -601,14 +601,14 @@ pub fn build_problem_dag_butterfly(forest_height: u32, batch_size: u32, rounds: 
     let levels = forest_height + 1;
     let mut level_cache: HashMap<u32, Vec<NodeId>> = HashMap::new();
 
-    for w in 0..batch_size {
-        dag.cur_walker = w;
-        dag.cur_category = NodeCat::Setup;
-        let mut val = dag.add(ResKind::ContiguousLoad, vec![]);
+    for walker in 0..batch_size {
+        dag.cur_walker = walker;
+        dag.cur_category = NodeCategory::Setup;
+        let mut val = dag.add(NodeKind::ContiguousLoad, vec![]);
         let mut epoch_bits: Vec<NodeId> = Vec::new();
 
-        for r in 0..rounds {
-            let local_level = r % levels;
+        for round in 0..rounds {
+            let local_level = round % levels;
             if local_level == 0 {
                 epoch_bits.clear();
             }
@@ -617,40 +617,40 @@ pub fn build_problem_dag_butterfly(forest_height: u32, batch_size: u32, rounds: 
             // array down to this walker's element using its parity bits. The
             // level array itself is a shared contiguous load. Level 0 is the
             // root -- 1 value, 0 selects.
-            dag.cur_category = NodeCat::Routing;
-            let arr = level_array(&mut dag, &mut level_cache, local_level);
-            let mut node_val = arr[0];
+            dag.cur_category = NodeCategory::Routing;
+            let level_values = level_array(&mut dag, &mut level_cache, local_level);
+            let mut node_val = level_values[0];
             for (k, &bit) in epoch_bits.iter().enumerate() {
                 // one butterfly stage = one flow vselect (8-wide), keyed on
                 // bit k, mixing in the k-th level-array element as the static
                 // shift source (abstract deps; the real op is a vselect
                 // between the running value and a statically-offset read).
-                let src = arr[(k + 1).min(arr.len() - 1)];
-                node_val = dag.add(ResKind::Flow, vec![bit, node_val, src]);
+                let src = level_values[(k + 1).min(level_values.len() - 1)];
+                node_val = dag.add(NodeKind::Flow, vec![bit, node_val, src]);
             }
 
-            dag.cur_category = NodeCat::Hash;
-            let xor = dag.add(ResKind::Alu(AluOp::Xor), vec![val, node_val]);
+            dag.cur_category = NodeCategory::Hash;
+            let xor = dag.add(NodeKind::Alu(AluOp::Xor), vec![val, node_val]);
             let val_new = emit_hash(&mut dag, xor);
 
             // idx residue: parity bit ONLY -- the butterfly consumes bits
             // directly, so there is no position integer, address, or gather.
-            dag.cur_category = NodeCat::Idx;
-            let parity = dag.add(ResKind::Alu(AluOp::And), vec![val_new]); // val & 1
+            dag.cur_category = NodeCategory::Idx;
+            let parity = dag.add(NodeKind::Alu(AluOp::And), vec![val_new]); // val & 1
             epoch_bits.push(parity);
             val = val_new;
         }
 
-        dag.cur_category = NodeCat::Store;
+        dag.cur_category = NodeCategory::Store;
         // final idx would be assembled once from the last epoch's bits; model
         // it as a single store dependency on the last parity bit.
         let last_bit = *epoch_bits.last().unwrap();
-        dag.add(ResKind::Store, vec![last_bit]);
-        dag.add(ResKind::Store, vec![val]);
+        dag.add(NodeKind::Store, vec![last_bit]);
+        dag.add(NodeKind::Store, vec![val]);
     }
 
     dag.cur_walker = u32::MAX;
-    dag.cur_category = NodeCat::Setup;
+    dag.cur_category = NodeCategory::Setup;
     dag
 }
 
@@ -680,63 +680,63 @@ pub fn build_problem_dag_hybrid(
     let has_gathers = butterfly_max_level < forest_height;
     let mut level_cache: HashMap<u32, Vec<NodeId>> = HashMap::new();
 
-    for w in 0..batch_size {
-        dag.cur_walker = w;
-        dag.cur_category = NodeCat::Setup;
-        let mut val = dag.add(ResKind::ContiguousLoad, vec![]);
+    for walker in 0..batch_size {
+        dag.cur_walker = walker;
+        dag.cur_category = NodeCategory::Setup;
+        let mut val = dag.add(NodeKind::ContiguousLoad, vec![]);
         let mut pos = dag.free();
         let mut epoch_bits: Vec<NodeId> = Vec::new();
 
-        for r in 0..rounds {
-            let local_level = r % levels;
+        for round in 0..rounds {
+            let local_level = round % levels;
             if local_level == 0 {
                 epoch_bits.clear();
-                dag.cur_category = NodeCat::Setup;
+                dag.cur_category = NodeCategory::Setup;
                 pos = dag.free();
             }
 
-            dag.cur_category = NodeCat::Routing;
+            dag.cur_category = NodeCategory::Routing;
             let node_val = if local_level <= butterfly_max_level {
                 // Butterfly on flow: `local_level` vselects folding the shared
                 // level array by the walker's parity bits.
-                let arr = level_array(&mut dag, &mut level_cache, local_level);
-                let mut nv = arr[0];
+                let level_values = level_array(&mut dag, &mut level_cache, local_level);
+                let mut node_val = level_values[0];
                 for (k, &bit) in epoch_bits.iter().enumerate() {
-                    let src = arr[(k + 1).min(arr.len() - 1)];
-                    nv = dag.add(ResKind::Flow, vec![bit, nv, src]);
+                    let src = level_values[(k + 1).min(level_values.len() - 1)];
+                    node_val = dag.add(NodeKind::Flow, vec![bit, node_val, src]);
                 }
-                nv
+                node_val
             } else {
                 // Gather on load: addr = pos + compile-time base.
                 let addr_base = dag.free();
-                let addr = dag.add(ResKind::Alu(AluOp::Add), vec![pos, addr_base]);
-                dag.add(ResKind::GatherLoad, vec![addr])
+                let addr = dag.add(NodeKind::Alu(AluOp::Add), vec![pos, addr_base]);
+                dag.add(NodeKind::GatherLoad, vec![addr])
             };
 
-            dag.cur_category = NodeCat::Hash;
-            let xor = dag.add(ResKind::Alu(AluOp::Xor), vec![val, node_val]);
+            dag.cur_category = NodeCategory::Hash;
+            let xor = dag.add(NodeKind::Alu(AluOp::Xor), vec![val, node_val]);
             let val_new = emit_hash(&mut dag, xor);
 
-            dag.cur_category = NodeCat::Idx;
-            let parity = dag.add(ResKind::Alu(AluOp::And), vec![val_new]);
+            dag.cur_category = NodeCategory::Idx;
+            let parity = dag.add(NodeKind::Alu(AluOp::And), vec![val_new]);
             epoch_bits.push(parity);
             // Maintain `pos` only while some deeper level still gathers (its
             // address needs the accumulated position). If everything is
             // butterflied, pos is never read -- skip it.
             if has_gathers && local_level != forest_height {
-                pos = dag.add(ResKind::MultiplyAdd, vec![pos, parity]);
+                pos = dag.add(NodeKind::MultiplyAdd, vec![pos, parity]);
             }
             val = val_new;
         }
 
-        dag.cur_category = NodeCat::Store;
-        let last = *epoch_bits.last().unwrap();
-        dag.add(ResKind::Store, vec![if has_gathers { pos } else { last }]);
-        dag.add(ResKind::Store, vec![val]);
+        dag.cur_category = NodeCategory::Store;
+        let last_bit = *epoch_bits.last().unwrap();
+        dag.add(NodeKind::Store, vec![if has_gathers { pos } else { last_bit }]);
+        dag.add(NodeKind::Store, vec![val]);
     }
 
     dag.cur_walker = u32::MAX;
-    dag.cur_category = NodeCat::Setup;
+    dag.cur_category = NodeCategory::Setup;
     dag
 }
 
@@ -773,15 +773,15 @@ mod tests {
         let dag = build_problem_dag_hybrid(10, 256, 16, 5);
         let (mut flow, mut gather) = (0usize, 0usize);
         for (i, node) in dag.nodes.iter().enumerate() {
-            if dag.category[i] == NodeCat::Routing {
+            if dag.category[i] == NodeCategory::Routing {
                 match node.kind {
-                    ResKind::Flow => flow += 1,
-                    ResKind::GatherLoad => gather += 1,
+                    NodeKind::Flow => flow += 1,
+                    NodeKind::GatherLoad => gather += 1,
                     _ => {}
                 }
             }
-            for &d in &node.deps {
-                assert!(d < i, "node {i} deps on {d}, not earlier");
+            for &dep in &node.deps {
+                assert!(dep < i, "node {i} deps on {dep}, not earlier");
             }
         }
         assert!(flow > 0, "hybrid should butterfly shallow levels on flow");
@@ -797,7 +797,7 @@ mod tests {
         let alu_valu = dag
             .nodes
             .iter()
-            .filter(|n| matches!(n.kind, ResKind::Alu(_) | ResKind::MultiplyAdd))
+            .filter(|n| matches!(n.kind, NodeKind::Alu(_) | NodeKind::MultiplyAdd))
             .count() as u64;
         // 60 element-ops/cycle across alu (12) + valu (6*8).
         let arith_floor = alu_valu.div_ceil(60);
@@ -811,7 +811,7 @@ mod tests {
             .iter()
             .enumerate()
             .filter(|(i, n)| {
-                dag.category[*i] == NodeCat::Idx && matches!(n.kind, ResKind::MultiplyAdd)
+                dag.category[*i] == NodeCategory::Idx && matches!(n.kind, NodeKind::MultiplyAdd)
             })
             .count();
         assert_eq!(
@@ -824,8 +824,8 @@ mod tests {
             .iter()
             .enumerate()
             .filter(|(i, n)| {
-                dag.category[*i] == NodeCat::Routing
-                    && matches!(n.kind, ResKind::Alu(_) | ResKind::MultiplyAdd)
+                dag.category[*i] == NodeCategory::Routing
+                    && matches!(n.kind, NodeKind::Alu(_) | NodeKind::MultiplyAdd)
             })
             .count();
         assert_eq!(
@@ -843,7 +843,7 @@ mod tests {
                 .iter()
                 .enumerate()
                 .filter(|(i, n)| {
-                    d.category[*i] == NodeCat::Idx && matches!(n.kind, ResKind::Alu(_))
+                    d.category[*i] == NodeCategory::Idx && matches!(n.kind, NodeKind::Alu(_))
                 })
                 .count()
         };
@@ -868,10 +868,10 @@ mod tests {
     fn is_acyclic_and_deps_point_backward() {
         let dag = build_problem_dag(10, 4, 3);
         for (i, node) in dag.nodes.iter().enumerate() {
-            for &d in &node.deps {
+            for &dep in &node.deps {
                 assert!(
-                    d < i,
-                    "node {i} depends on {d}, which is not earlier -- not a valid DAG order"
+                    dep < i,
+                    "node {i} depends on {dep}, which is not earlier -- not a valid DAG order"
                 );
             }
         }
@@ -886,10 +886,10 @@ mod tests {
         let walker0_range = 3..3 + per_walker;
         let walker1_start = 3 + per_walker;
         for node in &dag.nodes[walker1_start..] {
-            for &d in &node.deps {
+            for &dep in &node.deps {
                 assert!(
-                    !walker0_range.contains(&d),
-                    "walker 1 node depends on a walker 0 node ({d}) -- they should be independent"
+                    !walker0_range.contains(&dep),
+                    "walker 1 node depends on a walker 0 node ({dep}) -- they should be independent"
                 );
             }
         }
@@ -910,7 +910,7 @@ mod tests {
         let multiply_adds = dag
             .nodes
             .iter()
-            .filter(|n| matches!(n.kind, ResKind::MultiplyAdd))
+            .filter(|n| matches!(n.kind, NodeKind::MultiplyAdd))
             .count();
         assert_eq!(multiply_adds, 4, "s0 + fused p,q + s4");
         let total_hash_nodes = dag.nodes.len() - 1; // minus the `start` free node
@@ -939,12 +939,12 @@ mod tests {
         let flow = dag
             .nodes
             .iter()
-            .filter(|n| matches!(n.kind, ResKind::Flow))
+            .filter(|n| matches!(n.kind, NodeKind::Flow))
             .count();
         let lt = dag
             .nodes
             .iter()
-            .filter(|n| matches!(n.kind, ResKind::Alu(crate::isa::AluOp::Lt)))
+            .filter(|n| matches!(n.kind, NodeKind::Alu(crate::isa::AluOp::Lt)))
             .count();
 
         // Exactly one Lt + one Flow per (walker, non-wrap round); none on wraps.
@@ -962,26 +962,26 @@ mod tests {
 
     #[test]
     fn flow_select_impl_moves_cascade_selects_off_alu_onto_flow() {
-        let alg = build_problem_dag_smart_with(10, 256, 16, SelectImpl::Algebraic);
-        let flw = build_problem_dag_smart_with(10, 256, 16, SelectImpl::Flow);
+        let algebraic_dag = build_problem_dag_smart_with(10, 256, 16, SelectImpl::Algebraic);
+        let flow_dag = build_problem_dag_smart_with(10, 256, 16, SelectImpl::Flow);
         let flow_count = |d: &Dag| {
             d.nodes
                 .iter()
-                .filter(|n| matches!(n.kind, ResKind::Flow))
+                .filter(|n| matches!(n.kind, NodeKind::Flow))
                 .count()
         };
         // 2 epochs x (0+1+3+7)=11 selects/walker x 256 walkers = 5632 selects.
-        assert_eq!(flow_count(&flw) - flow_count(&alg), 5632);
+        assert_eq!(flow_count(&flow_dag) - flow_count(&algebraic_dag), 5632);
         // Each algebraic select was 3 nodes; each flow select is 1 => 2 fewer each.
-        assert_eq!(alg.nodes.len() - flw.nodes.len(), 2 * 5632);
+        assert_eq!(algebraic_dag.nodes.len() - flow_dag.nodes.len(), 2 * 5632);
     }
 
     #[test]
     fn smart_dag_is_acyclic_and_walkers_independent() {
         let dag = build_problem_dag_smart(4, 8, 6); // small tree, small batch, a couple epochs
         for (i, node) in dag.nodes.iter().enumerate() {
-            for &d in &node.deps {
-                assert!(d < i, "node {i} depends on {d}, not earlier");
+            for &dep in &node.deps {
+                assert!(dep < i, "node {i} depends on {dep}, not earlier");
             }
         }
     }
@@ -999,7 +999,7 @@ mod tests {
         let contiguous_loads = dag
             .nodes
             .iter()
-            .filter(|n| matches!(n.kind, ResKind::ContiguousLoad))
+            .filter(|n| matches!(n.kind, NodeKind::ContiguousLoad))
             .count();
         // Shared level arrays: sizes 1+2+4+8 = 15 ContiguousLoad nodes,
         // read exactly once across both epochs, plus 32 initial-value loads

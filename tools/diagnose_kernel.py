@@ -16,14 +16,18 @@ grader's cycle count ignores debug-only work).
 Usage (repo root): python tools/diagnose_kernel.py
 """
 
+from __future__ import annotations
+
 import os
 import sys
 from collections import Counter, defaultdict
+from collections.abc import Callable
+from typing import cast
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from perf_takehome import KernelBuilder
-from problem import SLOT_LIMITS, VLEN
+from problem import SLOT_LIMITS, VLEN, Engine, Slot
 
 FOREST_HEIGHT, BATCH_SIZE, ROUNDS = 10, 256, 16
 
@@ -45,23 +49,23 @@ HASH_CONST_NAMES = {"k0", "C0", "C1", "sh1", "kp", "ap", "kq", "aq", "k4", "C4",
 SETUP_LOAD_DESTS = {"forest_values_p", "inp_values_p", "root_nv"}
 
 
-def opcode_key(engine, op):
+def opcode_key(engine: Engine, op: str) -> str:
     """valu elementwise ops share alu spellings; prefix to keep them distinct."""
     if engine == "valu" and op in ALU_OPS:
         return f"v{op}"
     return op
 
 
-def build():
+def build_diagnostic_kernel() -> KernelBuilder:
     kb = KernelBuilder()
     kb.build_kernel(FOREST_HEIGHT, 2**(FOREST_HEIGHT + 1) - 1, BATCH_SIZE, ROUNDS)
     return kb
 
 
-def named_range_lookup(kb):
+def named_range_lookup(kb: KernelBuilder) -> Callable[[int], str | None]:
     """addr -> block name, honoring each named allocation's length."""
-    blocks = sorted((a, n, ln) for a, (n, ln) in kb.scratch_debug.items())
-    def lookup(addr):
+    blocks = sorted((addr, name, length) for addr, (name, length) in kb.scratch_debug.items())
+    def lookup(addr: int) -> str | None:
         lo, hi = 0, len(blocks)
         while lo < hi:
             mid = (lo + hi) // 2
@@ -70,14 +74,14 @@ def named_range_lookup(kb):
             else:
                 hi = mid
         if lo:
-            base, name, ln = blocks[lo - 1]
-            if addr < base + ln:
+            base, name, length = blocks[lo - 1]
+            if addr < base + length:
                 return name
         return None
     return lookup
 
 
-def slot_operands(engine, slot):
+def slot_operands(engine: Engine, slot: Slot) -> tuple[list[int], list[int]]:
     """(reads, writes) as scratch addresses, per problem.py semantics."""
     op = slot[0]
     if engine == "alu":
@@ -87,12 +91,12 @@ def slot_operands(engine, slot):
         if op == "vbroadcast":
             return [slot[2]], [slot[1] + i for i in range(VLEN)]
         if op == "multiply_add":
-            _, d, a, b, c = slot
-            rd = [x + i for x in (a, b, c) for i in range(VLEN)]
-            return rd, [d + i for i in range(VLEN)]
-        _, d, a1, a2 = slot
-        rd = [x + i for x in (a1, a2) for i in range(VLEN)]
-        return rd, [d + i for i in range(VLEN)]
+            _, dest, a, b, c = slot
+            reads = [base + i for base in (a, b, c) for i in range(VLEN)]
+            return reads, [dest + i for i in range(VLEN)]
+        _, dest, a1, a2 = slot
+        reads = [base + i for base in (a1, a2) for i in range(VLEN)]
+        return reads, [dest + i for i in range(VLEN)]
     if engine == "load":
         if op == "load":
             return [slot[2]], [slot[1]]
@@ -107,15 +111,15 @@ def slot_operands(engine, slot):
             return [slot[1]] + [slot[2] + i for i in range(VLEN)], []
     if engine == "flow":
         if op == "vselect":
-            _, d, c, a, b = slot
-            rd = [x + i for x in (c, a, b) for i in range(VLEN)]
-            return rd, [d + i for i in range(VLEN)]
+            _, dest, cond, a, b = slot
+            reads = [base + i for base in (cond, a, b) for i in range(VLEN)]
+            return reads, [dest + i for i in range(VLEN)]
         if op == "add_imm":
             return [slot[2]], [slot[1]]
     return [], []
 
 
-def classify(engine, slot, lookup):
+def classify(engine: Engine, slot: Slot, lookup: Callable[[int], str | None]) -> str:
     """Purpose of one slot. Rule order matters; see module docstring."""
     op = slot[0]
     if engine == "debug":
@@ -132,40 +136,42 @@ def classify(engine, slot, lookup):
     if engine == "flow" and op == "vselect":
         return "Routing"            # tournament folds
     reads, writes = slot_operands(engine, slot)
-    rnames = {lookup(a) for a in reads} - {None}
-    wnames = {lookup(a) for a in writes} - {None}
+    # cast: `set - {None}` drops the None members but pyright can't narrow the
+    # element type off a set difference; the cast is output-neutral.
+    rnames = cast("set[str]", {lookup(addr) for addr in reads} - {None})
+    wnames = cast("set[str]", {lookup(addr) for addr in writes} - {None})
     if rnames & HASH_CONST_NAMES:
         return "Hash"               # hash-stage madds/xors/shifts
-    if any(n.startswith("val") for n in wnames):
+    if any(name.startswith("val") for name in wnames):
         return "Hash"               # val fold-in / stage combines
-    if any(n.startswith("val") for n in rnames):
+    if any(name.startswith("val") for name in rnames):
         return "Idx"                # parity extraction (val & 1)
-    if any(n.startswith("st") for n in wnames):
+    if any(name.startswith("st") for name in wnames):
         return "Idx"                # p := 2p+b / gaddr updates
-    if any(n.startswith("st") for n in rnames):
+    if any(name.startswith("st") for name in rnames):
         return "Routing"            # tournament condition extraction
     if "lv" in rnames or {"forest_values_p", "one_vec"} & rnames == {"forest_values_p"}:
         return "Setup"              # level-table diffs, omf
     return "Routing"                # tournament pool combines
 
 
-def lane_ops(engine, slot):
+def lane_ops(engine: Engine, slot: Slot) -> int:
     """How many scalar-equivalent lane operations this slot performs."""
     if engine in ("valu", "flow") and slot[0] not in ("pause", "add_imm"):
         return VLEN
     return 1
 
 
-def main():
-    kb = build()
+def main() -> None:
+    kb = build_diagnostic_kernel()
     lookup = named_range_lookup(kb)
     cycles = len(kb.instrs)
 
-    slot_uses = Counter()
-    busy = Counter()
-    opcodes = Counter()
-    purpose_engine = defaultdict(Counter)   # purpose -> engine -> slots
-    purpose_lanes = Counter()               # purpose -> lane-ops (non-debug)
+    slot_uses: Counter[Engine] = Counter()
+    busy: Counter[Engine] = Counter()
+    opcodes: Counter[tuple[Engine, str]] = Counter()
+    purpose_engine: defaultdict[str, Counter[Engine]] = defaultdict(Counter)   # purpose -> engine -> slots
+    purpose_lanes: Counter[str] = Counter()               # purpose -> lane-ops (non-debug)
 
     for bundle in kb.instrs:
         for engine, slots in bundle.items():
@@ -174,47 +180,47 @@ def main():
             for slot in slots:
                 slot_uses[engine] += 1
                 opcodes[(engine, opcode_key(engine, slot[0]))] += 1
-                p = classify(engine, slot, lookup)
-                purpose_engine[p][engine] += 1
+                purpose = classify(engine, slot, lookup)
+                purpose_engine[purpose][engine] += 1
                 if engine != "debug":
-                    purpose_lanes[p] += lane_ops(engine, slot)
+                    purpose_lanes[purpose] += lane_ops(engine, slot)
 
     print(f"kernel: {cycles} cycles  (fh={FOREST_HEIGHT} bs={BATCH_SIZE} r={ROUNDS})\n")
 
     print("== engine utilization ==")
     print(f"{'engine':<8}{'slots':>8}{'capacity':>10}{'slot-util':>11}{'busy%':>8}")
-    for e in ("alu", "valu", "load", "store", "flow"):
-        cap = cycles * SLOT_LIMITS[e]
-        print(f"{e:<8}{slot_uses[e]:>8}{cap:>10}"
-              f"{100.0 * slot_uses[e] / cap:>10.1f}%"
-              f"{100.0 * busy[e] / cycles:>7.1f}%")
+    for engine in ("alu", "valu", "load", "store", "flow"):
+        capacity = cycles * SLOT_LIMITS[engine]
+        print(f"{engine:<8}{slot_uses[engine]:>8}{capacity:>10}"
+              f"{100.0 * slot_uses[engine] / capacity:>10.1f}%"
+              f"{100.0 * busy[engine] / cycles:>7.1f}%")
     print(f"{'debug':<8}{slot_uses['debug']:>8}{'(free)':>10}")
 
     print("\n== purpose breakdown (slots per engine; % of engine's used slots) ==")
     engines = ("alu", "valu", "load", "store", "flow")
-    hdr = "".join(f"{e:>14}" for e in engines)
-    print(f"{'purpose':<9}{hdr}{'lane-ops':>10}{'lane%':>8}")
+    header = "".join(f"{engine:>14}" for engine in engines)
+    print(f"{'purpose':<9}{header}{'lane-ops':>10}{'lane%':>8}")
     total_lanes = sum(purpose_lanes.values())
-    for p in ("Hash", "Idx", "Routing", "Setup", "Store"):
+    for purpose in ("Hash", "Idx", "Routing", "Setup", "Store"):
         row = ""
-        for e in engines:
-            n = purpose_engine[p][e]
-            row += f"{n:>8}" + (f" {100.0 * n / slot_uses[e]:>4.0f}%" if n else "     ")
-        print(f"{p:<9}{row}{purpose_lanes[p]:>10}"
-              f"{100.0 * purpose_lanes[p] / total_lanes:>7.1f}%")
+        for engine in engines:
+            count = purpose_engine[purpose][engine]
+            row += f"{count:>8}" + (f" {100.0 * count / slot_uses[engine]:>4.0f}%" if count else "     ")
+        print(f"{purpose:<9}{row}{purpose_lanes[purpose]:>10}"
+              f"{100.0 * purpose_lanes[purpose] / total_lanes:>7.1f}%")
     print(f"(lane-ops: VLEN-wide slot = {VLEN}, scalar = 1; debug excluded)")
 
     print("\n== opcode census ==")
-    for e in ("alu", "valu", "load", "store", "flow", "debug"):
-        used = {op: n for (ee, op), n in opcodes.items() if ee == e}
-        unused = [op for op in ISA[e] if op not in used]
-        used_s = "  ".join(f"{op}:{n}" for op, n in sorted(used.items(), key=lambda kv: -kv[1]))
-        print(f"{e:<6} used:   {used_s if used_s else '(none)'}")
+    for engine in ("alu", "valu", "load", "store", "flow", "debug"):
+        used = {op: count for (entry_engine, op), count in opcodes.items() if entry_engine == engine}
+        unused = [op for op in ISA[engine] if op not in used]
+        used_summary = "  ".join(f"{op}:{count}" for op, count in sorted(used.items(), key=lambda kv: -kv[1]))
+        print(f"{engine:<6} used:   {used_summary if used_summary else '(none)'}")
         print(f"{'':<6} unused: {', '.join(unused) if unused else '(none)'}")
 
-    total = sum(len(ISA[e]) for e in ISA)
-    used_n = len({k for k in opcodes})
-    print(f"\ninstruction types used: {used_n}/{total}")
+    total = sum(len(ISA[engine]) for engine in ISA)
+    used_count = len({k for k in opcodes})
+    print(f"\ninstruction types used: {used_count}/{total}")
 
 
 if __name__ == "__main__":

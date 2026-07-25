@@ -27,8 +27,8 @@ fn main() {
         "naive" => build_kernel_naive(0, n_nodes, batch_size, rounds),
         "valu" => build_kernel_vectorized(batch_size, rounds, 1),
         "pipelined" => {
-            let p: usize = args.get(5).map(|s| s.parse().unwrap()).unwrap_or(6);
-            build_kernel_vectorized(batch_size, rounds, p)
+            let pipeline_width: usize = args.get(5).map(|s| s.parse().unwrap()).unwrap_or(6);
+            build_kernel_vectorized(batch_size, rounds, pipeline_width)
         }
         other => {
             eprintln!("unknown kind {other:?}, expected naive|valu|pipelined");
@@ -36,10 +36,10 @@ fn main() {
         }
     };
 
-    let s = analyze(&program);
-    println!("{s}");
+    let program_stats = analyze(&program);
+    println!("{program_stats}");
     println!("engines active per bundle (non-debug, non-empty bundles):");
-    for (n, count) in engines_per_bundle_histogram(&program) {
-        println!("  {n} engine(s): {count} bundles");
+    for (active_engine_count, bundle_count) in engines_per_bundle_histogram(&program) {
+        println!("  {active_engine_count} engine(s): {bundle_count} bundles");
     }
 }

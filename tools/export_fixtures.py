@@ -12,10 +12,13 @@ grades.
 Run from the repo root: python tools/export_fixtures.py
 """
 
+from __future__ import annotations
+
 import json
 import os
 import random
 import sys
+from typing import Any
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -29,19 +32,19 @@ FIXTURES_DIR = os.path.join(
 )
 
 
-def trace_key(key) -> str:
+def trace_key(key: tuple[Any, ...]) -> str:
     """(round, i, field) or (round, i, "hash_stage", hi) -> "round|i|field[|hi]" """
     return "|".join(str(part) for part in key)
 
 
-def export(name: str, forest_height: int, batch_size: int, rounds: int, seed: int, with_trace: bool):
+def export(name: str, forest_height: int, batch_size: int, rounds: int, seed: int, with_trace: bool) -> None:
     random.seed(seed)
     forest = Tree.generate(forest_height)
     inp = Input.generate(forest, batch_size, rounds)
     mem_in = build_mem_image(forest, inp)
 
     mem_out = list(mem_in)
-    trace = {}
+    trace: dict[Any, int] = {}
     for _ in reference_kernel2(mem_out, trace):
         pass
 

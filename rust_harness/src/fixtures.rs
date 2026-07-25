@@ -30,9 +30,9 @@ pub struct Fixture {
 
 impl Fixture {
     pub fn load<P: AsRef<Path>>(path: P) -> Fixture {
-        let text = std::fs::read_to_string(path.as_ref())
+        let json_text = std::fs::read_to_string(path.as_ref())
             .unwrap_or_else(|e| panic!("reading fixture {:?}: {e}", path.as_ref()));
-        serde_json::from_str(&text)
+        serde_json::from_str(&json_text)
             .unwrap_or_else(|e| panic!("parsing fixture {:?}: {e}", path.as_ref()))
     }
 }

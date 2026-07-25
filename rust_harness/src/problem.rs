@@ -53,48 +53,48 @@ pub fn myhash(mut a: u32) -> u32 {
 /// = 11 ops (12 with the `val ^ node_val` fold-in, 13 with `out & 1`).
 pub mod hashseg {
     /// stage0 multiplier `1 + 2^12`.
-    pub const K0: u32 = 4097;
-    pub const C0: u32 = 0x7ED5_5D16;
-    pub const C1: u32 = 0xC761_C23C;
-    pub const SH1: u32 = 19;
+    pub const STAGE0_MULTIPLIER: u32 = 4097;
+    pub const STAGE0_ADD_CONSTANT: u32 = 0x7ED5_5D16;
+    pub const STAGE1_XOR_CONSTANT: u32 = 0xC761_C23C;
+    pub const STAGE1_SHIFT: u32 = 19;
     /// stage2 multiplier `1 + 2^5`.
-    pub const KP: u32 = 33;
+    pub const F23_P_MULTIPLIER: u32 = 33;
     /// `C2 + C3` (stage2+3 fusion's p-branch constant).
-    pub const AP: u32 = 0xE9F8_CC1D;
+    pub const F23_P_CONSTANT: u32 = 0xE9F8_CC1D;
     /// `33 * 2^9` (stage3's `<<9` folded into the q-branch multiplier).
-    pub const KQ: u32 = 16896;
+    pub const F23_Q_MULTIPLIER: u32 = 16896;
     /// `C2 << 9` (mod 2^32).
-    pub const AQ: u32 = 0xACCF_6200;
+    pub const F23_Q_CONSTANT: u32 = 0xACCF_6200;
     /// stage4 multiplier `1 + 2^3`.
-    pub const K4: u32 = 9;
-    pub const C4: u32 = 0xFD70_46C5;
-    pub const C5: u32 = 0xB55A_4F09;
-    pub const SH5: u32 = 16;
+    pub const STAGE4_MULTIPLIER: u32 = 9;
+    pub const STAGE4_ADD_CONSTANT: u32 = 0xFD70_46C5;
+    pub const STAGE5_XOR_CONSTANT: u32 = 0xB55A_4F09;
+    pub const STAGE5_SHIFT: u32 = 16;
 
     pub fn stage0(a: u32) -> u32 {
-        a.wrapping_mul(K0).wrapping_add(C0)
+        a.wrapping_mul(STAGE0_MULTIPLIER).wrapping_add(STAGE0_ADD_CONSTANT)
     }
     pub fn stage1(b: u32) -> u32 {
-        (b ^ C1) ^ (b >> SH1)
+        (b ^ STAGE1_XOR_CONSTANT) ^ (b >> STAGE1_SHIFT)
     }
     /// Fused stages 2+3: `p ^ q` with both branches affine in the input.
     pub fn f23(c: u32) -> u32 {
-        let p = c.wrapping_mul(KP).wrapping_add(AP);
-        let q = c.wrapping_mul(KQ).wrapping_add(AQ);
+        let p = c.wrapping_mul(F23_P_MULTIPLIER).wrapping_add(F23_P_CONSTANT);
+        let q = c.wrapping_mul(F23_Q_MULTIPLIER).wrapping_add(F23_Q_CONSTANT);
         p ^ q
     }
     pub fn stage4(d: u32) -> u32 {
-        d.wrapping_mul(K4).wrapping_add(C4)
+        d.wrapping_mul(STAGE4_MULTIPLIER).wrapping_add(STAGE4_ADD_CONSTANT)
     }
     pub fn stage5(e: u32) -> u32 {
-        (e ^ C5) ^ (e >> SH5)
+        (e ^ STAGE5_XOR_CONSTANT) ^ (e >> STAGE5_SHIFT)
     }
-    /// The C5-less xor-shift `x ^ (x >> 16)` — stage 5 as it appears in the
-    /// `c5_prexor` primed value domain (H-015), where the `^ C5` is absorbed
+    /// The STAGE5_XOR_CONSTANT-less xor-shift `x ^ (x >> 16)` — stage 5 as it appears in the
+    /// `c5_prexor` primed value domain (H-015), where the `^ STAGE5_XOR_CONSTANT` is absorbed
     /// into the tree values. Used by the MITM search's primed-domain
     /// cross-round targets (H-016).
     pub fn sigma16(x: u32) -> u32 {
-        x ^ (x >> SH5)
+        x ^ (x >> STAGE5_SHIFT)
     }
     /// The full 11-op composition; equals `myhash` bit-for-bit (tested).
     pub fn fused_hash(a: u32) -> u32 {
@@ -104,7 +104,7 @@ pub mod hashseg {
     // ---- 2-op parity extraction (found analytically, confirmed by the
     // fusion search; see `parity_from_d_is_bit_exact`) ----
     //
-    // The only bit the idx update needs is `out & 1 = e0 ^ e16 ^ 1` (C5 is
+    // The only bit the idx update needs is `out & 1 = e0 ^ e16 ^ 1` (STAGE5_XOR_CONSTANT is
     // odd). A multiply_add can pack XOR-of-two-bits into bit 31: for
     // `t = x*(2^31 + 2^j) + C` mod 2^32 the `2^31*x` term contributes only
     // `x0 << 31`, the `2^j*x` term contributes `x_{31-j}` to bit 31 with no
@@ -113,23 +113,23 @@ pub mod hashseg {
     // extracts it.
 
     /// `2^31 + 9*2^15`: parity-from-d multiplier (j=15 lifts bit16 of
-    /// `9d + C4` to bit 31 after the `*2^15` scaling of stage4's madd).
-    pub const PAR_D_K: u32 = 0x8004_8000;
-    /// `(C4 << 15) mod 2^32` (no 2^31 term: e0 = d0 ^ 1 and C5_0 = 1 cancel).
-    pub const PAR_D_C: u32 = 0x2362_8000;
+    /// `9d + STAGE4_ADD_CONSTANT` to bit 31 after the `*2^15` scaling of stage4's madd).
+    pub const PARITY_FROM_D_MULTIPLIER: u32 = 0x8004_8000;
+    /// `(STAGE4_ADD_CONSTANT << 15) mod 2^32` (no 2^31 term: e0 = d0 ^ 1 and C5_0 = 1 cancel).
+    pub const PARITY_FROM_D_CONSTANT: u32 = 0x2362_8000;
     /// Bit0 of the final hash, computed from the f23 output `d` in 2 ops
     /// (madd + shr) instead of via stage4+stage5+`&1` (5 ops from `d`).
     pub fn parity_from_d(d: u32) -> u32 {
-        d.wrapping_mul(PAR_D_K).wrapping_add(PAR_D_C) >> 31
+        d.wrapping_mul(PARITY_FROM_D_MULTIPLIER).wrapping_add(PARITY_FROM_D_CONSTANT) >> 31
     }
 
     /// `2^31 + 2^15`: parity-from-e multiplier.
-    pub const PAR_E_K: u32 = 0x8000_8000;
-    /// `2^31`: accounts for C5's odd bit0.
-    pub const PAR_E_C: u32 = 0x8000_0000;
+    pub const PARITY_FROM_E_MULTIPLIER: u32 = 0x8000_8000;
+    /// `2^31`: accounts for STAGE5_XOR_CONSTANT's odd bit0.
+    pub const PARITY_FROM_E_CONSTANT: u32 = 0x8000_0000;
     /// Bit0 of the final hash from the stage4 output `e` in 2 ops.
     pub fn parity_from_e(e: u32) -> u32 {
-        e.wrapping_mul(PAR_E_K).wrapping_add(PAR_E_C) >> 31
+        e.wrapping_mul(PARITY_FROM_E_MULTIPLIER).wrapping_add(PARITY_FROM_E_CONSTANT) >> 31
     }
 }
 
@@ -268,34 +268,34 @@ pub fn reference_run(mem: &mut [u32]) -> HashMap<String, u32> {
     let layout = MemLayout::from_mem(mem);
     let mut trace = HashMap::new();
 
-    for h in 0..layout.rounds {
+    for round in 0..layout.rounds {
         for i in 0..layout.batch_size {
             let idx_addr = (layout.inp_indices_p + i) as usize;
             let val_addr = (layout.inp_values_p + i) as usize;
 
             let idx = mem[idx_addr];
-            trace.insert(format!("{h}|{i}|idx"), idx);
+            trace.insert(format!("{round}|{i}|idx"), idx);
             let val = mem[val_addr];
-            trace.insert(format!("{h}|{i}|val"), val);
+            trace.insert(format!("{round}|{i}|val"), val);
             let node_val = mem[(layout.forest_values_p + idx) as usize];
-            trace.insert(format!("{h}|{i}|node_val"), node_val);
+            trace.insert(format!("{round}|{i}|node_val"), node_val);
 
             let mut a = val ^ node_val;
-            for (hi, &(op1, val1, op2, op3, val3)) in HASH_STAGES.iter().enumerate() {
+            for (hash_stage_idx, &(op1, val1, op2, op3, val3)) in HASH_STAGES.iter().enumerate() {
                 let left = op1.apply(a, val1);
                 let right = op3.apply(a, val3);
                 a = op2.apply(left, right);
-                trace.insert(format!("{h}|{i}|hash_stage|{hi}"), a);
+                trace.insert(format!("{round}|{i}|hash_stage|{hash_stage_idx}"), a);
             }
             let new_val = a;
-            trace.insert(format!("{h}|{i}|hashed_val"), new_val);
+            trace.insert(format!("{round}|{i}|hashed_val"), new_val);
 
             let mut new_idx = 2 * idx + if new_val.is_multiple_of(2) { 1 } else { 2 };
-            trace.insert(format!("{h}|{i}|next_idx"), new_idx);
+            trace.insert(format!("{round}|{i}|next_idx"), new_idx);
             if new_idx >= layout.n_nodes {
                 new_idx = 0;
             }
-            trace.insert(format!("{h}|{i}|wrapped_idx"), new_idx);
+            trace.insert(format!("{round}|{i}|wrapped_idx"), new_idx);
 
             mem[val_addr] = new_val;
             mem[idx_addr] = new_idx;
@@ -325,8 +325,8 @@ mod tests {
     #[test]
     fn tree_node_count_matches_perfect_binary_tree() {
         let mut rng = Rng::new(1);
-        let t = Tree::generate(3, &mut rng);
-        assert_eq!(t.values.len(), 2usize.pow(4) - 1); // 2^(height+1) - 1
+        let tree = Tree::generate(3, &mut rng);
+        assert_eq!(tree.values.len(), 2usize.pow(4) - 1); // 2^(height+1) - 1
     }
 
     #[test]
@@ -359,11 +359,11 @@ mod tests {
     /// emit_hash): affine stages (op1==op2==Add, op3==Shl) become one
     /// multiply_add `a*(1+2^s)+val1` mirroring ValuSlot::MultiplyAdd (a*b+c,
     /// wrapping); every other stage stays 3 alu ops.
-    fn fused_hash(mut a: u32) -> u32 {
+    fn dag_emitted_hash(mut a: u32) -> u32 {
         for &(op1, val1, op2, op3, val3) in HASH_STAGES.iter() {
             if op1 == AluOp::Add && op2 == AluOp::Add && op3 == AluOp::Shl {
-                let k = 1u32.wrapping_add(1u32 << (val3 & 31)); // 1 + 2^s
-                a = a.wrapping_mul(k).wrapping_add(val1);
+                let multiplier = 1u32.wrapping_add(1u32 << (val3 & 31)); // 1 + 2^s
+                a = a.wrapping_mul(multiplier).wrapping_add(val1);
             } else {
                 let left = op1.apply(a, val1);
                 let right = op3.apply(a, val3);
@@ -400,14 +400,14 @@ mod tests {
             0xB55A_4F09,
             0x7ED5_5D16,
         ];
-        let mut x = 0x1234_5678u32;
+        let mut lcg_state = 0x1234_5678u32;
         for _ in 0..200_000 {
-            x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-            samples.push(x);
+            lcg_state = lcg_state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            samples.push(lcg_state);
         }
         for &a in &samples {
             assert_eq!(
-                fused_hash(a),
+                dag_emitted_hash(a),
                 myhash(a),
                 "fused hash diverged at a={a:#010x}"
             );
@@ -430,53 +430,53 @@ mod tests {
         AluOp::Eq,
     ];
 
-    fn stage_true(idx: usize, a: u32) -> u32 {
-        let (op1, val1, op2, op3, val3) = HASH_STAGES[idx];
+    fn stage_true(hash_stage_idx: usize, a: u32) -> u32 {
+        let (op1, val1, op2, op3, val3) = HASH_STAGES[hash_stage_idx];
         op2.apply(op1.apply(a, val1), op3.apply(a, val3))
     }
 
     // Constant operand pool for a stage: its own constant, its shift amount,
     // the shift-as-multiply value 2^s (so a Shl->Mul rewrite is reachable),
     // plus generic literals. `a` is prepended live per probe.
-    fn const_pool(idx: usize) -> Vec<u32> {
-        let (_o1, val1, _o2, _o3, val3) = HASH_STAGES[idx];
+    fn const_pool(hash_stage_idx: usize) -> Vec<u32> {
+        let (_o1, val1, _o2, _o3, val3) = HASH_STAGES[hash_stage_idx];
         vec![val1, val3, 1u32 << (val3 & 31), 0, 1, 2, 0xFFFF_FFFF]
     }
 
     /// True iff SOME program of <=2 ISA ops (binary SEARCH_OPS or one
-    /// MultiplyAdd) reproduces stage `idx` on EVERY probe. The 3-op reference
+    /// MultiplyAdd) reproduces stage `hash_stage_idx` on EVERY probe. The 3-op reference
     /// decomposition is always reachable at depth 3, so if this returns false
     /// the stage provably needs >=3 ops over this ISA.
-    fn two_op_program_exists(idx: usize, probes: &[u32]) -> bool {
-        let consts = const_pool(idx);
-        let n0 = 1 + consts.len(); // operand pool size (index 0 = a)
-        let bases: Vec<Vec<u32>> = probes
+    fn two_op_program_exists(hash_stage_idx: usize, probes: &[u32]) -> bool {
+        let consts = const_pool(hash_stage_idx);
+        let base_operand_count = 1 + consts.len(); // operand pool size (index 0 = a)
+        let probe_operands: Vec<Vec<u32>> = probes
             .iter()
             .map(|&a| {
-                let mut v = Vec::with_capacity(n0);
+                let mut v = Vec::with_capacity(base_operand_count);
                 v.push(a);
                 v.extend_from_slice(&consts);
                 v
             })
             .collect();
-        let targets: Vec<u32> = probes.iter().map(|&a| stage_true(idx, a)).collect();
+        let targets: Vec<u32> = probes.iter().map(|&a| stage_true(hash_stage_idx, a)).collect();
 
-        let mad = |x: u32, y: u32, z: u32| x.wrapping_mul(y).wrapping_add(z);
+        let multiply_add = |x: u32, y: u32, z: u32| x.wrapping_mul(y).wrapping_add(z);
 
         // 0-op: an operand already equals the stage output on all probes.
-        for i in 0..n0 {
-            if bases.iter().zip(&targets).all(|(b, &t)| b[i] == t) {
+        for i in 0..base_operand_count {
+            if probe_operands.iter().zip(&targets).all(|(operands, &target)| operands[i] == target) {
                 return true;
             }
         }
         // 1-op: binary
         for &op in SEARCH_OPS.iter() {
-            for i in 0..n0 {
-                for j in 0..n0 {
-                    if bases
+            for i in 0..base_operand_count {
+                for j in 0..base_operand_count {
+                    if probe_operands
                         .iter()
                         .zip(&targets)
-                        .all(|(b, &t)| op.apply(b[i], b[j]) == t)
+                        .all(|(operands, &target)| op.apply(operands[i], operands[j]) == target)
                     {
                         return true;
                     }
@@ -484,13 +484,13 @@ mod tests {
             }
         }
         // 1-op: MultiplyAdd
-        for i in 0..n0 {
-            for j in 0..n0 {
-                for k in 0..n0 {
-                    if bases
+        for i in 0..base_operand_count {
+            for j in 0..base_operand_count {
+                for k in 0..base_operand_count {
+                    if probe_operands
                         .iter()
                         .zip(&targets)
-                        .all(|(b, &t)| mad(b[i], b[j], b[k]) == t)
+                        .all(|(operands, &target)| multiply_add(operands[i], operands[j], operands[k]) == target)
                     {
                         return true;
                     }
@@ -498,47 +498,47 @@ mod tests {
             }
         }
 
-        // Enumerate all first-op specs (t1 lands at extended index n0).
+        // Enumerate all first-op specs (t1 lands at extended index base_operand_count).
         enum Spec {
-            Bin(AluOp, usize, usize),
-            Mad(usize, usize, usize),
+            Binary(AluOp, usize, usize),
+            MultiplyAdd(usize, usize, usize),
         }
-        let mut firsts: Vec<Spec> = Vec::new();
+        let mut first_op_specs: Vec<Spec> = Vec::new();
         for &op in SEARCH_OPS.iter() {
-            for i in 0..n0 {
-                for j in 0..n0 {
-                    firsts.push(Spec::Bin(op, i, j));
+            for i in 0..base_operand_count {
+                for j in 0..base_operand_count {
+                    first_op_specs.push(Spec::Binary(op, i, j));
                 }
             }
         }
-        for i in 0..n0 {
-            for j in 0..n0 {
-                for k in 0..n0 {
-                    firsts.push(Spec::Mad(i, j, k));
+        for i in 0..base_operand_count {
+            for j in 0..base_operand_count {
+                for k in 0..base_operand_count {
+                    first_op_specs.push(Spec::MultiplyAdd(i, j, k));
                 }
             }
         }
 
-        let m = n0 + 1;
-        let get = |b: &[u32], t1: u32, i: usize| -> u32 {
-            if i < n0 {
-                b[i]
+        let extended_operand_count = base_operand_count + 1;
+        let operand_at = |operands: &[u32], t1: u32, i: usize| -> u32 {
+            if i < base_operand_count {
+                operands[i]
             } else {
                 t1
             }
         };
 
-        for f in &firsts {
+        for first_op in &first_op_specs {
             // second op binary
             for &op in SEARCH_OPS.iter() {
-                for i in 0..m {
-                    for j in 0..m {
-                        let ok = bases.iter().zip(&targets).all(|(b, &t)| {
-                            let t1 = match *f {
-                                Spec::Bin(o, a1, a2) => o.apply(b[a1], b[a2]),
-                                Spec::Mad(a1, a2, a3) => mad(b[a1], b[a2], b[a3]),
+                for i in 0..extended_operand_count {
+                    for j in 0..extended_operand_count {
+                        let ok = probe_operands.iter().zip(&targets).all(|(operands, &target)| {
+                            let t1 = match *first_op {
+                                Spec::Binary(inner_op, a1, a2) => inner_op.apply(operands[a1], operands[a2]),
+                                Spec::MultiplyAdd(a1, a2, a3) => multiply_add(operands[a1], operands[a2], operands[a3]),
                             };
-                            op.apply(get(b, t1, i), get(b, t1, j)) == t
+                            op.apply(operand_at(operands, t1, i), operand_at(operands, t1, j)) == target
                         });
                         if ok {
                             return true;
@@ -547,15 +547,15 @@ mod tests {
                 }
             }
             // second op MultiplyAdd
-            for i in 0..m {
-                for j in 0..m {
-                    for k in 0..m {
-                        let ok = bases.iter().zip(&targets).all(|(b, &t)| {
-                            let t1 = match *f {
-                                Spec::Bin(o, a1, a2) => o.apply(b[a1], b[a2]),
-                                Spec::Mad(a1, a2, a3) => mad(b[a1], b[a2], b[a3]),
+            for i in 0..extended_operand_count {
+                for j in 0..extended_operand_count {
+                    for k in 0..extended_operand_count {
+                        let ok = probe_operands.iter().zip(&targets).all(|(operands, &target)| {
+                            let t1 = match *first_op {
+                                Spec::Binary(inner_op, a1, a2) => inner_op.apply(operands[a1], operands[a2]),
+                                Spec::MultiplyAdd(a1, a2, a3) => multiply_add(operands[a1], operands[a2], operands[a3]),
                             };
-                            mad(get(b, t1, i), get(b, t1, j), get(b, t1, k)) == t
+                            multiply_add(operand_at(operands, t1, i), operand_at(operands, t1, j), operand_at(operands, t1, k)) == target
                         });
                         if ok {
                             return true;
@@ -600,10 +600,10 @@ mod tests {
             x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
             probes.push(x);
         }
-        for &idx in &[1usize, 3, 5] {
+        for &hash_stage_idx in &[1usize, 3, 5] {
             assert!(
-                !two_op_program_exists(idx, &probes),
-                "unexpected <=2-op program for non-affine stage {idx}; \
+                !two_op_program_exists(hash_stage_idx, &probes),
+                "unexpected <=2-op program for non-affine stage {hash_stage_idx}; \
                  the per-stage 3-op bound must be revisited"
             );
         }
@@ -615,10 +615,10 @@ mod tests {
     /// true boundary of the real function.
     #[test]
     fn hashseg_composition_matches_myhash() {
-        let mut x = 0xA5A5_A5A5u32;
+        let mut lcg_state = 0xA5A5_A5A5u32;
         for i in 0..300_000u32 {
-            let a = if i < 8 { i } else { x };
-            x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let a = if i < 8 { i } else { lcg_state };
+            lcg_state = lcg_state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
             assert_eq!(
                 hashseg::fused_hash(a),
                 myhash(a),
@@ -636,23 +636,23 @@ mod tests {
     ///   parity = (d * 0x80048000 + 0x23628000) >> 31
     ///
     /// Why it must hold universally (not just on sampled inputs): with
-    /// e = 9d + C4, parity = e0 ^ e16 ^ C5_0 and e0 = d0 ^ C4_0 = d0 ^ 1, so
+    /// e = 9d + STAGE4_ADD_CONSTANT, parity = e0 ^ e16 ^ C5_0 and e0 = d0 ^ C4_0 = d0 ^ 1, so
     /// parity = d0 ^ e16 (the two odd constants cancel). In
-    /// t = d*(2^31 + 9*2^15) + (C4*2^15) mod 2^32, the 2^15-scaled term is
-    /// exactly (9d + C4)*2^15 mod 2^32 whose bit31 is e16 (a power-of-two
+    /// t = d*(2^31 + 9*2^15) + (STAGE4_ADD_CONSTANT*2^15) mod 2^32, the 2^15-scaled term is
+    /// exactly (9d + STAGE4_ADD_CONSTANT)*2^15 mod 2^32 whose bit31 is e16 (a power-of-two
     /// scaling moves bits without carries), and the 2^31*d term is d0<<31,
     /// which adds into bit 31 with no possible carry from lower bits. Hence
     /// bit31(t) = e16 ^ d0 = parity for EVERY d.
     #[test]
     fn parity_from_d_is_bit_exact() {
-        let mut x = 0x1357_9BDFu32;
+        let mut lcg_state = 0x1357_9BDFu32;
         for i in 0..1_000_000u32 {
             let a = if i < 16 {
                 0x0101_0101u32.wrapping_mul(i)
             } else {
-                x
+                lcg_state
             };
-            x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            lcg_state = lcg_state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
             // d as it occurs in the real chain, plus arbitrary d values.
             let d_real = hashseg::f23(hashseg::stage1(hashseg::stage0(a)));
             assert_eq!(
@@ -674,14 +674,14 @@ mod tests {
     /// supplies the C5_0 = 1 flip: parity = e0 ^ e16 ^ 1).
     #[test]
     fn parity_from_e_is_bit_exact() {
-        let mut x = 0xFEED_F00Du32;
+        let mut lcg_state = 0xFEED_F00Du32;
         for i in 0..1_000_000u32 {
             let e = if i < 16 {
                 i.wrapping_mul(0x0001_0001)
             } else {
-                x
+                lcg_state
             };
-            x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            lcg_state = lcg_state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
             assert_eq!(
                 hashseg::parity_from_e(e),
                 hashseg::stage5(e) & 1,
@@ -700,16 +700,16 @@ mod tests {
     #[test]
     fn cross_stage_fusion_is_bit_exact() {
         // Derived constants (see the algebra above).
-        let c2 = HASH_STAGES[2].1;
-        let c3 = HASH_STAGES[3].1;
-        let k_p = 1u32.wrapping_add(1 << 5); // 1 + 2^5 = 33 (stage2's multiplier)
-        let k_q = k_p.wrapping_mul(1 << 9); // 33 * 2^9 (stage3's <<9 folded in)
-        let a_p = c2.wrapping_add(c3); // C2 + C3
-        let a_q = c2.wrapping_shl(9); // C2 << 9  (mod 2^32)
+        let stage2_constant = HASH_STAGES[2].1;
+        let stage3_constant = HASH_STAGES[3].1;
+        let f23_p_multiplier = 1u32.wrapping_add(1 << 5); // 1 + 2^5 = 33 (stage2's multiplier)
+        let f23_q_multiplier = f23_p_multiplier.wrapping_mul(1 << 9); // 33 * 2^9 (stage3's <<9 folded in)
+        let f23_p_constant = stage2_constant.wrapping_add(stage3_constant); // C2 + C3
+        let f23_q_constant = stage2_constant.wrapping_shl(9); // C2 << 9  (mod 2^32)
 
         // Recompute myhash with stage2+stage3 replaced by the fused form.
         let cross_fused = |mut a: u32| -> u32 {
-            // stage0 (affine): a*(1+2^12) + C0
+            // stage0 (affine): a*(1+2^12) + STAGE0_ADD_CONSTANT
             a = a
                 .wrapping_mul(1u32.wrapping_add(1 << 12))
                 .wrapping_add(HASH_STAGES[0].1);
@@ -717,10 +717,10 @@ mod tests {
             let (o1, v1, o2, o3, v3) = HASH_STAGES[1];
             a = o2.apply(o1.apply(a, v1), o3.apply(a, v3));
             // stage2 + stage3 fused: p = 33a + (C2+C3), q = 33*512*a + C2<<9
-            let p = a.wrapping_mul(k_p).wrapping_add(a_p);
-            let q = a.wrapping_mul(k_q).wrapping_add(a_q);
+            let p = a.wrapping_mul(f23_p_multiplier).wrapping_add(f23_p_constant);
+            let q = a.wrapping_mul(f23_q_multiplier).wrapping_add(f23_q_constant);
             a = p ^ q;
-            // stage4 (affine): a*(1+2^3) + C4
+            // stage4 (affine): a*(1+2^3) + STAGE4_ADD_CONSTANT
             a = a
                 .wrapping_mul(1u32.wrapping_add(1 << 3))
                 .wrapping_add(HASH_STAGES[4].1);
@@ -736,15 +736,15 @@ mod tests {
             255,
             1 << 31,
             0xFFFF_FFFF,
-            c2,
-            c3,
+            stage2_constant,
+            stage3_constant,
             0xDEAD_BEEF,
             0xCAFE_BABE,
         ];
-        let mut x = 0x1234_5678u32;
+        let mut lcg_state = 0x1234_5678u32;
         for _ in 0..500_000 {
-            x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-            samples.push(x);
+            lcg_state = lcg_state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            samples.push(lcg_state);
         }
         for &a in &samples {
             assert_eq!(

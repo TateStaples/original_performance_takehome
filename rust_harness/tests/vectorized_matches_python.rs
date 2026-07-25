@@ -14,9 +14,9 @@ fn fixture_path(name: &str) -> String {
     format!("{}/tests/fixtures/{name}.json", env!("CARGO_MANIFEST_DIR"))
 }
 
-fn run(fixture: &Fixture, pipeline_width: usize) -> Machine {
-    let p = &fixture.params;
-    let program = build_kernel_vectorized(p.batch_size, p.rounds, pipeline_width);
+fn run_vectorized_kernel(fixture: &Fixture, pipeline_width: usize) -> Machine {
+    let params = &fixture.params;
+    let program = build_kernel_vectorized(params.batch_size, params.rounds, pipeline_width);
     let mut machine = Machine::new(fixture.mem_in.clone(), program);
     machine.enable_debug = false; // this kernel doesn't emit debug slots (see module docs)
     machine.run(); // header-load pause
@@ -27,21 +27,21 @@ fn run(fixture: &Fixture, pipeline_width: usize) -> Machine {
 #[test]
 fn small_fixture_pipeline_width_1() {
     let fixture = Fixture::load(fixture_path("small"));
-    let machine = run(&fixture, 1);
+    let machine = run_vectorized_kernel(&fixture, 1);
     assert_eq!(machine.mem, fixture.mem_out);
 }
 
 #[test]
 fn small_fixture_pipeline_width_6() {
     let fixture = Fixture::load(fixture_path("small"));
-    let machine = run(&fixture, 6);
+    let machine = run_vectorized_kernel(&fixture, 6);
     assert_eq!(machine.mem, fixture.mem_out);
 }
 
 #[test]
 fn baseline_fixture_pipeline_width_1() {
     let fixture = Fixture::load(fixture_path("baseline"));
-    let machine = run(&fixture, 1);
+    let machine = run_vectorized_kernel(&fixture, 1);
     assert_eq!(machine.mem, fixture.mem_out);
     println!("pipeline_width=1: {} cycles", machine.cycle);
 }
@@ -49,7 +49,7 @@ fn baseline_fixture_pipeline_width_1() {
 #[test]
 fn baseline_fixture_pipeline_width_6() {
     let fixture = Fixture::load(fixture_path("baseline"));
-    let machine = run(&fixture, 6);
+    let machine = run_vectorized_kernel(&fixture, 6);
     assert_eq!(machine.mem, fixture.mem_out);
     println!("pipeline_width=6: {} cycles", machine.cycle);
 }

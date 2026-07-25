@@ -39,8 +39,8 @@ impl Scratch {
 
 impl std::ops::Add<u16> for Scratch {
     type Output = Scratch;
-    fn add(self, rhs: u16) -> Scratch {
-        Scratch(self.0 + rhs)
+    fn add(self, offset: u16) -> Scratch {
+        Scratch(self.0 + offset)
     }
 }
 
@@ -73,7 +73,7 @@ impl AluOp {
     /// `% 2**32` window, i.e. the result is 0).
     pub fn apply(self, a: u32, b: u32) -> u32 {
         const MOD: i64 = 1i64 << 32;
-        let wrap = |x: i64| x.rem_euclid(MOD) as u32;
+        let wrap = |wide_result: i64| wide_result.rem_euclid(MOD) as u32;
         match self {
             AluOp::Add => wrap(a as i64 + b as i64),
             AluOp::Sub => wrap(a as i64 - b as i64),
@@ -233,7 +233,7 @@ pub enum FlowSlot {
 /// One `debug` engine slot. Free (never advances the cycle counter) and
 /// ignored entirely when grading — but a live correctness check while
 /// developing, if a value trace is loaded into the `Machine` (see
-/// `machine::Machine::with_trace`).
+/// `machine::Machine::with_value_trace`).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum DebugSlot {
     /// Assert `scratch[loc] == trace[key]`.
@@ -426,11 +426,11 @@ mod tests {
 
     #[test]
     fn bundle_capacity_is_enforced_at_push_time() {
-        let mut b = Bundle::default();
+        let mut bundle = Bundle::default();
         for _ in 0..slot_limits::FLOW {
-            b.push_flow(FlowSlot::Halt).unwrap();
+            bundle.push_flow(FlowSlot::Halt).unwrap();
         }
-        let err = b.push_flow(FlowSlot::Halt).unwrap_err();
+        let err = bundle.push_flow(FlowSlot::Halt).unwrap_err();
         assert_eq!(err.engine, "flow");
     }
 }

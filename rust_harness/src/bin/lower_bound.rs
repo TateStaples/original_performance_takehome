@@ -84,7 +84,7 @@ fn main() {
                 },
             ),
         ] {
-            let t1 = Instant::now();
+            let schedule_start = Instant::now();
             let result = schedule(dag, cfg);
             let (peak, peak_cycle) = peak_register_pressure(dag, &result);
             let (words, _) = allocate_registers(dag, &result);
@@ -105,7 +105,7 @@ fn main() {
                     )
                 }
             );
-            eprintln!("scheduled in {:?}", t1.elapsed());
+            eprintln!("scheduled in {:?}", schedule_start.elapsed());
         }
     }
 }
