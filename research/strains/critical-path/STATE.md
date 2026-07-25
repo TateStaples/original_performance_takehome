@@ -197,3 +197,38 @@ H-008 re-closed with H-002 (see log).
   no dedicated agent needed; (c) reallocate this strain's iteration slot
   to flow-balance (H-018/H-019 attack the same 1073-floor slack from the
   slot-count side, which iter 3 confirms is the only live currency).
+
+- iter 4 (2026-07-25, fresh-angle probe -> reconciled with G-9, no
+  reopen): a data-dependent/probabilistic angle nobody had actually
+  MEASURED before (all prior work here is algebraic/static): given 256
+  walkers independently random-walking the same `forest_height=10` tree,
+  how often do walkers at level>=5 actually collide on the same node in
+  the same round? Measured over 20-30 fresh (unseeded, matching the
+  grader) instances: distinct-node counts track the birthday-paradox
+  balls-in-bins prediction within ~1% at every level (level 5: 32/32
+  always full; level 7: mean 111.6/128 slots; level 10 (leaf): mean
+  227/256, i.e. ~28 collisions/round). Confirms `2^level < batch_size`
+  holds through level 7 (128 < 256), meaning a full STATIC broadcast
+  table (the existing tournament-fold technique, not a new
+  collision-dependent mechanism) could in principle cover levels up to 7
+  unconditionally.
+  RECONCILED WITH G-9 (already closed, no reopen): this is exactly what
+  H-008 tested and rejected — "full-round L4 (and deeper) tournament
+  service" via `l4_gmin=(0,0)` (serve ALL groups via broadcast-fold
+  instead of gather) measured 1270 at the time, because the fold TREE
+  itself costs valu/flow ops proportional to level depth (a k-level
+  select-fold is O(2^k) ops), and valu/flow are the SATURATED engines
+  while load (what gather uses) has ~90 cycles of slack. Extending
+  broadcast-fold service moves work FROM the underused engine TO the
+  saturated one — backwards from what's needed. Re-confirmed AT THE
+  CURRENT 1038-cycle mainline via the standing l4_gmin sweep this
+  session: (7,30)=1044, (8,30)=1041, (9,30)=1038 [default] — cycles
+  increase monotonically as the threshold serves MORE groups via
+  broadcast-fold, the identical direction and shape as H-008's original
+  rejection, just at a much lower absolute number. G-9 stands; no reopen
+  warranted. The collision-rate MEASUREMENT itself is a valuable, novel,
+  confirmed data point (nobody had actually run this probability
+  calculation against real generated instances before) even though the
+  "extend broadcast coverage" action it naively suggests is a
+  already-closed direction — filed here so a future session doesn't
+  re-propose the same thing without checking G-9 first.
