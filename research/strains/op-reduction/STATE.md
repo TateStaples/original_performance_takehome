@@ -17,13 +17,28 @@ adjacent-segment cut of the 11/12-op hash is now pinned at depth
 current-1 (forward-exhaustive to k<=4, MITM shapes at k=5). The strain
 has no remaining single-segment shortening candidate; op-count relief
 must come from non-adjacent/global identities (SAT-class, P-8) or from
-outside the hash (load-side, scheduling).
+outside the hash (load-side, scheduling). H-025 (iter 6) CLOSED
+INCONCLUSIVE: CEGIS/z3 global synthesis at k=10 timed out (solver never
+reached SAT or UNSAT in a 20-minute budget) and, more importantly, the
+same encoding also timed out trying to reconfirm the KNOWN-good k=11
+form — i.e. the direct bit-blasted component-synthesis approach hits an
+infeasibility wall around k=4 regardless of restriction, well below
+k=10/11, so this is a genuine "tool doesn't scale here" result, not
+evidence about whether a 10-op form exists. See iteration log for full
+detail; P-8/the SAT-class global attack remains formally open, but this
+specific tool (Z3 QF_BV component synthesis at 32-bit width) is now
+known not to be the way to close it without a fundamentally different
+encoding (much smaller bit-width abstraction + lifting, or a
+syntax-guided/enumerative synthesizer instead of raw existential SMT).
 
 ## Assigned
 - H-003 (iter 1): DONE — see iteration log.
 - H-015 (iter 2): DONE — implemented, strain frontier 1106; see log.
 - H-004 (iter 3): CLOSED (subsumed by idx_race) -> G-15.
 - H-016 (iter 4): DONE — closed negative; see iteration log.
+- H-025 (iter 6): DONE — CEGIS/z3 k=10 synthesis attempt, closed
+  inconclusive (solver infeasibility, not a proof either way); see
+  iteration log.
 Queued: H-012 (floor recalibration).
 
 ## Iteration log
@@ -198,6 +213,93 @@ Queued: H-012 (floor recalibration).
   (the kf=4 gap) and P-8 (global/non-compositional attack) for exactly
   what a reopen would require.
 
+- 2026-07-25 iter 6 (H-025, time-boxed CEGIS/z3 attempt): built a
+  component-based synthesis encoder (`cegis.py`, scratch-only, not
+  committed to the repo — reproducible from this entry) targeting the
+  global/non-compositional attack flagged by P-8: does a k-op program
+  exist, for k=10, over the machine's real op vocabulary (multiply_add
+  as src*K+C; add/sub/xor/and/or each either src OP imm-const OR src OP
+  another pool value, selected by a free Bool; shl/shr as src<<S with S
+  a bounded-<32 constant), with per-op operand-source selectors (Z3 Int,
+  ranging over {input, all prior results}) and per-op constants (free
+  32-bit BitVecs) all existentially quantified — solved via CEGIS
+  (seed concrete IO pairs, solve, fast-verify candidate against fresh
+  random inputs in plain Python, add any counterexample, repeat).
+  VALIDATION of the tooling itself (before trusting any TIMEOUT/UNSAT
+  read from it): ground-truth myhash + the current 11-op fused form
+  cross-checked bit-exact on 200K random inputs (0 mismatches); the
+  synthesis encoder's extract-and-verify round trip confirmed correct
+  on two trivial synthetic targets (a 1-op x^C form found+verified at
+  k=1, a 2-op madd-then-xor form found+verified at k=2) — the machinery
+  itself is not the source of the negative results below.
+  SCALING CALIBRATION (this is the key finding): UNSAT in <3s up to
+  k=3 (0.02s/k=1, 0.3s/k=2, ~2s/k=3, all with 13-15 concrete examples).
+  At k=4 the solver already stops resolving: TIMEOUT (result=unknown)
+  at 30s, 90s, and 180s budgets, and this persisted even under HEAVY
+  restriction (kind vocabulary cut from 8 ops down to just the 3 the
+  current hash actually uses [MADD,XOR,SHR], operand-source selectors
+  windowed to the most recent 1-2 pool entries instead of the full
+  pool, down to as few as 1 seed example + 7 structured edge cases).
+  None of these narrowings got k=4 to resolve within the tried budgets.
+  Sanity-checked the OTHER direction too: asked the SAME general
+  encoder to reconfirm the k=11 form that we KNOW is satisfiable (it's
+  the current fused hash, which fits this exact vocabulary op-for-op) —
+  TIMEOUT after 600s (2x300s rounds, 19 examples), and even restricting
+  kind to just {MADD,XOR,SHR} (unrestricted sources) still TIMEOUT at
+  60s. So the solver could not even re-find a solution it already had,
+  within these budgets — this is not a "k=10 is unusually hard" signal,
+  it's "this encoding+solver combination hits a wall around k=4,
+  independent of whether the target is SAT or UNSAT."
+  MAIN RUN: k=10, full general vocabulary (all 8 kinds, unrestricted
+  operand-source selectors), 12 random + 7 structured seed examples (19
+  total), CEGIS loop with 300s per-solve chunks, 1200s (20 min) total
+  wall-clock cap as specified in the task brief. Result: 4 solver
+  rounds, EVERY round returned Z3 `unknown` (internal solver timeout,
+  not UNSAT), 0 candidates ever extracted (so 0 counterexample
+  refinements — the loop never got past round 1's initial example set).
+  STATUS: TIMEOUT, fully inconclusive — no SAT candidate found, no UNSAT
+  proof obtained, at any point in the run.
+  COVERAGE CHARACTERIZATION (per the task's honesty requirement): this
+  run explored ZERO complete regions of the k=10 search space in any
+  exhaustive sense. Z3's `unknown` on a bit-blasted QF_BV existential
+  query does not mean "some region was ruled out" — internally it means
+  the SAT solver's search (over an unspecified, solver-internal
+  variable/clause exploration order) did not terminate in the allotted
+  time; no fraction of the space can be honestly quoted as "covered."
+  The only defensible statement is: this specific encoding, on this
+  specific machine, with a 20-minute budget, did not decide k=10 either
+  way, and the calibration runs above show that outcome was expected
+  going in (the tool's practical ceiling is ~k=3, not proximity to
+  k=10/11). No positive or negative claim about whether a 10-op form
+  exists is licensed by this run.
+  WHY it likely hits a wall here (diagnosis, not proven): multiply_add's
+  src*K with BOTH operands effectively free (K is a fully symbolic
+  32-bit BitVec) forces Z3 to bit-blast a genuine symbolic 32x32
+  multiplier at every op regardless of whether that op's kind selector
+  ends up choosing MADD (the ITE/mux structure builds the term
+  unconditionally); combined with per-op source and kind selectors that
+  are also free variables, the search space of *syntactically distinct
+  but semantically irrelevant* assignments swamps the solver long
+  before it can exploit any real algebraic structure. This matches the
+  general literature experience that component-based/CEGIS synthesis
+  over full 32-bit bit-vector datapaths with unrestricted multiply is
+  hard even at small program lengths without either (a) a much smaller
+  bit-width abstraction with counterexample-guided lifting to 32 bits,
+  or (b) a syntax-guided/enumerative synthesizer with invertibility-
+  condition pruning (the style Souper/other superoptimizers use) rather
+  than raw existential bit-blasting.
+  Kernel port: NONE (no candidate was ever produced). perf_takehome.py
+  and dev.py untouched, per task instructions.
+  VERDICT: H-025 closed INCONCLUSIVE (tool-infeasibility, not a
+  disproof). The k=10 question is still formally open; what's now known
+  is that plain CEGIS-over-Z3-QF_BV at 32-bit width is NOT a viable way
+  to answer it without a materially different encoding strategy (see
+  P-11). Recommend NOT re-running this exact approach without first
+  either (a) validating a bit-width-reduced version (e.g. 8/12-bit
+  hash-shaped toy function first) to confirm the encoding scales at all
+  before spending wall-clock on 32-bit, or (b) switching tools entirely
+  to an enumerative/invertibility-based superoptimizer.
+
 ## Proposed hypotheses
 (agent appends; driver promotes to backlog.md)
 - P-1 [op-reduction]: C5-pre-xor value domain. Pre-xor all 2047 tree node
@@ -348,3 +450,20 @@ Queued: H-012 (floor recalibration).
     someone finds a flaw in this re-derivation — the risk (re-deriving
     every tree-layout constant, uncertain c5_prexor interaction) is not
     worth spending against a benefit that no longer looks real.
+- P-11 [op-reduction, iter-6, H-025 follow-up]: P-8's global synthesis
+  attack is still open, but plain Z3 QF_BV component-based CEGIS at
+  32-bit width is now known NOT to scale for it (H-025: solver hits
+  `unknown` around k=4, can't even reconfirm a known-SAT k=11). A
+  reopen should NOT just re-run more wall-clock on the same encoding —
+  that's very unlikely to help given the k=4 wall and the failure to
+  reconfirm k=11. Two concrete alternative directions if this strain
+  gets picked up again: (a) bit-width-reduced synthesis — synthesize
+  against an 8- or 12-bit truncated/toy analog of the hash first to
+  validate an encoding scales at all, then use counterexample-guided
+  lifting to 32 bits, rather than attempting 32-bit existential search
+  cold; (b) an enumerative/invertibility-condition-based superoptimizer
+  (Souper-style) instead of raw bit-blasted SMT — constrains multiply_add
+  and shift's symbolic operands with cheap forward/backward propagation
+  rather than letting Z3 discover the whole structure by search. Either
+  is a materially different (and nontrivial, multi-hour-plus) effort;
+  do not treat "add more solver timeout" as a fix.

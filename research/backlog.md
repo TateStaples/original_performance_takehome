@@ -406,7 +406,7 @@ further gain found]
   kept as control. Retune: optimum unmoved. Dispatch flipped; grader 9/9.
 - log: 2026-07-23 promoted; iter 5 ACCEPTED.
 
-### H-025 [strain: op-reduction] [status: open]
+### H-025 [strain: op-reduction] [status: closed-inconclusive]
 - statement: (H-016's P-8) global synthesis attack on "the 11-op hash in
   10": CEGIS/SAT over the machine op set with free 32-bit constants —
   counterexample-guided: synthesize candidate on a few IO pairs (z3 bitvec),
@@ -414,8 +414,35 @@ further gain found]
   tool class for hash op removal; adjacent-segment/MITM spaces exhausted.
 - predicted: -68 if a 10-op form exists (unknown); high risk of UNSAT-slow.
 - cost: L. depends: none (z3 installable).
-- result:
-- log: 2026-07-23 promoted from op-reduction P-8.
+- result: CLOSED INCONCLUSIVE (time-boxed, 2026-07-25). Built a
+  component-based CEGIS synthesizer (kind selector + operand-source
+  selectors + free 32-bit constants, all existentially quantified over
+  Z3 QF_BV; myhash + the current 11-op fused form cross-checked
+  bit-exact on 200K samples first; encoder round-trip validated on 2
+  trivial synthetic targets). Scaling calibration: UNSAT in <3s through
+  k=3; k=4 already TIMEOUT (result=unknown) at 30-180s budgets even
+  under heavy restriction (kind vocab cut to the 3 actually-used ops,
+  windowed operand sources, as few as 8 examples). Cross-check: the SAME
+  encoder also TIMED OUT trying to reconfirm the KNOWN-satisfiable k=11
+  form (600s, full generality; still TIMEOUT at 60s restricted to
+  MADD/XOR/SHR) — i.e. the tool can't even re-find a solution it
+  already has. Main run: k=10, full vocabulary, 19 seed examples, 20 min
+  (1200s) budget as specified -> 4 solver rounds, every round Z3
+  `unknown`, 0 candidates ever extracted, 0 counterexample refinements
+  possible. STATUS: TIMEOUT, fully inconclusive (no SAT found, no UNSAT
+  proof; "unknown" from a bit-blasted solver licenses no coverage
+  claim). Diagnosis: multiply_add's fully-symbolic constant forces an
+  unconditional symbolic 32x32 multiplier per op regardless of which
+  kind ends up selected, and combined with free source/kind selectors
+  this swamps the solver well before k=10 -- the practical ceiling for
+  this direct encoding is ~k=3, not k=10/11. See op-reduction/STATE.md's
+  iter-6 log entry for full detail and P-11 for what a real reopen would
+  need (bit-width-reduced synthesis + CEGIS lifting, or an
+  enumerative/invertibility-based superoptimizer instead of raw
+  existential bit-blasting -- NOT just more solver timeout).
+  perf_takehome.py/dev.py untouched.
+- log: 2026-07-23 promoted from op-reduction P-8; 2026-07-25 closed
+  inconclusive, see result.
 
 ### H-026 [strain: cross] [status: accepted]
 - statement: mem_prime — per-level in-mem C5-priming of deep gather levels
