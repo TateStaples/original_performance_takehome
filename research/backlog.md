@@ -98,8 +98,8 @@ strain STATE.md and the driver promotes them here.
 - result:
 - log: 2026-07-23 opened.
 
-### H-007 [strain: flow-balance] [status: open, premise re-checked, NOT
-attempted this session]
+### H-007 [strain: flow-balance] [status: closed, searched, no material
+gap found (2026-07-25)]
 - statement: Move a schedule-aware SUBSET of tournament folds from valu madd
   to flow vselect — not whole levels (graveyard G-4: full L4-on-flow lost by
   serialization) but per-fold placement chosen by which engine is the cycle's
@@ -122,8 +122,33 @@ attempted this session]
   pass — it's a research task (find candidates), not a quick flag test,
   and deserves focused attention rather than being rushed. Recommend as
   the top pick for a dedicated follow-up session.
-- log: 2026-07-23 opened; premise re-checked same day post-H-029, left
-  open pending fold-site identification.
+- FOLD-SITE ARCHAEOLOGY DONE 2026-07-25: read every bare (non-`emit_any`)
+  `multiply_add`/`vsel` call in the hash/tournament/idx code. Findings:
+  (1) hash-stage multiply_adds are genuinely single-engine (runtime value
+  x non-trivial constant, no select-shaped alternative) — already settled
+  by H-004/G-15's arithmetic (madd->alu-adds nets +70). (2) `b3l_fold_diffs`'s
+  `E + b3*D` combine IS select-shaped (b3 exact 0/1) but its arms are
+  per-instance runtime-folded winners, not static broadcast tables, so
+  materializing a free "odd" arm costs an extra vec-add that likely erases
+  the gain — checked, no zero-cost alternative. (3) L2/L3 combining selects
+  are already wired into `sel_race` and measured negative (G-14). (4) L4
+  pair-tournament q0/q1/winner selects are genuinely unraced, but their
+  conds are raw 0/2/0/4/0/8 masks (not shifted to exact 0/1), so racing
+  needs an extra alu shift first — untested but low-value given G-14's
+  consistent pattern against reverse races; a ~1hr confirmatory test would
+  formally close this corner if anyone wants it done. (5) The forced-alu
+  hash xor/shift ops (`avec(...)`, force_alu=True) were re-tested
+  un-forced under the current 1043-cycle engine mix: **1105 cycles, a
+  clean +62 regression** — confirms forcing alu to reserve valu for
+  madds is still correct; NOT a gap.
+  CLOSING: no material fold-site gap survives scrutiny. The existing
+  racing mechanisms (dual_fold/race_sel/race_idx_madd/race_leaf/emit_any)
+  already cover everything algebraically eligible; the two untested
+  corners (#2, #4) are low-probability-of-payoff and cheap enough to
+  reopen individually if someone wants them formally closed rather than
+  reasoned-closed.
+- log: 2026-07-23 opened; premise re-checked same day post-H-029; 2026-07-25
+  fold-site archaeology completed, closed with no material gap found.
 
 ### H-008 [strain: critical-path] [status: rejected -> graveyard G-9]
 - statement: Full-round L4 (and L5) tournament service once parity-early
@@ -136,14 +161,31 @@ attempted this session]
   select chain on saturated valu/flow, not parity latency. See G-9.
 - log: 2026-07-23 opened.
 
-### H-009 [strain: flow-balance] [status: open]
+### H-009 [strain: flow-balance] [status: rejected on evidence, not
+implemented]
 - statement: Cross-round software pipelining of the hash itself: split the
   12-op hash so stages of round r+1 interleave with stages of round r within
   a group (beyond what group-skewing already gives), reducing pool pressure
   and exposing more same-cycle ILP.
 - predicted: -10..-30 cyc. cost: L. depends: none.
-- result:
-- log: 2026-07-23 opened.
+- result: REJECTED 2026-07-25 via `tools/sched_profile.py --detail 15`
+  against the current 1043-cycle mainline, without a full implementation
+  attempt (which would have been cost-L for a premise the profile directly
+  refutes). 990/1043 cycles (95%) already run at full 6/6 valu occupancy —
+  the steady-state mid-kernel region has essentially ZERO empty valu slots
+  to expose more ILP into; the gap-blocker histogram's "blocked-on address
+  class" shows the dominant RAW-hazard producers (valu:^, valu:multiply_add)
+  cluster almost entirely in two regions: the setup ramp (22 empty slots)
+  and the final-round drain (r15 L4: 22, r14-15 L3/4: 13) plus the
+  store-drain tail (30) -- all structural pipeline-fill/pipeline-empty
+  boundary effects that cross-round software pipelining (an in-kernel,
+  steady-state technique) cannot address, not evidence of mid-kernel pool
+  contention. This is the same "latency-hiding doesn't help when the
+  binding constraint is throughput, not latency" pattern H-002/H-008/H-010
+  already established for the position-update side; H-009 is the hash-side
+  analog and fails for the identical structural reason.
+- log: 2026-07-23 opened; 2026-07-25 rejected via profiling evidence
+  (sched_profile.py), no implementation attempted.
 
 ### H-010 [strain: critical-path] [status: rejected -> graveyard G-13]
 - statement: Parity speculation: on rounds where the next level is served

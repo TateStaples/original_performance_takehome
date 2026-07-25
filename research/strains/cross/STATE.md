@@ -134,9 +134,14 @@ relief; the l4_gmin dial keeps absorbing valu relief into load relief
 at ~1 cyc/group (P-3 pattern held twice more this iteration).
 
 ## Follow-ups proposed (for the driver)
-- P-c1 [mainline flip]: verify + flip the 1053 stack (store_pair=True,
+- P-c1 [mainline flip] [DONE]: verify + flip the 1053 stack (store_pair=True,
   mem_prime=(5,), b3_last=(15,), b3l_diffs=True, l4_gmin=(12,30)) via
   the full gate. All flags default-off today; flip = dispatch kwargs.
+  DONE (dev.py/perf_takehome.py split): this stack is now baked in
+  unconditionally as perf_takehome.py's flag-free mainline (dev.py keeps
+  the flag-configurable form for sweeping). Superseded further by H-029's
+  idx_select flip (2026-07-25): l4_gmin retuned (12,30) -> (9,30),
+  mainline now 1043 (was 1053). Grader 9/9 green.
 - P-c2 [sweep]: add mem_prime {(),(5,)} x store_pair x b3_last
   {(),(15,)} x b3l_diffs x l4_gmin (dense epoch-1 27..32) x pools to
   the standing grid; the epoch-1 optimum moved 28 -> 30 under the
