@@ -445,8 +445,9 @@ further gain found]
 
 ### H-029 [strain: flow-balance] [status: accepted, MAINLINE DISPATCH FLIPPED
 2026-07-25 (l4_gmin=(9,30), idx_select ported into perf_takehome.py's
-steady-gather branch unconditionally): mainline 1053 -> 1043, grader 9/9,
-6 seeds + unseeded correct=true. See end of entry for the flip note.]
+steady-gather branch unconditionally): mainline 1053 -> 1043 -> 1041
+(composed with H-021's fold_flow tie-break, see H-030). grader 9/9,
+6-8 seeds + unseeded correct=true. See end of entry for the flip note.]
 [EXTERNAL ATTRIBUTION — see below]
 - statement: idx_select — select-vs-add for the gather-mode idx recurrence.
   NOT an in-house finding: ported from a third-party public solution to
@@ -518,3 +519,47 @@ steady-gather branch unconditionally): mainline 1053 -> 1043, grader 9/9,
   -> ported as flow-balance P-14 -> implemented and measured same
   session, -10 cyc verified. See flow-balance/STATE.md P-14 for full
   detail (mechanism, engine census at each step, follow-ups).
+
+### H-030 [strain: scheduler] [status: accepted, MAINLINE DISPATCH FLIPPED
+2026-07-25]
+- statement: re-sweep H-021's `tie_break` modes (dismissed as cycle-identical
+  under the ~1070-era engine mix) against the current post-H-029 mainline —
+  a lever measured neutral under an old op composition can become live once
+  the mainline's engine balance shifts (idx_select moved substantial work
+  from valu/alu onto flow, which is exactly what `tie_break="fold_flow"`
+  targets: whether exact retire-time TIES in `dual_fold`'s emit_any race
+  favor flow or valu).
+- predicted: uncertain (H-021 called this exhausted); small if real (a
+  tie-break only fires at exact-tie cycles, a narrow slice of placements).
+- cost: S (pure reordering — swap which encoding is listed first in
+  `dual_fold`'s `emit_any` call; zero new scratch, zero new ops).
+- result: ACCEPTED. `tie_break="fold_flow"` (flow-vselect listed first,
+  so ties resolve to flow instead of valu): **1043 -> 1041** (-2),
+  reproduced on 8 draws (seeds 1,2,3,4,7,42 + 2 unseeded) plus
+  `debug_compares=True`, both via `dev.py`/`tools/run_variant.py` and
+  directly against `perf_takehome.py`'s flag-free `build_kernel`. Grader
+  9/9 green. `tie_break="idx_alu"` alone gives 1042 (-1, smaller);
+  combining both is 1042 (worse than fold_flow alone — the two ties
+  interact, don't stack). l4_gmin neighbors (9,29)/(8,30)/(10,30)
+  re-checked under fold_flow: all >= 1041, (9,30) stays optimal.
+  Ported into perf_takehome.py by swapping the flow/valu encoding order
+  in `dual_fold` (no new flag machinery needed there — the file is
+  flag-free, so this is just the tie-break choice baked in directly).
+  `tools/run_variant.py`'s `BASE_KWARGS` updated to
+  `tie_break="fold_flow"` so dev.py-based sweeps track mainline.
+  A parallel investigation (depth-aware static tie-break using
+  `scheduler.tag`'s `(round, group)` as a proxy for remaining-rounds
+  priority, gating `dual_fold`/`race_idx_madd` toward flow/alu below a
+  threshold) reached 1042 at best and was DOMINATED by the simpler
+  `fold_flow` flag alone — the whole measurable effect traced to round 2
+  only; every other round (including the expected-interesting drain
+  rounds 12-15) contributed nothing, because the drain is latency-bound
+  with genuinely idle engines (no contention for a tie-break to resolve)
+  and the middle is triply-saturated (valu/alu/flow all busy enough that
+  reshuffling a tie just relabels who waits, per H-007's fold-site
+  archaeology reaching the same conclusion independently). That
+  depth-aware code was NOT ported (dominated by the simpler win); see
+  scheduler/STATE.md for the full writeup if a future session wants a
+  documented negative to build on.
+- log: 2026-07-25 opened as a resweep of H-021 post-H-029; same-day
+  accepted and flipped.

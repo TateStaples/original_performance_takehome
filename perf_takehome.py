@@ -649,14 +649,21 @@ class KernelBuilder:
         odd_of: dict[int, int] = {}  # diff-vector addr -> odd-value vector addr
 
         def dual_fold(dst: int, cond: int, dv: int, ev: int) -> None:
-            # emit_any auto: first-fold on flow vselect only if it retires strictly before valu madd (valu first keeps ties; cond is raw 0/1 parity so forms are equivalent).
+            # emit_any auto: first-fold races flow vselect vs valu madd,
+            # placing whichever retires earlier (cond is raw 0/1 parity so
+            # the two forms are equivalent). Flow listed first so exact
+            # retire-time TIES favor the otherwise-idle flow engine instead
+            # of the saturated valu engine (H-021 tie_break="fold_flow",
+            # re-measured as a real -2 win once composed with the current
+            # idx_select/l4_gmin=(9,30) mainline, though it measured neutral
+            # under the older pre-idx_select engine mix).
             ov = odd_of[dv]
             writes = self._v(dst)
             encs = (
-                (("valu", ("multiply_add", dst, cond, dv, ev),
-                  self._v(cond) + self._v(dv) + self._v(ev), writes),),
                 (("flow", ("vselect", dst, cond, ov, ev),
                   self._v(cond) + self._v(ov) + self._v(ev), writes),),
+                (("valu", ("multiply_add", dst, cond, dv, ev),
+                  self._v(cond) + self._v(dv) + self._v(ev), writes),),
             )
             scheduler.emit_any(encs)
 
