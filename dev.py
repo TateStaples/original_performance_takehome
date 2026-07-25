@@ -91,7 +91,12 @@ class ListScheduler:
     default, but `ignore_mem_read_hazard` lets a caller that can prove its
     write's address range is statically disjoint from every prior read's
     range skip it (H-031: the final result vstores target a memory range
-    the kernel's gathers never touch).
+    the kernel's gathers never touch). Symmetrically, `ignore_mem_write_hazard`
+    lets a mem_read skip the RAW-style gate against prior mem writes when
+    its address range is statically disjoint from every prior write's range
+    (H-031b: mem_prime's deeper-gather-level priming loads target tree
+    levels strictly below the pair-tournament's primed level, so they never
+    need to wait on that priming's stores).
 
     Placement scans start from a per-engine `hint` = first cycle known to
     possibly have a free slot on that engine (monotone, since slots only
@@ -119,7 +124,7 @@ class ListScheduler:
         self.trace: list[tuple[Any, ...]] | None = None
         self.tag: tuple[int, int] | None = None
 
-    def ready(self, reads: Iterable[int] = (), writes: Iterable[int] = (), mem_read: bool = False, mem_write: bool = False, min_cycle: int = 0, ignore_mem_read_hazard: bool = False) -> int:
+    def ready(self, reads: Iterable[int] = (), writes: Iterable[int] = (), mem_read: bool = False, mem_write: bool = False, min_cycle: int = 0, ignore_mem_read_hazard: bool = False, ignore_mem_write_hazard: bool = False) -> int:
         cycle = min_cycle
         lw = self.last_write
         lr = self.last_read
@@ -134,7 +139,7 @@ class ListScheduler:
             t = lr.get(addr, -1)
             if t > cycle:
                 cycle = t
-        if mem_read and self.last_mem_write_cycle + 1 > cycle:
+        if mem_read and not ignore_mem_write_hazard and self.last_mem_write_cycle + 1 > cycle:
             cycle = self.last_mem_write_cycle + 1
         if mem_write:
             t = self.last_mem_write_cycle + (0 if self.pair_writes else 1)
@@ -190,8 +195,8 @@ class ListScheduler:
                 h += 1
             self.first_free_cycle_hint[engine] = h
 
-    def emit(self, engine: Engine, slot: Slot, reads: Iterable[int] = (), writes: Iterable[int] = (), mem_read: bool = False, mem_write: bool = False, min_cycle: int = 0, ignore_mem_read_hazard: bool = False) -> int:
-        cycle = self.ready(reads, writes, mem_read, mem_write, min_cycle, ignore_mem_read_hazard)
+    def emit(self, engine: Engine, slot: Slot, reads: Iterable[int] = (), writes: Iterable[int] = (), mem_read: bool = False, mem_write: bool = False, min_cycle: int = 0, ignore_mem_read_hazard: bool = False, ignore_mem_write_hazard: bool = False) -> int:
+        cycle = self.ready(reads, writes, mem_read, mem_write, min_cycle, ignore_mem_read_hazard, ignore_mem_write_hazard)
         cycle = self.find_free(engine, cycle)
         self.put(engine, slot, cycle, reads, writes, mem_read, mem_write)
         return cycle
@@ -507,6 +512,7 @@ class KernelBuilder:
         lazy_val_loads: bool = False,
         store_pair: bool = False,
         store_disjoint_region: bool = False,
+        mem_prime_ignore_l4_hazard: bool = False,
         debug_compares: bool = True,
     ) -> None:
         """
@@ -1600,7 +1606,8 @@ class KernelBuilder:
                     scheduler.emit("flow", ("add_imm", level_table_addr, fp, 2 ** d - 1 + off),
                            (fp,), (level_table_addr,))
                     scheduler.emit("load", ("vload", stage, level_table_addr),
-                           (level_table_addr,), self._v(stage), mem_read=True)
+                           (level_table_addr,), self._v(stage), mem_read=True,
+                           ignore_mem_write_hazard=mem_prime_ignore_l4_hazard)
                     vec("^", stage, stage, fused_hash_const_vecs["C5"])
                     scheduler.emit("store", ("vstore", level_table_addr, stage),
                            (level_table_addr,) + self._v(stage), (), mem_write=True)

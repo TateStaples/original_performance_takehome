@@ -263,3 +263,158 @@ drain's compute instead of trailing it.
   H-027/H-030's existing sweep since no new mechanism (unlike H-031's
   mem-hazard finding) was found to justify one; this region is treated as
   re-confirmed rather than newly closed.
+
+## H-031b: applied H-031's lens to the other 3 hazard-coarseness angles --
+one real (but negative) find, three confirmed no-ops. Mainline unchanged (1038).
+
+Instrumented `ListScheduler.ready()` directly (temporary stderr prints on
+every branch-fire, reverted before finishing) and ran the full mainline
+build (seed 1, and re-checked seeds 2-5/42/100 plus several non-mainline
+flag combos to vary the schedule shape) to get real fire counts instead of
+guessing.
+
+**Angle 1 (mem_read-vs-mem_write RAW gate, `ready()` line
+`if mem_read and self.last_mem_write_cycle + 1 > cycle`) -- fires ONCE in
+the entire build, and never during any real (round-loop) gather.** The one
+fire is `dev.py`'s mem_prime loop (H-026): its first vload (tree level
+d=5) waits on the just-emitted pair-tournament priming stores (tree level
+L4=4) -- cycle forced 11 -> 25. This is provably a false hazard the same
+way H-031 was: `build_kernel_scheduled` already asserts
+`all(L4 < d < forest_height + 1 for d in primed_gather_levels)` (line
+~994), and per-level tree-node ranges are disjoint by construction, so
+mem_prime's reads can never actually alias the pair-tournament's writes.
+
+Implemented as a new default-off flag to test it properly rather than
+leaving it as a hunch: `ListScheduler.ready`/`.emit` gained a symmetric
+`ignore_mem_write_hazard` param (mirrors H-031's `ignore_mem_read_hazard`
+but for the read side), wired at the mem_prime vload call site via new
+`build_kernel_scheduled` kwarg `mem_prime_ignore_l4_hazard` (default
+False). **Measured: 1038 -> 1039 (a 1-cycle REGRESSION), reproduced
+identically across seeds {1,2,3,4,5,42,100} and with `debug_compares=True`
+-- correct on all, but worse.** Relaxing the gate lets the vload land
+earlier, which perturbs the greedy schedule's downstream tie-breaks enough
+to cost 1 cycle elsewhere net. Verified-safe, verified-not-a-win: flag
+kept in tree, default off, as a negative control (matches H-024's
+`lazy_val_loads` precedent for documenting a correct-but-negative lever).
+
+**Angle 2 (mem_prime's own priming writes serializing against each
+other) -- confirmed NO-OP.** Instrumented the `mem_write` WAW branch
+(`t = last_mem_write_cycle + (0 if pair_writes else 1)`) the same way:
+zero fires anywhere inside the mem_prime loop. The only WAW fire in the
+whole build is in the unrelated final-store loop (two disjoint result
+stores co-locating into the same cycle under `store_pair` -- expected
+H-028 territory, not a new gap). mem_prime's 3-buffer round-robin
+(`stage = level_table + (k%3)*VLEN`) already spaces iterations far enough
+apart (via real per-address scratch RAW/WAW and engine throughput) that
+the coarse mem WAW gate never has to intervene. No lever found here.
+
+**Angle 3 (per-address `last_write`/`last_read` dicts falling back to a
+range coarser than necessary) -- confirmed NOT APPLICABLE.** Read every
+helper that builds `reads`/`writes` lists (`vec`, `vsel`, `madd`,
+`dual_fold`, `race_sel`, `race_copy`, `race_idx_madd`, `race_leaf`,
+`depth_first_fold`, the scalar per-lane gather loop, the tournament
+level-table load loop). Every one passes exactly the touched address
+range (either the precise `self._v(addr)` VLEN block for vector ops, or
+the single `addr+i` for per-lane scalar ops) -- no case of a whole-vector
+hazard computed when only a sub-range is touched, and no `min_cycle`/hint
+mechanism more conservative than the actual per-address maxima (the one
+`min_cycle` use, the final `pause`, is a legitimate ordering requirement,
+not a hazard proxy). This code has already been hardened through H-001..
+H-031; the per-address tracking is precise.
+
+**Angle 4 (`first_free_cycle_hint` staleness risk) -- confirmed SAFE, no
+bug.** Read `put()`'s hint-advance logic: the hint for an engine only
+advances past a cycle after re-scanning and confirming `engine_slot_counts
+>= SLOT_LIMITS` at every cycle in the newly-claimed range, and slot counts
+are monotone non-decreasing (ops are only ever added), so "cycles below
+the hint are full" is an invariant that, once established, cannot be
+invalidated later. Every code path that places an op (`emit`, `emit_any`'s
+committing loop, the `_sched_vec` alu/valu split) routes through
+`find_free`, which always clamps to the hint first -- there is no
+direct-`put()` path that could plant an op below a stale hint. Verified
+empirically too: instrumented a post-build assertion (every cycle below
+each engine's final hint must be at its slot limit) across the mainline
+config plus 7 shape-varying overrides (`alu_offload=False`,
+`store_pair=False`, `l4_gmin=(6,30)`, `vals_first="hash"`,
+`emit_order="stage_all"`, `skew=(6,2)`) -- zero violations in any of them.
+The docstring's claim ("optimization for scan speed, not correctness") is
+verified true; this is not a missed-earlier-placement bug.
+
+All temporary instrumentation reverted; `dev.py` diff after this session
+is exactly: the `ignore_mem_write_hazard` param + docstring note, the
+`mem_prime_ignore_l4_hazard` kwarg (default False), and its one call site
+-- all inert unless explicitly turned on via `tools/run_variant.py --set`.
+Mainline (`perf_takehome.py`, `tools/run_variant.py` default) unchanged at
+1038; `tests/submission_tests.py` re-run clean (9/9, 1038, speedup
+142.3x).
+
+- iter 8 (H-032): bounded generalization of H-031's single-flag fix into
+  a small per-region mem-hazard model, per the driver's brief. Investigated
+  and NOT adopted -- mainline stays 1038, unchanged.
+
+## H-032: generalized H-031's flag into a per-region mem hazard model;
+provably sound, but REGRESSES the real schedule by 1 cycle. Not adopted.
+
+**What was built.** `build_mem_image` (problem.py) lays out a handful of
+statically disjoint ranges: a 7-word header, `forest_values_p` (tree node
+values -- read by every gather and the tournament broadcast-table vloads;
+written IN PLACE only at two specific tree levels by the C5-priming setup:
+level L4 via `pair_tournament_level_mem_primed`'s `primed_store`, and each
+level d in `c5_primed_gather_levels` via `mem_prime`'s vload/^C5/vstore
+wave), and `inp_values_p` (read once per group at setup, written once per
+group by the final vstores). Replaced `ListScheduler`'s single
+`last_mem_read_cycle`/`last_mem_write_cycle` scalars with per-region dicts
+and tagged every one of the 9 `mem_read=True`/`mem_write=True` call sites
+with which range(s) it provably touches (tree levels are disjoint index
+ranges by construction, so a level-4 write and a level-5 read/write never
+alias). This exactly subsumes H-031 (the final store's region,
+`input_values`, never overlaps any forest region, so its write skips every
+gather's read hazard with no flag needed) AND additionally lets
+`mem_prime`'s own priming read for level d skip waiting on `primed_store`'s
+unrelated level-L4 write (previously coarsely serialized: measured via a
+stack-tracing probe on the coarse model, one such read's ready cycle was
+bumped from 11 to 25 purely by the address-oblivious gate -- independently
+reproducing H-031b's angle-1 finding via a completely different
+implementation).
+
+**Measured effect: correct, but WORSE, not better.** Swapping in the full
+region model (all 9 sites tagged, `store_disjoint_region`'s exemption now
+implicit) measured **1039** on every seed tried (1-4), one cycle ABOVE the
+1038 mainline the narrow H-031 flag already achieves -- correct
+(`debug_compares=True` green) but strictly worse wall-clock. Bisecting by
+re-adding the scalar-coarse mechanism and relaxing ONE hazard at a time
+isolated the cause precisely: separating the initial per-group val-vloads
+(`input_values` region) from the forest reads removes a hazard that
+`primed_store`'s write was incidentally depending on for ITS OWN placement
+(the val-vloads happen to be the last read recorded in the shared bucket
+right before `primed_store` emits, even though the two are genuinely
+address-disjoint). Relaxing it lets `primed_store` schedule one cycle
+earlier, which ripples into a different engine-slot conflict later in the
+tightly packed setup ramp and costs a cycle back, net negative. This is a
+real property of greedy list scheduling, not a bug: a strictly looser
+hazard constraint is not guaranteed to yield a monotonically better (or
+even equal) placement once engine-slot contention is involved.
+
+To separate this ripple from the OTHER, genuinely new relaxation
+(`mem_prime`'s read vs the unrelated level-4 write), that piece was
+isolated in total independence -- added as `last_mem_write_cycle_by_region`
+tracked ALONGSIDE the untouched original scalars/flags (everything else,
+including `input_values`, stays on the exact 1038 mechanism) and gated
+behind a new `mem_prime_narrow_hazard` flag. Result: **1039** on seeds
+1-4 with the flag on, **1038** with it off (default) -- so even fully
+isolated from the val-vload ripple, this specific "beyond H-031" find is
+ALSO a 1-cycle regression on its own, matching H-031b's independent
+finding of the same result via a differently-shaped flag
+(`mem_prime_ignore_l4_hazard`). Two independent implementations agree.
+
+**Verdict: not adopted.** Region tagging is architecturally sound and
+DOES remove every false hazard the coarse model has in this kernel
+(nothing further was found beyond the two cases above), but empirically
+it is a net loss here, not a free generalization -- the coarse model's
+one surviving "false" hazard (mem_prime vs level-4) turns out to be
+load-bearing for the SCHEDULE (not for correctness) via a greedy-
+scheduler side effect: relaxing a hazard is not guaranteed to yield a
+monotonically better placement once slot contention is involved. Mainline
+stays on the exact H-031 mechanism; no flag added to `perf_takehome.py`
+or `tools/run_variant.py`'s `BASE_KWARGS` (both investigation flags kept
+`dev.py`-only, default off, for reproducibility).
