@@ -517,6 +517,37 @@ extension closed infeasible (memory-bound, not time-bound)]
   iteration hit in ~10 minutes. P-12(b) (CEGIS case-split fix) is now the
   more promising remaining lever, untried. perf_takehome.py/dev.py
   untouched throughout.
+  ITER 8 (2026-07-25, bounded research agent, user-authorized "push and
+  don't stop"): attempted P-12(b)'s CEGIS case-split fix for real. Built
+  `scratchpad/cegis.py` (straight-line DAG, window=3 operand selectors,
+  op KIND fixed per position in Python -- the case split -- rather than
+  as a free Z3 selector). CALIBRATION FOUND THE ITER-6 DIAGNOSIS WAS ONLY
+  PART OF THE STORY: case-splitting just "is this position MADD or not"
+  (leaving the other 8 kinds free at non-MADD positions) is NOT
+  sufficient -- still `unknown` at 30s on the known-good k=11 sequence.
+  Isolated the real cost via probes: it's generic component-CONNECTIVITY
+  search (which selector feeds which op), not specifically the multiply
+  -- leaving 5+ non-MADD positions' kind simultaneously free reproduces
+  the same wall with ZERO madds involved. The fix that actually helps is
+  case-splitting the ENTIRE kind sequence (only selectors+constants
+  free): SAT in 0.2-1.9s at 3 samples -- a real, measurable improvement.
+  BUT a second, independent wall appears: CEGIS's own counterexample-
+  refinement loop stalls once it needs a 5th concrete sample (`unknown`
+  at up to 180s), IDENTICALLY for the intact known-good k=11 structure
+  and every k=10 variant tried (used the task-authorized near-structure
+  fallback: 11 single-position deletions of the known template; 7 of 11
+  examined before budget ran out, all hit the same wall). Every SAT
+  candidate found at 3-4 samples was a degenerate small-support fit,
+  refuted by bulk numpy verification within 1-8M random inputs -- zero
+  candidates ever reached the required >=50M-input gate. Zero UNSAT,
+  zero verified SAT. CONCLUSION: this is a genuinely new, more precise
+  characterization of why CEGIS doesn't scale here (connectivity search
+  + a 5-sample refinement wall, not merely "multiply bit-blasting"), but
+  still fully inconclusive -- H-025 remains open. Four concrete untried
+  next moves recorded (structured/non-random seed samples, explicit
+  selector symmetry-breaking, a solver/tactic swap to CVC5 or a
+  dedicated synthesis engine, or a narrower structural template).
+  perf_takehome.py/dev.py untouched.
 - log: 2026-07-23 promoted from op-reduction P-8; 2026-07-25 closed
   inconclusive (CEGIS) + closed negative (enumerative MITM, iter 6b);
   2026-07-25 iter 7 landed the MITM re-port on main and closed the kf=3

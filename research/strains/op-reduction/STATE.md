@@ -489,6 +489,79 @@ Queued: H-012 (floor recalibration).
   memory wall this iteration hit in ~10 minutes, not resolve it.
   Kernel port: NONE. perf_takehome.py/dev.py untouched.
 
+- 2026-07-25 iter 8 (H-025, CEGIS case-split fix attempt, bounded research
+  agent, user-authorized "push and don't stop"): built `scratchpad/cegis.py`
+  (z3), a fresh CEGIS/SMT synthesis tool for "the 11-op hash in <=10 ops."
+  MODEL: straight-line DAG y_0=x, y_1..y_k, each position's operand
+  source(s) selected from the last `window=3` produced values (free Z3 Int
+  selectors -- the real hash never reaches back >2 steps, so window=3 is
+  lossless), with the op KIND fixed per position in Python (the case
+  split, not a Z3 selector): madd (K,C free BitVec32) or one of xor/add/
+  and/or/shl/shr (1 free const) or xor2/add2 (2 chain sources, no const).
+  CEGIS loop: seed IO pairs, solve, bulk-verify candidate on up to 1M
+  random inputs via a numpy myhash_np (cross-checked against myhash at
+  import), add first mismatch as a new sample, repeat.
+  CALIBRATION FOUND THE ORIGINAL DIAGNOSIS WAS INCOMPLETE: three configs
+  tried at k=11 on the known-good fused-hash kind sequence:
+  1. OLD encoding (kind fully free, incl. madd, so an unconditional
+     free-times-free multiply term exists everywhere): `unknown` at 60s,
+     zero progress -- reproduces iter 6's diagnosed failure.
+  2. THE ORIGINALLY-DIAGNOSED FIX (case-split ONLY is-madd-or-not; the
+     other 8 kinds still a free Z3 selector at non-madd positions):
+     STILL `unknown` at 30s -- NOT sufficient, a genuine negative
+     surprise. Isolating why: fixing madd's source-selector too (kind
+     still free elsewhere) ALSO times out; fixing every selector+kind via
+     equality (no search left) solves in 0.15-0.76s. The real cost was
+     never specifically "free multiply" -- it's generic component-
+     CONNECTIVITY search (which Int selector feeds which op) compounding
+     with ANY downstream nonlinearity: leaving 5+ non-madd positions'
+     kind simultaneously free reproduces the same wall with ZERO madds
+     involved (n_free=4 solves in 7.6s, n_free=5 times out at 15s).
+  3. THE ACTUAL FIX: full kind SEQUENCE case-split (every position's
+     exact op fixed in Python, only selectors+constants free): SAT in
+     0.2-1.9s at 3 samples, ~21-115s at 4 samples, but consistently
+     `unknown` (180s timeout) once refinement reaches 5 samples -- a
+     large real improvement over configs 1/2 (which never produce a
+     single candidate), but does not fully close even the k=11
+     reconfirmation end-to-end.
+  K=10 SEARCH: full 9^10 kind-sequence enumeration (~3.5e9) is infeasible
+  even with fast per-query solving; used the task-authorized near-
+  structure fallback (the 11 single-position deletions of the known
+  11-op template). 7 of 11 deletion baselines examined (budget-limited;
+  the other 4 plus the full 880-variant Hamming-1 neighborhood were not
+  reached). EVERY branch hit the identical wall: round 0 (3 samples) and
+  usually round 1 (4 samples) produce a concrete SAT candidate fast, every
+  such candidate is refuted by the bulk numpy check within ~1-8M random
+  inputs (degenerate small-support fits, not real matches), and round 2
+  (5 samples) times out at up to 180s. Zero UNSAT, zero verified SAT.
+  Per-branch data: scratchpad/cegis_k10_deletions.json (7 branches, all
+  `unknown`, 71-118s each), scratchpad/cegis_k10_main.json (an earlier
+  20s-round-timeout pass, also all `unknown`).
+  NEW SCALING LIMIT (the actual finding): the originally-diagnosed bug
+  (free kind selector => unconditional free multiply) is real and the
+  deeper fix (full kind-sequence case-split) measurably helps early-round
+  solving, but CEGIS refinement itself hits an INDEPENDENT wall at ~5
+  simultaneous concrete-sample constraints, REGARDLESS of k (identical
+  for the intact known-correct k=11 structure and every k=10 deletion
+  variant) -- Z3's default QF_BV bit-blasting tactic cannot decide a
+  5-copy instance of this program template within 60-180s, because the
+  operand-selector space is large enough that 3-4 concrete IO constraints
+  are essentially never sufficient to pin down the true 32-bit function.
+  Kernel port: NONE. No candidate reached the >=50M-input verification
+  gate (nothing survived even the ~1-8M quick check), so there is no find
+  to report.
+  WHAT A REOPEN NEEDS (none attempted this iteration): (a) structured
+  (non-random) seed samples chosen to break selector symmetries early;
+  (b) explicit symmetry-breaking constraints on the selector Int
+  variables (many distinct assignments are semantically identical, and
+  Z3 currently pays to distinguish them); (c) a solver/tactic swap (CVC5,
+  or a dedicated synthesis engine like Rosette/Sketch, instead of Z3's
+  general QF_BV default); (d) a much narrower structural template (fewer
+  free selectors total). H-025 stays open with this precise, corrected
+  boundary recorded (the multiply-bit-blast theory from iter 6 was only
+  PART of the story; connectivity search and CEGIS's own refinement-round
+  scaling are the deeper, now-identified bottleneck).
+
 ## Proposed hypotheses
 (agent appends; driver promotes to backlog.md)
 - P-1 [op-reduction]: C5-pre-xor value domain. Pre-xor all 2047 tree node
