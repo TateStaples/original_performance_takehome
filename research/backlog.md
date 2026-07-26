@@ -147,8 +147,37 @@ gap found (2026-07-25)]
   corners (#2, #4) are low-probability-of-payoff and cheap enough to
   reopen individually if someone wants them formally closed rather than
   reasoned-closed.
+- ADAPTIVE-RACE FOLLOW-UP 2026-07-26 (prompted by an external solution's
+  `vec_flex_op`/`emit_hash_combine`/`emit_hash_shift`, which reroutes hash
+  xor/shift ops from valu to alu per-instance at schedule time, gated on
+  `mandatory_alu_ready` being low AND `valu_ready` count being high --
+  opportunistic, not blanket). Item #5 above only tested BLANKET
+  un-forcing (always alu, never valu); this closes the remaining gap by
+  testing genuinely adaptive per-instance racing on the SAME sites, using
+  our own `emit_any`-based mechanism (`_sched_vec`'s existing
+  `allow_alu`/race path, the same one `vec()` already uses elsewhere --
+  only `avec()`'s stage1 xor-shift call sites were hardcoded to the
+  `force_alu=True` branch instead). Added flag `hash1_avec_race` (dev.py):
+  when True, `avec` uses `allow_alu=alu_offload, force_alu=False` (race:
+  scalarize to alu only when valu is backed up that cycle) instead of
+  `force_alu=alu_offload` (always scalarize). Measured at mainline
+  (l4_gmin=(9,30), 1038 cyc): **1098 cycles, a clean +60 regression**
+  (debug_compares=True and 5 seeds all correct, all +60). Re-checked at a
+  different l4_gmin=(15,30) point (1060 baseline there) to rule out a
+  pool-size artifact: 1091, still +31 -- regression is robust across the
+  l4_gmin dimension, not a local tuning effect. CONCLUSION: adaptive
+  per-instance racing is NOT a rescue here -- it regresses almost as
+  badly as blanket un-forcing (+60 vs +62). The reason force_alu is
+  needed for these specific ops is structural (always keep valu clear
+  ahead of the same-stage madds that immediately follow), not merely "is
+  valu busy this exact cycle" -- so the adaptive gate doesn't capture the
+  real constraint the way it does for `vec()`'s general sites. H-007
+  stays closed; this specific corner (adaptive-vs-blanket force-alu on
+  stage1 avec) is now also closed, no material gap.
 - log: 2026-07-23 opened; premise re-checked same day post-H-029; 2026-07-25
-  fold-site archaeology completed, closed with no material gap found.
+  fold-site archaeology completed, closed with no material gap found;
+  2026-07-26 adaptive-race follow-up tested and rejected (+60 cyc), no
+  further reopen expected without a new mechanism idea.
 
 ### H-008 [strain: critical-path] [status: rejected -> graveyard G-9]
 - statement: Full-round L4 (and L5) tournament service once parity-early

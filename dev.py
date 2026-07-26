@@ -511,6 +511,7 @@ class KernelBuilder:
         flow_residual_consts: bool = False,
         alu_val_addrs: bool = False,
         lazy_val_loads: bool = False,
+        hash1_avec_race: bool = False,
         store_pair: bool = False,
         store_disjoint_region: bool = False,
         mem_prime_ignore_l4_hazard: bool = False,
@@ -1105,8 +1106,17 @@ class KernelBuilder:
         vec: Callable[[str, int, int, int], int] = lambda op, dst, a, b: self._sched_vec(
             scheduler, op, dst, a, b, alu_offload, valu_ties="vec_valu" in tie_break_modes
         )
+        # H-007 follow-up: avec's stage1 hash xor-shift ops are normally
+        # force_alu'd under alu_offload (blanket-reserve valu for madds;
+        # un-forcing that blanket policy measured +62 cyc, see backlog
+        # H-007). `hash1_avec_race` swaps the blanket force for the SAME
+        # per-instance emit_any race `vec()` already uses elsewhere:
+        # scalarize to alu only when valu is actually backed up that cycle,
+        # otherwise stay on valu. Adaptive, not blanket -- test separately.
         avec: Callable[[str, int, int, int], int] = lambda op, dst, a, b: self._sched_vec(
-            scheduler, op, dst, a, b, alu_offload, force_alu=alu_offload,
+            scheduler, op, dst, a, b,
+            allow_alu=alu_offload,
+            force_alu=alu_offload and not hash1_avec_race,
             valu_ties="vec_valu" in tie_break_modes
         )
         madd: Callable[[int, int, int, int], int] = lambda dst, a, b, c: self._sched_madd(scheduler, dst, a, b, c)
