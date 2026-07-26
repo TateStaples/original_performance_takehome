@@ -406,8 +406,9 @@ further gain found]
   kept as control. Retune: optimum unmoved. Dispatch flipped; grader 9/9.
 - log: 2026-07-23 promoted; iter 5 ACCEPTED.
 
-### H-025 [strain: op-reduction] [status: three sub-attempts made, none
-closes k<=10 -- CEGIS inconclusive, enumerative MITM closed-negative at a
+### H-025 [strain: op-reduction] [status: five sub-attempts made, none
+closes k<=10 -- three independent CEGIS attempts all inconclusive (each
+narrowing the diagnosis further), enumerative MITM closed-negative at a
 stated depth<=7 coverage boundary (now landed+reverified on main), kf=3
 extension closed infeasible (memory-bound, not time-bound)]
 - statement: (H-016's P-8) global synthesis attack on "the 11-op hash in
@@ -548,10 +549,37 @@ extension closed infeasible (memory-bound, not time-bound)]
   selector symmetry-breaking, a solver/tactic swap to CVC5 or a
   dedicated synthesis engine, or a narrower structural template).
   perf_takehome.py/dev.py untouched.
+  ITER 9 (2026-07-25, same session, second CEGIS fix attempt): rebuilt
+  the tool with BOTH of iter 8's untried fixes (structured, non-random
+  seed samples chosen to maximize early discriminating power; explicit
+  selector domain-tightening + symmetry-breaking on commutative ops).
+  CALIBRATION: NEGATIVE -- neither fix moved the wall. SAT at n=3-4
+  samples, `unknown` at n=5, identically for structured and random
+  seeds, across every timeout budget/solver tactic/selector-representation
+  variant tried (BitVec instead of Int selectors, explicit bit-blast
+  tactic). DEEPER DIAGNOSIS (the real finding): pinning EVERY selector to
+  its known-good value (zero connectivity search left, only the
+  multiply_add K/C constants free) still hits a wall -- just pushed from
+  n=5 to n=8. This CONTRADICTS iter 8's own diagnosis: the bottleneck is
+  NOT primarily selector-connectivity search, it's the nonlinear
+  chained-modular-multiply constant-solving itself (4 free (K,C) pairs
+  in series), which connectivity search compounds but did not cause.
+  Per its own go/no-go rule, stopped after a 2-of-11 spot-check (both
+  hit the wall) rather than repeating the full 11/880-variant sweep with
+  fixes already shown not to help. THREE independent iterations (6, 8, 9)
+  now agree, via three different specific mechanisms, that CEGIS/Z3
+  QF_BV component synthesis at 32-bit width is the wrong tool class for
+  this problem in essentially any encoding tried so far. A reopen needs
+  a solver/engine swap (CVC5, or a dedicated synthesis engine like
+  Rosette/Sketch) or a materially narrower template (fixed per-stage
+  constants for at least some positions) -- not more tuning of this
+  approach. perf_takehome.py/dev.py untouched.
 - log: 2026-07-23 promoted from op-reduction P-8; 2026-07-25 closed
   inconclusive (CEGIS) + closed negative (enumerative MITM, iter 6b);
   2026-07-25 iter 7 landed the MITM re-port on main and closed the kf=3
-  scoping question infeasible (memory-bound).
+  scoping question infeasible (memory-bound); 2026-07-25 iters 8-9: two
+  independent CEGIS fix attempts, both inconclusive but each narrowing
+  the diagnosis further.
 
 ### H-026 [strain: cross] [status: accepted]
 - statement: mem_prime — per-level in-mem C5-priming of deep gather levels

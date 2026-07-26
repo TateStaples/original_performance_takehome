@@ -54,6 +54,21 @@ No pool size is both tractable in hours and rich enough to represent the
 actual hash-stage constants. See P-12 for the updated verdict and the
 iteration log entry below for full numbers.
 
+Iters 8-9 (H-025, two independent CEGIS case-split fix attempts) each
+found and fixed a real limitation of the prior encoding (iter 8: fixing
+op-KIND per position, not just is-madd; iter 9: structured seed samples +
+selector domain-tightening/symmetry-breaking), and each still hit a wall
+-- but a DIFFERENT, more precise one each time (iter 8: CEGIS refinement
+stalls at ~5 concrete samples; iter 9: even with connectivity fully
+pinned, the wall is the nonlinear chained-multiply-constant solving
+itself, one to two samples later). Three independent iterations (6, 8, 9)
+now agree CEGIS/Z3 QF_BV component synthesis at 32-bit width is the wrong
+tool class for this problem in essentially any encoding tried so far --
+a reopen needs a solver/engine swap (CVC5, or a dedicated synthesis
+engine like Rosette/Sketch) or a materially narrower template (fixed
+per-stage constants for at least some positions), not more tuning of the
+same approach.
+
 ## Assigned
 - H-003 (iter 1): DONE — see iteration log.
 - H-015 (iter 2): DONE — implemented, strain frontier 1106; see log.
@@ -69,6 +84,15 @@ iteration log entry below for full numbers.
   current main (depth<=7 negative reconfirmed); P-12's kf=3 extension
   actually attempted and CLOSED as memory-infeasible at any pool rich
   enough to be meaningful. See log.
+- H-025 (iter 8): DONE — CEGIS case-split fix attempt (fixed op-kind
+  sequence, not just is-madd); measurably helped early-round solving but
+  CEGIS refinement itself walled at ~5 concrete samples regardless of k.
+  See log.
+- H-025 (iter 9): DONE — rebuilt CEGIS with structured seeds + selector
+  domain-tightening/symmetry-breaking; CLOSED NEGATIVE at calibration
+  (wall unmoved; deeper diagnosis reframes the bottleneck as nonlinear
+  multiply-constant solving, not connectivity search). Stopped before
+  the full k=10 sweep per its own go/no-go rule. See log.
 Queued: H-012 (floor recalibration).
 
 ## Iteration log
@@ -561,6 +585,85 @@ Queued: H-012 (floor recalibration).
   boundary recorded (the multiply-bit-blast theory from iter 6 was only
   PART of the story; connectivity search and CEGIS's own refinement-round
   scaling are the deeper, now-identified bottleneck).
+
+- 2026-07-25 iter 9 (H-025, CEGIS fix-attempt #2, bounded research agent,
+  user-authorized "push and don't stop"): rebuilt `scratchpad/cegis.py`
+  from scratch (iter 8's file did not survive into this worktree) with the
+  SAME validated core (full kind-sequence case-split; window=3 operand
+  selectors) PLUS both iter-8-diagnosed fixes built in from construction
+  time, not bolted on: (1) structured seed samples -- 0, 0xFFFFFFFF,
+  powers of two at low/mid/high bit positions, all-ones-with-one-bit-
+  cleared, ~10 samples from the first solve instead of climbing from 3;
+  (2) per-position domain tightening (each selector's Z3 range is the
+  position's actual [i-window, i-1] window, collapsing to a fixed Python
+  int with NO Z3 variable at all when only one source is valid) +
+  symmetry-breaking (selA <= selB on commutative xor2/add2). Encoding
+  correctness self-tested: the K=11 known-good template + its ground-truth
+  concrete assignment reproduces `myhash` bit-exact over 500K random
+  inputs before any Z3 was invoked.
+  CALIBRATION RESULT: NEGATIVE -- neither fix moved the wall. Structured
+  seeds direct at n=10 hit `unknown` at 90s (worse than climbing). Testing
+  the SAME fixed model (domain-tightening + symmetry-breaking always on)
+  at increasing sample counts with BOTH structured and random seeds
+  reproduces the IDENTICAL wall iter 8 found: SAT at n=3 (1.3-8.1s), SAT
+  at n=4 (11-33s), `unknown` at n=5 regardless of seed choice, timeout
+  budget (tried up to 240s), solver tactic (explicit
+  simplify->propagate-values->solve-eqs->bit-blast->sat gave the same
+  `unknown` at 240s), or selector representation (re-ran with small
+  BitVec(4) selectors instead of Int, to rule out Int/BV theory-
+  combination overhead as the cause -- identical n=5 wall).
+  DEEPER DIAGNOSIS (the actual new finding this iteration): pinned EVERY
+  selector to its known-good ground-truth value (zero connectivity search
+  left, only the multiply_add K/C pairs and xor/shift constants free) and
+  the wall was still there, just pushed from n=5 to n=8 (SAT at n=3 in
+  0.12s, SAT at n=5 in 18.3s, `unknown` at n=8, 60s cap). This CONTRADICTS
+  iter 8's diagnosis that the bottleneck is primarily selector/
+  connectivity search: even with connectivity fully solved, the wall
+  reappears one to two samples later, from the chained-modular-multiply
+  constant-solving alone (4 free (K,C) multiply_add pairs in series,
+  32-bit width, each new IO sample adds another simultaneous system-of-
+  congruences constraint over all four). The connectivity search
+  compounds an already-hard nonlinear-BV constant-solving problem; it is
+  not the primary cause on its own.
+  K=10 SPOT CHECK (2 of 11 single-position-deletion variants only, NOT
+  the full sweep -- see go/no-go note below): both hit `unknown` at 60s
+  with all 10 structured seeds asserted at once (results in
+  `scratchpad/cegis_k10_iter9.jsonl`). Consistent with the calibration
+  wall; no SAT candidate, no UNSAT, nothing to bulk-verify.
+  GO/NO-GO CALL: per this iteration's own mandate ("if the fixes don't
+  measurably help the calibration case, don't spend the full time budget
+  on k=10"), STOPPED HERE rather than running the full 60-90 minute
+  11/880-variant sweep -- neither prescribed fix, nor the two additional
+  levers tried (BitVec selectors, explicit bit-blast tactic), produced
+  any measurable improvement on the calibration wall, so repeating the
+  full sweep would almost certainly just reproduce iter 8's all-`unknown`
+  result at higher wall-clock cost with nothing new to show for it.
+  Kernel port: NONE. No candidate reached bulk verification, let alone the
+  >=50M-input gate.
+  UPDATED CONCLUSION FOR A FUTURE REOPEN: this iteration's pinned-selector
+  experiment reframes iter 8's (a)/(b) reopen items (structured seeds,
+  symmetry-breaking) as NOT the load-bearing fix -- both are now tried and
+  both are negative. The wall is the nonlinear nature of solving several
+  simultaneous free-multiply-constant nonlinear-BV congruences
+  under Z3's default (and its explicit bit-blast) tactics, not the
+  selector search. That reframes iter 8's remaining items (c) and (d) as
+  the only ones not yet falsified: (c) a solver/tactic swap (CVC5 in
+  particular, since its nonlinear-BV/`bvmul`-heavy heuristics differ
+  materially from Z3's, or a dedicated program synthesis engine like
+  Rosette/Sketch/Souper-for-BV rather than raw existential SMT) and (d) a
+  much narrower structural template that removes free multiply constants
+  entirely for at least SOME positions (e.g. only synthesize which stage
+  BOUNDARIES fuse, treating each stage's OWN constants as fixed/known --
+  a partial-restart between full-freedom synthesis and the
+  already-exhausted MITM/adjacent-cut searches). Absent one of those, more
+  wall-clock on this exact encoding is not expected to help -- this is the
+  third independent iteration (6, 8, 9) landing on that same conclusion by
+  three different specific mechanisms (raw scaling wall; connectivity-
+  search cost; now nonlinear-multiply-constant cost), which is fairly
+  strong evidence CEGIS/Z3 QF_BV component synthesis at 32-bit width,
+  in essentially any encoding variant tried so far, is the wrong tool
+  class for this problem -- (c)/(d) above are real alternatives, not more
+  tuning of the same approach.
 
 ## Proposed hypotheses
 (agent appends; driver promotes to backlog.md)
