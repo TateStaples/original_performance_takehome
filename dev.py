@@ -259,6 +259,99 @@ class ListScheduler:
         return retire
 
 
+def _compute_temp_coloring(
+    trace: Sequence[tuple[Any, ...]], virtual_base: int, n_calls: int, vlen: int,
+    max_colors: int | None = None,
+) -> tuple[int, int, dict[int, int]]:
+    """
+    Greedy interval-graph coloring over the live ranges of the "virtual"
+    per-(round,group) hash temps recorded in a ListScheduler.trace from a
+    probe build (H-0xx, ported from the external repo's
+    color_virtual_vectors). Each trace entry is
+    (cycle, engine, tag, slot, reads, writes, mem_read, mem_write); a
+    virtual base's interval is [min cycle, max cycle] over every trace
+    entry that reads or writes any of its VLEN lanes.
+
+    `max_colors`, if given, CAPS the physical pool at that many colors
+    (e.g. the hand-tuned temp_and_cond_pool_sizes[0], so the colored pool
+    costs no more scratch than the static scheme it replaces) instead of
+    growing to the schedule's true unconstrained peak concurrency: when no
+    free color remains, the color whose active interval ends SOONEST is
+    reused early (classic linear-scan-allocator "spill" fallback). This
+    forces a real WAR hazard between the two instances at pass-2 schedule
+    time -- always CORRECT (the ListScheduler enforces true hazards on
+    whatever address is actually used, regardless of what this analysis
+    predicted), just possibly a few cycles more serial than the true peak
+    would need.
+
+    Returns (true_required_colors, used_colors, {call_index: color}):
+    true_required_colors is the schedule's real unconstrained peak
+    concurrency (informational -- "how many colors would a from-scratch
+    optimal pool need"); used_colors is what was actually allocated
+    (== true_required_colors when max_colors is None, else max_colors).
+    call_index is temp_slot()'s allocation-order position (0-based),
+    stable across the probe/apply passes since both walk the identical
+    deterministic (round, group) sequence.
+    """
+    intervals: dict[int, list[int]] = {}
+    for entry in trace:
+        cycle, _engine, _tag, _slot, reads, writes, _mem_read, _mem_write = entry
+        for addr in reads:
+            if addr >= virtual_base:
+                base = virtual_base + ((addr - virtual_base) // vlen) * vlen
+                iv = intervals.setdefault(base, [cycle, cycle])
+                iv[0] = min(iv[0], cycle)
+                iv[1] = max(iv[1], cycle)
+        for addr in writes:
+            if addr >= virtual_base:
+                base = virtual_base + ((addr - virtual_base) // vlen) * vlen
+                iv = intervals.setdefault(base, [cycle, cycle])
+                iv[0] = min(iv[0], cycle)
+                iv[1] = max(iv[1], cycle)
+
+    ordered = sorted((lo, hi, base) for base, (lo, hi) in intervals.items())
+    events: list[tuple[int, int]] = []
+    for lo, hi, _base in ordered:
+        events.append((lo, 1))
+        events.append((hi + 1, -1))
+    events.sort(key=lambda e: (e[0], e[1]))
+    live = 0
+    true_required_colors = 0
+    for _, delta in events:
+        live += delta
+        true_required_colors = max(true_required_colors, live)
+
+    used_colors = true_required_colors if max_colors is None else max_colors
+
+    active: list[tuple[int, int]] = []  # (end_cycle, color)
+    free_colors = list(range(used_colors))
+    color_of_base: dict[int, int] = {}
+    for lo, hi, base in ordered:
+        still_active = []
+        for end, color in active:
+            if end < lo:
+                free_colors.append(color)
+            else:
+                still_active.append((end, color))
+        active = still_active
+        if free_colors:
+            color = free_colors.pop()
+        else:
+            # Pool exhausted (only possible when max_colors < the true
+            # peak): steal the color that frees up soonest.
+            active.sort()
+            _stolen_end, color = active.pop(0)
+        color_of_base[base] = color
+        active.append((hi, color))
+
+    color_by_call_index = {
+        idx: color_of_base[virtual_base + idx * vlen]
+        for idx in range(n_calls)
+        if (virtual_base + idx * vlen) in color_of_base
+    }
+    return true_required_colors, used_colors, color_by_call_index
+
+
 class KernelBuilder:
     def __init__(self) -> None:
         self.instrs: Program = []
@@ -275,6 +368,31 @@ class KernelBuilder:
         # unchanged when the hook is absent). Same element shape as
         # ListScheduler.trace: one tuple captured per scheduled op.
         self.sched_trace: list[tuple[Any, ...]]
+        # H-0xx (temp_pool_coloring): live-range interval-coloring for
+        # _round_stage_generator's per-(round,group) transient hash temp,
+        # ported from the external repo's alloc_virtual_vec/
+        # color_virtual_vectors. Modes:
+        #   "static"  -- legacy behavior: t = temp_pool[g % temp_pool_size].
+        #   "virtual" -- probe pass: every (r, g) instance gets a fresh,
+        #                never-reused address far outside real scratch, so
+        #                the schedule has NO false WAR/WAW between distinct
+        #                instances that would otherwise share a slot. The
+        #                sched_trace hook above (reused verbatim) records
+        #                every read/write cycle so intervals can be mined
+        #                afterward.
+        #   "colored" -- apply pass: t = the physical address the greedy
+        #                interval-coloring pass (computed from the probe's
+        #                intervals) assigned to this call's position in the
+        #                deterministic call order.
+        # temp_pool_coloring=True on build_kernel_scheduled runs both passes
+        # automatically (see the guard at the top of that method); default
+        # "static" mode is bit-identical to the pre-existing behavior.
+        self._temp_alloc_mode: str = "static"
+        self._temp_call_index: int = 0
+        self._temp_virtual_base: int = 8_000_000
+        self._temp_color_map: dict[int, int] = {}
+        self._temp_required_colors: int | None = None
+        self._temp_true_required_colors: int | None = None
 
     def debug_info(self) -> DebugInfo:
         return DebugInfo(scratch_map=self.scratch_debug)
@@ -516,6 +634,8 @@ class KernelBuilder:
         store_disjoint_region: bool = False,
         mem_prime_ignore_l4_hazard: bool = False,
         debug_compares: bool = True,
+        temp_pool_coloring: bool = False,
+        temp_pool_coloring_uncapped: bool = False,
     ) -> None:
         """
         Same maths as `build_kernel_pipelined` (fused hash, gaddr-carried
@@ -840,7 +960,99 @@ class KernelBuilder:
         are emitted only where the scratch value equals the reference's:
         node_val on non-primed rounds (round 0 + gather levels >= 5),
         hashed_val on non-elided rounds (incl. the final stored round).
+
+        `temp_pool_coloring` (H-0xx): replaces temp_and_cond_pool_sizes[0]'s
+        hand-sized static pool (t = temp_pool[g % temp_pool_size], reused by
+        residue class across every round) with live-range interval coloring
+        of _round_stage_generator's per-(round,group) transient hash temp,
+        ported from the external repo's alloc_virtual_vec/
+        color_virtual_vectors. Runs the whole build TWICE on separate
+        KernelBuilder instances: pass 1 (mode "virtual") gives every
+        (round, group) instance of the temp its own never-reused address
+        outside real scratch, so the schedule has no false WAR/WAW between
+        instances that would otherwise collide on a shared static slot;
+        its ListScheduler trace is mined for each instance's
+        [first-use, last-use] cycle interval, which a greedy interval-graph
+        coloring pass reduces to the smallest sufficient number of physical
+        colors. Pass 2 (mode "colored", run on `self`) allocates exactly
+        that many VLEN-wide scratch slots and replays the identical
+        deterministic (round, group) call order, so the resulting
+        instruction stream has the SAME op sequence as the static path --
+        only which scratch address each instance's temp lands on differs.
+        temp_and_cond_pool_sizes[0] is ignored in this mode (the pool is
+        sized by the coloring result instead); temp_and_cond_pool_sizes[1]
+        (the cond pools) is untouched.
         """
+        if temp_pool_coloring and self._temp_alloc_mode == "static":
+            probe = KernelBuilder()
+            probe._temp_alloc_mode = "virtual"
+            probe.sched_trace = []
+            probe.build_kernel_scheduled(
+                batch_size, rounds, forest_height,
+                tournament_levels=tournament_levels, alu_offload=alu_offload,
+                l4_gmin=l4_gmin, temp_and_cond_pool_sizes=temp_and_cond_pool_sizes,
+                skew=skew, parity_early=parity_early, parity_conds=parity_conds,
+                flow_first_fold_levels=flow_first_fold_levels,
+                auto_raced_first_fold_levels=auto_raced_first_fold_levels,
+                c5_prexored_value_domain=c5_prexored_value_domain,
+                c5_primed_gather_levels=c5_primed_gather_levels,
+                speculative_fold_levels=speculative_fold_levels,
+                pair_tournament_first_fold_race=pair_tournament_first_fold_race,
+                pair_tournament_second_fold_race=pair_tournament_second_fold_race,
+                shallow_tournament_reverse_select_race=shallow_tournament_reverse_select_race,
+                idx_recurrence_race=idx_recurrence_race,
+                idx_select_before_madd=idx_select_before_madd,
+                store_order=store_order,
+                reverse_newest_parity_fold=reverse_newest_parity_fold,
+                newest_parity_last_fold_race=newest_parity_last_fold_race,
+                newest_parity_last_leaf_diff_tables=newest_parity_last_leaf_diff_tables,
+                reverse_newest_parity_fold_at_shallow_levels=reverse_newest_parity_fold_at_shallow_levels,
+                emit_order=emit_order, flow_consts=flow_consts, vals_first=vals_first,
+                tie_break=tie_break, derive_consts=derive_consts, alu_val_addrs=alu_val_addrs,
+                lazy_val_loads=lazy_val_loads, store_pair=store_pair,
+                store_disjoint_region=store_disjoint_region,
+                mem_prime_ignore_l4_hazard=mem_prime_ignore_l4_hazard,
+                debug_compares=debug_compares, temp_pool_coloring=False,
+                temp_pool_coloring_uncapped=temp_pool_coloring_uncapped,
+            )
+            cap = None if temp_pool_coloring_uncapped else temp_and_cond_pool_sizes[0]
+            true_required_colors, used_colors, color_by_call_index = _compute_temp_coloring(
+                probe.sched_trace, probe._temp_virtual_base, probe._temp_call_index, VLEN,
+                max_colors=cap,
+            )
+            self._temp_alloc_mode = "colored"
+            self._temp_color_map = color_by_call_index
+            self._temp_required_colors = used_colors
+            self._temp_true_required_colors = true_required_colors
+            self.build_kernel_scheduled(
+                batch_size, rounds, forest_height,
+                tournament_levels=tournament_levels, alu_offload=alu_offload,
+                l4_gmin=l4_gmin, temp_and_cond_pool_sizes=temp_and_cond_pool_sizes,
+                skew=skew, parity_early=parity_early, parity_conds=parity_conds,
+                flow_first_fold_levels=flow_first_fold_levels,
+                auto_raced_first_fold_levels=auto_raced_first_fold_levels,
+                c5_prexored_value_domain=c5_prexored_value_domain,
+                c5_primed_gather_levels=c5_primed_gather_levels,
+                speculative_fold_levels=speculative_fold_levels,
+                pair_tournament_first_fold_race=pair_tournament_first_fold_race,
+                pair_tournament_second_fold_race=pair_tournament_second_fold_race,
+                shallow_tournament_reverse_select_race=shallow_tournament_reverse_select_race,
+                idx_recurrence_race=idx_recurrence_race,
+                idx_select_before_madd=idx_select_before_madd,
+                store_order=store_order,
+                reverse_newest_parity_fold=reverse_newest_parity_fold,
+                newest_parity_last_fold_race=newest_parity_last_fold_race,
+                newest_parity_last_leaf_diff_tables=newest_parity_last_leaf_diff_tables,
+                reverse_newest_parity_fold_at_shallow_levels=reverse_newest_parity_fold_at_shallow_levels,
+                emit_order=emit_order, flow_consts=flow_consts, vals_first=vals_first,
+                tie_break=tie_break, derive_consts=derive_consts, alu_val_addrs=alu_val_addrs,
+                lazy_val_loads=lazy_val_loads, store_pair=store_pair,
+                store_disjoint_region=store_disjoint_region,
+                mem_prime_ignore_l4_hazard=mem_prime_ignore_l4_hazard,
+                debug_compares=debug_compares, temp_pool_coloring=False,
+                temp_pool_coloring_uncapped=temp_pool_coloring_uncapped,
+            )
+            return
         assert batch_size % VLEN == 0
         n_groups = batch_size // VLEN
         period = forest_height + 1
@@ -1430,13 +1642,35 @@ class KernelBuilder:
                 # Same trade for the negtwo/primed-root vectors (19 words).
                 cond_pool_size -= 1
                 assert cond_pool_size >= 1, "c5_prexor needs pool_sizes[1] >= 2"
-            temp_pool = [self.alloc_scratch(None, VLEN) for _ in range(temp_pool_size)]
+            if self._temp_alloc_mode == "virtual":
+                # No physical scratch needed: temp_slot() hands out
+                # never-reused addresses outside real scratch space.
+                temp_pool = []
+            elif self._temp_alloc_mode == "colored":
+                assert self._temp_required_colors is not None
+                temp_pool = [self.alloc_scratch(None, VLEN) for _ in range(self._temp_required_colors)]
+            else:
+                temp_pool = [self.alloc_scratch(None, VLEN) for _ in range(temp_pool_size)]
             if tournament_level_count >= 2:
                 condA = [self.alloc_scratch(None, VLEN) for _ in range(cond_pool_size)]
                 condB = [self.alloc_scratch(None, VLEN) for _ in range(cond_pool_size)]
                 tm = [self.alloc_scratch(None, VLEN) for _ in range(cond_pool_size)]
             if tournament_level_count >= 3:
                 tmM = [self.alloc_scratch(None, VLEN) for _ in range(cond_pool_size)]
+
+        def temp_slot() -> int:
+            # H-0xx (temp_pool_coloring): one call per _round_stage_generator
+            # instance (same call ORDER every pass, regardless of mode), so
+            # self._temp_call_index is a stable cross-pass key.
+            idx = self._temp_call_index
+            self._temp_call_index += 1
+            if self._temp_alloc_mode == "virtual":
+                return self._temp_virtual_base + idx * VLEN
+            if self._temp_alloc_mode == "colored":
+                assert temp_pool is not None
+                return temp_pool[self._temp_color_map[idx]]
+            assert temp_pool_size is not None and temp_pool is not None
+            return temp_pool[idx % temp_pool_size]
 
         val_addr_offset_consts: dict[int | str, int] = {}  # alu_val_addrs scalars, materialized on first use
 
@@ -1778,7 +2012,7 @@ class KernelBuilder:
                     # its first touch instead of all up-front at setup.
                     emit_val_g(g)
                 L = level(r)
-                s = g % temp_pool_size
+                t = temp_slot()
                 j = g % cond_pool_size
                 st = state_vecs[g]
                 vl = hash_chain_vecs[g]
@@ -1812,8 +2046,8 @@ class KernelBuilder:
                             snapshot_after_a = sched_snap()
                             sched_install(pre_race_snapshot)
                             avec("^", nv, vl, odd_of[diffs[0]])
-                            avec("^", temp_pool[s], vl, evens[0])
-                            cycle_b = self._sched_vsel(scheduler, vl, st, nv, temp_pool[s])
+                            avec("^", t, vl, evens[0])
+                            cycle_b = self._sched_vsel(scheduler, vl, st, nv, t)
                             if cycle_a + speculative_fold_auto_delay_tolerance < cycle_b:
                                 sched_install(snapshot_after_a)
                                 self._fold_speculation_race_stats[0] += 1
@@ -1831,8 +2065,8 @@ class KernelBuilder:
                             # dead here and hosts one arm; the group's
                             # hash temp hosts the other.
                             avec("^", nv, vl, diffs[0])
-                            avec("^", temp_pool[s], vl, evens[0])
-                            vsel(vl, st, nv, temp_pool[s])
+                            avec("^", t, vl, evens[0])
+                            vsel(vl, st, nv, t)
                             nvsrc = None
                         else:
                             # p is the single parity bit itself.
@@ -1844,13 +2078,13 @@ class KernelBuilder:
                         assert condA is not None and condB is not None and tm is not None and tmM is not None
                         vsel(condB[j], st, st, st)
                         madd(st, st, two_vec, nv)
-                        avec("^", temp_pool[s], vl, evens[0])
+                        avec("^", t, vl, evens[0])
                         avec("^", tm[j], vl, diffs[0])
                         avec("^", tmM[j], vl, evens[1])
                         avec("^", condA[j], vl, diffs[1])
-                        vsel(temp_pool[s], nv, tm[j], temp_pool[s])      # pair 0 by b1
+                        vsel(t, nv, tm[j], t)      # pair 0 by b1
                         vsel(tmM[j], nv, condA[j], tmM[j])  # pair 1 by b1
-                        vsel(vl, condB[j], tmM[j], temp_pool[s])   # by b0, into vl
+                        vsel(vl, condB[j], tmM[j], t)   # by b0, into vl
                         nvsrc = None
                     elif L == 2:
                         assert condA is not None and condB is not None and tm is not None
@@ -1860,10 +2094,10 @@ class KernelBuilder:
                             # newest bit b1 (=nv) folds LAST via one madd.
                             # node = evens[b0] + b1*diffs[b0]; post-parity
                             # chain 2 -> 1 levels.
-                            vsel(temp_pool[s], st, diffs[1], diffs[0])
+                            vsel(t, st, diffs[1], diffs[0])
                             vsel(tm[j], st, evens[1], evens[0])
                             fold_position(st, nv)                    # st = b0b1
-                            madd(nv, nv, temp_pool[s], tm[j])
+                            madd(nv, nv, t, tm[j])
                         elif parity_conds:
                             # nv = b1 (raw parity), st = b0 (single bit).
                             # b0 copy (st folds next); vselect(c,a,a,a) is a
@@ -1875,18 +2109,18 @@ class KernelBuilder:
                             else:
                                 vsel(condB[j], st, st, st)
                             fold_position(st, nv)                    # fold b1: st = b0b1
-                            first_fold(temp_pool[s], nv, diffs[0], evens[0])
+                            first_fold(t, nv, diffs[0], evens[0])
                             first_fold(tm[j], nv, diffs[1], evens[1])
                             if shallow_tournament_reverse_select_race:
-                                race_sel(nv, condB[j], tm[j], temp_pool[s])
+                                race_sel(nv, condB[j], tm[j], t)
                             else:
-                                vsel(nv, condB[j], tm[j], temp_pool[s])
+                                vsel(nv, condB[j], tm[j], t)
                         else:
                             vec("&", condA[j], st, one_vec)   # newest bit b1
                             vec("&", condB[j], st, two_vec)   # mask for b0
-                            madd(temp_pool[s], condA[j], diffs[0], evens[0])
+                            madd(t, condA[j], diffs[0], evens[0])
                             madd(tm[j], condA[j], diffs[1], evens[1])
-                            vsel(nv, condB[j], tm[j], temp_pool[s])
+                            vsel(nv, condB[j], tm[j], t)
                     elif parity_conds and is_shallow_newest_parity_last_fold(r, g):  # L == 3
                         # H-027 (bl_last): both older bits b0,b1 sit in st
                         # at round start, so the even and diff tables fold
@@ -1896,14 +2130,14 @@ class KernelBuilder:
                         assert condA is not None and condB is not None and tm is not None and tmM is not None
                         vec("&", condB[j], st, one_vec)   # b1
                         vec("&", condA[j], st, two_vec)   # b0 mask
-                        vsel(temp_pool[s], condB[j], evens[1], evens[0])
+                        vsel(t, condB[j], evens[1], evens[0])
                         vsel(tm[j], condB[j], evens[3], evens[2])
-                        vsel(temp_pool[s], condA[j], tm[j], temp_pool[s])       # Ew
+                        vsel(t, condA[j], tm[j], t)       # Ew
                         vsel(tm[j], condB[j], diffs[1], diffs[0])
                         vsel(tmM[j], condB[j], diffs[3], diffs[2])
                         vsel(tm[j], condA[j], tmM[j], tm[j])      # Dw
                         fold_position(st, nv)                     # st = b0b1b2
-                        madd(nv, nv, tm[j], temp_pool[s])        # Ew + b2*Dw
+                        madd(nv, nv, tm[j], t)        # Ew + b2*Dw
                     elif parity_conds:  # L == 3
                         # nv = b2 (raw parity), st = b0b1 (bit1=b0, bit0=b1);
                         # both conds extract from st at round START.
@@ -1911,7 +2145,7 @@ class KernelBuilder:
                         vec("&", condB[j], st, one_vec)   # b1
                         vec("&", condA[j], st, two_vec)   # b0 mask
                         fold_position(st, nv)                     # fold b2: st = b0b1b2
-                        first_fold(temp_pool[s], nv, diffs[0], evens[0])   # m0
+                        first_fold(t, nv, diffs[0], evens[0])   # m0
                         first_fold(tmM[j], nv, diffs[1], evens[1])  # m1
                         first_fold(tm[j], nv, diffs[2], evens[2])   # m2
                         first_fold(nv, nv, diffs[3], evens[3])      # m3 (b2 dead)
@@ -1919,25 +2153,25 @@ class KernelBuilder:
                         # they race back to valu; the b0 winner's cond is a
                         # 0/2 mask, so it stays a flow vselect.
                         if shallow_tournament_reverse_select_race:
-                            race_sel(temp_pool[s], condB[j], tmM[j], temp_pool[s])  # q0
+                            race_sel(t, condB[j], tmM[j], t)  # q0
                             race_sel(nv, condB[j], nv, tm[j])         # q1
                         else:
-                            vsel(temp_pool[s], condB[j], tmM[j], temp_pool[s])  # q0 = b1 ? m1 : m0
+                            vsel(t, condB[j], tmM[j], t)  # q0 = b1 ? m1 : m0
                             vsel(nv, condB[j], nv, tm[j])         # q1 = b1 ? m3 : m2
-                        vsel(nv, condA[j], nv, temp_pool[s])         # b0 ? q1 : q0
+                        vsel(nv, condA[j], nv, t)         # b0 ? q1 : q0
                     else:  # L == 3
                         assert condA is not None and condB is not None and tm is not None and tmM is not None
                         vec("&", condA[j], st, one_vec)   # newest bit b2
                         vec("&", condB[j], st, two_vec)   # mask for b1
-                        madd(temp_pool[s], condA[j], diffs[0], evens[0])  # m0
+                        madd(t, condA[j], diffs[0], evens[0])  # m0
                         madd(tmM[j], condA[j], diffs[1], evens[1])  # m1
                         madd(tm[j], condA[j], diffs[2], evens[2])   # m2
                         madd(nv, condA[j], diffs[3], evens[3])      # m3
                         # condA is dead after the madds; reuse it for b0.
                         vec(">>", condA[j], st, two_vec)  # b0 (p is 3 bits)
-                        vsel(temp_pool[s], condB[j], tmM[j], temp_pool[s])  # q0 = b1 ? m1 : m0
+                        vsel(t, condB[j], tmM[j], t)  # q0 = b1 ? m1 : m0
                         vsel(nv, condB[j], nv, tm[j])         # q1 = b1 ? m3 : m2
-                        vsel(nv, condA[j], nv, temp_pool[s])         # b0 ? q1 : q0
+                        vsel(nv, condA[j], nv, t)         # b0 ? q1 : q0
                 elif is_pair_tournament_served(r, g) and parity_conds:
                     # Same two-stage select as below, but b3 = nv (raw
                     # parity, no extraction) and t = st = b0b1b2 (bit0=b2,
@@ -1975,10 +2209,10 @@ class KernelBuilder:
                         else:
                             nonlocal two_minus_fp_vec_clobbered
                             two_minus_fp_vec_clobbered = True  # see the bug guard note above
-                            depth_first_fold(st, level4_evens, tm[j], tmM[j], temp_pool[s],
+                            depth_first_fold(st, level4_evens, tm[j], tmM[j], t,
                                    condA[j], condB[j], leaf_dead_temp_a=level_table,
                                    leaf_dead_temp_b=level_table + VLEN)                # E_win->condB
-                            depth_first_fold(st, level4_diffs, tm[j], tmM[j], temp_pool[s],
+                            depth_first_fold(st, level4_diffs, tm[j], tmM[j], t,
                                    condA[j], tm[j], leaf_dead_temp_a=level_table + 2 * VLEN,
                                    leaf_dead_temp_b=level_table + 3 * VLEN)            # D_win->tm
                             if should_fold_b3:
@@ -2007,9 +2241,9 @@ class KernelBuilder:
                         vec("&", condB[j], st, one_vec)             # b2 (0/1)
                         if should_fold_b3:
                             fold_position(st, nv)                           # b0b1b2b3
-                        w_fold(temp_pool[s], nv, level4_diffs[0], level4_evens[0])        # W0
+                        w_fold(t, nv, level4_diffs[0], level4_evens[0])        # W0
                         w_fold(tm[j], nv, level4_diffs[1], level4_evens[1])        # W1
-                        u_combine(temp_pool[s], condB[j], tm[j], temp_pool[s])           # U0
+                        u_combine(t, condB[j], tm[j], t)           # U0
                         w_fold(tmM[j], nv, level4_diffs[2], level4_evens[2])       # W2
                         w_fold(tm[j], nv, level4_diffs[3], level4_evens[3])        # W3
                         u_combine(tmM[j], condB[j], tm[j], tmM[j])         # U1
@@ -2020,10 +2254,10 @@ class KernelBuilder:
                         w_fold(nv, nv, level4_diffs[7], level4_evens[7])           # W7 (b3 dead)
                         u_combine(nv, condB[j], nv, condA[j])              # U3 (b2 dead)
                         vec("&", condA[j], st, four_vec if should_fold_b3 else two_vec)  # b1
-                        vsel(temp_pool[s], condA[j], tmM[j], temp_pool[s])        # q0
+                        vsel(t, condA[j], tmM[j], t)        # q0
                         vsel(nv, condA[j], nv, tm[j])               # q1
                         vec("&", condB[j], st, eight_vec if should_fold_b3 else four_vec)  # b0
-                        vsel(nv, condB[j], nv, temp_pool[s])               # winner
+                        vsel(nv, condB[j], nv, t)               # winner
                 elif is_pair_tournament_served(r, g):
                     # Two-stage level-(maxT+1) select: with t = p>>1 the
                     # level-maxT position and b3 = p&1 the newest parity,
@@ -2033,14 +2267,14 @@ class KernelBuilder:
                     assert condA is not None and condB is not None and tm is not None and tmM is not None
                     nvsrc = nv
                     vec("&", condA[j], st, one_vec)                 # b3
-                    madd(temp_pool[s], condA[j], level4_diffs[0], level4_evens[0])     # W0
+                    madd(t, condA[j], level4_diffs[0], level4_evens[0])     # W0
                     madd(tm[j], condA[j], level4_diffs[1], level4_evens[1])     # W1
                     madd(tmM[j], condA[j], level4_diffs[2], level4_evens[2])    # W2
                     madd(nv, condA[j], level4_diffs[3], level4_evens[3])        # W3
                     vec("&", condB[j], st, two_vec)
                     vec(">>", condB[j], condB[j], one_vec)          # bit0 of t
-                    vec("-", tm[j], tm[j], temp_pool[s])                   # W1-W0
-                    madd(temp_pool[s], condB[j], tm[j], temp_pool[s])             # U0
+                    vec("-", tm[j], tm[j], t)                   # W1-W0
+                    madd(t, condB[j], tm[j], t)             # U0
                     vec("-", nv, nv, tmM[j])                        # W3-W2
                     madd(tmM[j], condB[j], nv, tmM[j])              # U1
                     madd(tm[j], condA[j], level4_diffs[4], level4_evens[4])     # W4
@@ -2052,10 +2286,10 @@ class KernelBuilder:
                     vec("-", condA[j], condA[j], nv)                # W7-W6
                     madd(nv, condB[j], condA[j], nv)                # U3 (bit0 dead)
                     vec("&", condB[j], st, four_vec)                # bit1 of t mask
-                    vsel(temp_pool[s], condB[j], tmM[j], temp_pool[s])            # q0
+                    vsel(t, condB[j], tmM[j], t)            # q0
                     vsel(nv, condB[j], nv, tm[j])                   # q1
                     vec("&", condB[j], st, eight_vec)               # bit2 of t mask
-                    vsel(nv, condB[j], nv, temp_pool[s])                   # winner
+                    vsel(nv, condB[j], nv, t)                   # winner
                 else:
                     nvsrc = nv  # gathered during round r-1
 
@@ -2073,7 +2307,6 @@ class KernelBuilder:
                 # read of val is safe under the bundle semantics).
                 is_parity_early_round = (L in parity_early_levels and r < rounds - 1
                       and level(r + 1) != 0)
-                t = temp_pool[s]
                 if nvsrc is not None:
                     vec("^", vl, vl, nvsrc)
                 madd(vl, vl, fused_hash_const_vecs["k0"], fused_hash_const_vecs["C0"])
@@ -2121,7 +2354,7 @@ class KernelBuilder:
                     par = nv
                     parity = lambda dst: vec(">>", dst, nv, fused_hash_const_vecs["c31"])
                 else:
-                    par = temp_pool[s]
+                    par = t
                     parity = lambda dst: vec("&", dst, vl, one_vec)
                 if is_served_without_gather(r + 1, g):
                     if L == 0:

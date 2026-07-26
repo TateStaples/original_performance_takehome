@@ -656,3 +656,121 @@ H-009, H-011.
     before committing to the larger architecture change) rather than
     continuing ad hoc searches in this pass; the cheap and medium levers
     are exhausted.
+
+- P-16 [status: NEGATIVE (measured, correct), EXTERNAL SOURCE — not an
+  in-repo strain finding]: virtual-register live-range coloring for
+  `temp_pool` (H-029's era's external repo, now at 1020 cycles; read
+  their `alloc_virtual_vec`/`color_virtual_vectors` directly, commit as
+  of 2026-07-25). ATTRIBUTION: their idea, ported here as a hypothesis.
+  - mechanism (theirs): every transient temp use gets a fresh symbolic
+    "virtual" address (`alloc_virtual_vec`, a counter starting at
+    1,000,000); AFTER their task-collection scheduler runs (producing a
+    per-task `scheduled_cycle`), `color_virtual_vectors` computes each
+    virtual base's [min cycle, max cycle] interval from its tasks'
+    `_reads`/`_writes`, sweeps for the true peak concurrent-live count,
+    then greedily interval-colors (sorted by start; a stack of free
+    colors; reuse the moment an active interval's end < the new
+    interval's start) onto a small physical pool, and relabels every
+    bundle's addresses via the resulting `lane_map`. A companion
+    scheduling heuristic (`virtual_pressure_urgent`/`virtual_finishes`)
+    prioritizes retiring a virtual base before the pool would force a
+    stall.
+  - PORT (dev.py, `temp_pool_coloring` flag on `build_kernel_scheduled`,
+    default off — mainline/perf_takehome.py untouched): our `temp_pool`
+    (the single reused scratch vector `t` that `_round_stage_generator`
+    threads through the whole hash+tournament-fold body for one
+    (round, group) instance, currently `s = g % temp_pool_size`, static)
+    is the direct analog. Our `ListScheduler` is streaming/immediate-
+    placement, not task-collection, so there is no upfront DAG to color
+    against — instead: (1) a "virtual" mode gives every one of the
+    512 (round, group) instances its own address 8,000,000+idx*VLEN
+    (never reused, never colliding with real scratch or any int literal
+    in a slot, since hash constants are always stored via
+    `scratch_const`-issued ADDRESSES, never inlined as raw values); a
+    full build runs once in this mode (the existing `sched_trace` hook,
+    already built for `tools/sched_profile.py`, is reused verbatim to
+    record (cycle, reads, writes) per op) to get real intervals from an
+    UNCONSTRAINED schedule (no false WAR/WAW between instances that
+    would otherwise share a static slot). (2) greedy interval coloring
+    (ported near-verbatim, including the "steal the color that frees
+    soonest" fallback when a hard cap is given, so it never needs more
+    physical colors than a caller-chosen budget). (3) a second full
+    build replays the IDENTICAL deterministic (round, group) call
+    sequence (verified bit-for-bit: logged (call_index, round, group)
+    triples from both passes are equal at every index) but resolves
+    each instance's temp through the computed color map instead of
+    `g % pool_size`. Total op count and per-(engine, opcode) histogram
+    verified IDENTICAL between static and colored builds at a size-
+    matched pool (11144 ops both ways in a bisection config) — this is
+    purely an address-assignment swap, not an op-stream change.
+  - BUG FOUND AND FIXED during verification (correctness-first, per the
+    task brief): the first working version returned the COLOR INDEX
+    (0..N-1) directly as if it were a physical scratch address, instead
+    of indexing `temp_pool[color]` — every colored build crashed
+    (IndexError on a gather load reading a garbage address, downstream
+    of `st` corruption) or silently used addresses 0..16 (colliding with
+    unrelated live scratch). Root-caused via: (a) confirming call order
+    is identical between passes (ruled out an emission-order bug), (b)
+    confirming op histograms match (ruled out a missing/extra-op bug),
+    (c) confirming total op count matches, (d) directly instrumenting
+    `alloc_state`'s allocated `temp_pool` addresses and grepping the
+    trace for them — found ZERO of the real physical addresses were
+    ever referenced, which pointed straight at the indexing bug. Fixed
+    (`temp_pool[self._temp_color_map[idx]]`); all bisection/minimal
+    configs and the full mainline stack then ran correct with bit-
+    identical op streams.
+  - MEASURED at the mainline config (build_kernel's exact flag stack,
+    fh=10/bs=256/r=16, `tools/run_variant.py`, seeds 1-5 +
+    `debug_compares=True`, all correct=true, `tests/submission_tests.py`
+    unaffected at 1038 since perf_takehome.py was not touched):
+    - TRUE unconstrained required colors (the schedule's real peak
+      concurrent-live count with temp addressing fully unbounded):
+      **18** physical VLEN-slots (144 words) — MORE than the hand-tuned
+      `temp_and_cond_pool_sizes[0]=16` (128 words), not less. This is
+      the opposite of the hoped-for result: removing the static pool's
+      artificial WAR/WAW serialization lets the greedy scheduler pack
+      MORE instances into overlapping cycles, which is good for
+      throughput but means a truly lossless pool needs to be BIGGER,
+      not smaller. Scratch has no room for the extra 2 slots/16 words
+      (already ~1533/1536 at mainline, per H-029's P-14 note); bumping
+      `temp_and_cond_pool_sizes` to (17,4) to test it directly
+      overflows scratch immediately (confirmed: `alloc_scratch` fails
+      inside `emit_vals`, before even reaching the tournament tables).
+    - CAPPED at the incumbent budget (16 colors, forcing the greedy
+      "steal soonest-freeing color" fallback whenever the true peak
+      exceeds the cap — always CORRECT by construction, since the
+      ListScheduler enforces real hazards on whatever address is
+      actually used regardless of what the coloring predicted, only
+      ever costing extra serialization, never wrongness): **1074
+      cycles, +36 vs the 1038 static mainline.** The globally-computed-
+      then-capped assignment is WORSE than the incumbent naive
+      `g % pool_size` residue scheme at the identical scratch cost.
+      Plausible reason (not separately isolated): the static residue
+      scheme is not actually naive for this kernel's specific access
+      pattern — skew partitions groups into blocks of 8 and
+      `pool_size=16 > block_size=8` guarantees ZERO slot collisions
+      for any instances that are concurrently round-robin-active
+      within one block, with collisions only possible ACROSS
+      differently-lagged skew blocks (which the H-005/H-020 sweep
+      already tuned pool_size against). The coloring pass optimizes
+      colors for cycle-interval disjointness in the UNCONSTRAINED
+      schedule, which doesn't preserve that structural invariant once
+      capped and rescheduled.
+  - status: NEGATIVE, both directions. (a) Uncapped: needs 18 colors,
+    2 more than we have room for — not a scratch-freeing win, the
+    opposite. (b) Capped to the current budget: correct, but 36 cycles
+    worse than the incumbent static scheme. Confirms this strain's
+    running theme (P-5/P-14/H-020): the hand-swept `temp_and_cond_pool_
+    sizes` is already close to optimal for THIS kernel's specific
+    skewed/blocked access pattern, and a formally-tighter allocator
+    does not automatically beat a well-tuned naive one when the naive
+    one's structure (block size <= pool size) already exploits the
+    real concurrency pattern for free. `temp_pool_coloring` (+
+    `temp_pool_coloring_uncapped` for the informational uncapped
+    measurement) is landed in dev.py, default off, dead code on the
+    default path (perf_takehome.py untouched) — kept for anyone who
+    wants to re-run the numbers or extend the coloring to the cond
+    pools (`condA`/`condB`/`tm`/`tmM`), which were explicitly out of
+    scope here (task brief scoped this to `temp_pool` only) and were
+    not measured.
+  - log: 2026-07-25 ported, bug-hunted, measured negative.
