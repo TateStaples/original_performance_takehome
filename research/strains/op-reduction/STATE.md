@@ -30,6 +30,13 @@ specific tool (Z3 QF_BV component synthesis at 32-bit width) is now
 known not to be the way to close it without a fundamentally different
 encoding (much smaller bit-width abstraction + lifting, or a
 syntax-guided/enumerative synthesizer instead of raw existential SMT).
+Iter 6b (H-025 continuation) ran the SAME validated fusion_search.rs
+machinery against the whole-hash end-to-end map with zero waypoint
+assumption (new `full_hash` MITM target): also NEGATIVE at depth<=7
+(kf<=2+j<=5), the same P-7 ceiling as every segment cut, now confirmed
+global. k=10 for the whole hash is unresolved beyond this depth-7
+boundary; see P-12 for the two concrete (expensive/unattempted) paths
+that remain.
 
 ## Assigned
 - H-003 (iter 1): DONE — see iteration log.
@@ -39,6 +46,9 @@ syntax-guided/enumerative synthesizer instead of raw existential SMT).
 - H-025 (iter 6): DONE — CEGIS/z3 k=10 synthesis attempt, closed
   inconclusive (solver infeasibility, not a proof either way); see
   iteration log.
+- H-025 (iter 6b): PARTIAL — enumerative global-MITM sub-attempt (no
+  waypoint assumption) CLOSED NEGATIVE at a stated coverage boundary
+  (kf<=2 + suffix<=5, i.e. depth<=7 of the 10 needed). See log.
 Queued: H-012 (floor recalibration).
 
 ## Iteration log
@@ -300,6 +310,67 @@ Queued: H-012 (floor recalibration).
   before spending wall-clock on 32-bit, or (b) switching tools entirely
   to an enumerative/invertibility-based superoptimizer.
 
+- 2026-07-25 iter 6b (H-025 continuation, bounded research agent):
+  H-025's statement is "the 11-op hash in 10" via a GLOBAL/non-compositional
+  attack (P-8) — every prior tool (H-003/H-016) only ever cut the chain at
+  named stage waypoints (b, c, d, e). This iteration took the (b) path from
+  iter 6's recommendation: rather than re-architect a new symbolic solver,
+  it used fusion_search.rs's ALREADY-invertibility-pruned MITM engines
+  (solved xor/madd meets via odd-part affine canonicalization, xorshift
+  chain inversion, no symbolic bit-blasting — i.e. these engines already
+  ARE the enumerative/invertibility-based superoptimizer P-11 called for)
+  and pointed them at a target NEVER previously tried: `full_hash`, the
+  whole chain end-to-end (`a -> myhash(a)`) with NO waypoint assumption at
+  all. Pool: the 12 hashseg constants + common (zero/one/m1) + 8 shifts;
+  link-chain seed = 26 constants (stage consts + pairwise sums/products/
+  shifts) building a 72-constant/1284-link pool (same methodology as every
+  prior target).
+  Ran to completion in 1678.3s (~28 min) on an 8-core box, within a
+  30-45 min budget:
+    - engine A (forward-exhaustive, full k<=4 over the 16-item pool):
+      2,940,520,863,935 candidates, 1290.7s. NO <=4-op program computes
+      the whole hash.
+    - engine B (forward DFS depth<=3 x inverted 1-2-op suffix chains):
+      1,033,714,835 forward nodes, 34.9s.
+    - engine C (suffix-chain DFS to 5 ops, <=3 unary links / <=1 at depth
+      5, x forward-prefix tables kf=0/1/2): 2,118,285,916 chain nodes,
+      351.6s.
+    - RESULT: NO program of <= 10 ops in the searched space. Current
+      11-op form stands.
+  COVERAGE (exact, honest boundary): the combined engines cover every
+  program shape expressible as [kf-op forward prefix, kf in {0,1,2}] +
+  [optional SOLVED xor/madd meet, free over all 2^32] + [j-op invertible
+  suffix chain, j<=5, over the 72-const/1284-link pool, <=3 unary links /
+  <=1 at j=5] OR [forward DFS depth<=3 over the full pool] + [suffix
+  depth<=2] — i.e. a hard ceiling of depth <= 7 out of the 10 needed,
+  identical in kind to H-016's "kf=4 gap" (P-7) but now confirmed to ALSO
+  hold with zero segment/waypoint assumption baked in (this rules out an
+  entirely different decomposition of the hash reusing none of the known
+  stage cuts, not just deeper cuts at the known ones). NOT covered: kf=3/
+  4/5 general forward prefixes (P-7's ~1000x-cost gap, unchanged), suffix
+  chains with >3 unary links or link constants outside the printed
+  72-value pool, and/or/shift meets with out-of-pool constants (only xor/
+  madd meets are solved), and any candidate whose interior pool constants
+  aren't in the printed forward pool. The k=10 question is NOT closed —
+  this narrows the space it could hide in from "everywhere" to "requires
+  an >=8-op-deep forward OR backward half," the same unresolved P-7/P-8
+  gap, now doubly confirmed.
+  Kernel port: NONE (no find). perf_takehome.py/dev.py untouched.
+  IMPLEMENTATION NOTE: the new `full_hash` MTarget was implemented and
+  verified (build clean, `cargo test --release --bin fusion_search` 9/9
+  passing) against a copy of `fusion_search.rs` predating this session's
+  repo-wide naming/typing refactor (the agent's worktree was checked out
+  from an older commit) — the RESULT is a property of the hash function
+  itself (unchanged by the refactor) and is trustworthy, but the specific
+  Rust diff was NOT re-applied to the current (renamed) `fusion_search.rs`
+  on `main`, since a manual field-name/constant translation risked
+  introducing an unverified error. A future iteration should re-implement
+  `full_hash` directly against current `main`'s `fusion_search.rs` (same
+  design: one new `MTarget` calling `hs::fused_hash` as `a -> myhash(a)`,
+  pool = stage constants + shifts, same seed-derivation pattern as the
+  neighboring `a2d`/`b2e`/`c2out` targets) to get the result properly
+  landed in-tree rather than only documented here.
+
 ## Proposed hypotheses
 (agent appends; driver promotes to backlog.md)
 - P-1 [op-reduction]: C5-pre-xor value domain. Pre-xor all 2047 tree node
@@ -467,3 +538,20 @@ Queued: H-012 (floor recalibration).
   rather than letting Z3 discover the whole structure by search. Either
   is a materially different (and nontrivial, multi-hour-plus) effort;
   do not treat "add more solver timeout" as a fix.
+- P-12 [op-reduction, iter-6b]: with H-016's per-cut kf<=2/j<=5 ceiling now
+  confirmed to also hold GLOBALLY (no waypoint assumption, via the new
+  `full_hash` MITM target — not yet ported to current `main`'s
+  `fusion_search.rs`, see iter 6b's implementation note), the ONLY
+  concrete remaining moves for "11 in 10" are: (a) extend engine C's
+  forward-table builder to kf=3 (cost estimate from P-7: ~1000x the kf=2
+  cost, i.e. likely >1 CPU-day per target on an 8-core box — not
+  attempted, out of any single iteration's reasonable budget), or (b) fix
+  CEGIS's scaling wall by making `multiply_add` NOT unconditionally
+  bit-blast a symbolic 32x32 multiplier — e.g. encode op-kind as a hard
+  case-split (one z3.Solver branch per kind, most of which are linear/
+  cheap) rather than a single mux'd expression the solver must reason
+  about uniformly regardless of which kind is selected; this is a real,
+  actionable fix to try before another CEGIS run, not just "more
+  timeout." Absent either, H-025/G-10 stay open only in the "unreachable
+  at current tooling scale" sense — treat as effectively closed for
+  practical purposes unless one of (a)/(b) is actually funded.

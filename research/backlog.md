@@ -406,7 +406,9 @@ further gain found]
   kept as control. Retune: optimum unmoved. Dispatch flipped; grader 9/9.
 - log: 2026-07-23 promoted; iter 5 ACCEPTED.
 
-### H-025 [strain: op-reduction] [status: closed-inconclusive]
+### H-025 [strain: op-reduction] [status: two sub-attempts made, neither
+closes k<=10 -- CEGIS inconclusive, enumerative MITM closed-negative at a
+stated depth<=7 coverage boundary]
 - statement: (H-016's P-8) global synthesis attack on "the 11-op hash in
   10": CEGIS/SAT over the machine op set with free 32-bit constants —
   counterexample-guided: synthesize candidate on a few IO pairs (z3 bitvec),
@@ -441,6 +443,31 @@ further gain found]
   enumerative/invertibility-based superoptimizer instead of raw
   existential bit-blasting -- NOT just more solver timeout).
   perf_takehome.py/dev.py untouched.
+  ITER 6b (2026-07-25, same session, second sub-attempt): P-11's
+  recommended enumerative/invertibility approach turned out to already
+  exist -- `fusion_search.rs`'s engines B/C (solved xor/madd meets,
+  xorshift-chain inversion, no symbolic bit-blasting) ARE that design.
+  Added one new MITM target, `full_hash`: the whole chain `a ->
+  myhash(a)` end-to-end, with NO waypoint assumption (every prior target
+  cut at a named stage boundary -- this had never been tried). Ran to
+  completion in 1678.3s (~28 min): engine A full k<=4 exhaustive
+  (2,940,520,863,935 candidates), engine B fwd<=3 x suffix<=2
+  (1,033,714,835 nodes), engine C suffix<=5 x kf<=2 forward prefixes
+  (2,118,285,916 nodes). **CLOSED NEGATIVE at that stated coverage: no
+  <=10-op program found** (ceiling = depth<=7 of the 10 needed, the same
+  kf=4-gap shape as H-016/P-7, now confirmed with zero waypoint/segment
+  assumption baked in -- rules out an entirely different hash
+  decomposition, not just deeper cuts at the known stage boundaries). k=10
+  remains open beyond depth 7; closing further needs kf=3+ forward tables
+  (~1000x cost, P-7) or a CEGIS fix (case-split op-kind instead of one
+  uniform mux, P-12), neither attempted. IMPLEMENTATION NOTE: verified
+  (build clean, 9/9 tests) against a pre-refactor copy of
+  `fusion_search.rs` (the agent's worktree predated this session's
+  naming/typing pass); the result is a property of the hash function
+  itself and stands, but the Rust diff was NOT re-applied to current
+  `main`'s renamed `fusion_search.rs` (manual constant-name translation
+  risked an unverified error) -- see op-reduction/STATE.md iter 6b for
+  the exact re-implementation note for a future pass.
 - log: 2026-07-23 promoted from op-reduction P-8; 2026-07-25 closed
   inconclusive, see result.
 

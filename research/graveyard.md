@@ -83,8 +83,13 @@ Seeded 2026-07-23 from the 2148->1140 campaign's measured rejections.
   Searcher self-test rediscovers the known stage2∘3 fusion. NOT a global
   minimality proof (global space ~10^28).
 - reopen-if: (UPDATED iter 4: H-016 MITM ran and was negative on all 10
-  boundaries — 2.36T+16B nodes, solved meets.) Now reopens only via H-025
-  (global CEGIS/SAT synthesis), a kf=4-prefix run on a much bigger machine,
+  boundaries — 2.36T+16B nodes, solved meets.) (UPDATED iter 6b: H-025's
+  enumerative sub-attempt ran the same MITM machinery against the whole
+  hash end-to-end with no waypoint assumption — also negative at
+  depth<=7/10, 2.9T+1.03B+2.12B candidates/nodes; CEGIS sub-attempt
+  inconclusive, scaling wall at k=4.) Now reopens only via: a working
+  CEGIS run (fix the multiply_add bit-blast per P-12), a kf>=3 forward
+  prefix run on a much bigger machine (P-7's ~1000x cost, unattempted),
   or HASH_STAGES changing.
 
 ### G-11 nv double-buffering (H-014)
