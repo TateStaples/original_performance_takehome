@@ -406,9 +406,10 @@ further gain found]
   kept as control. Retune: optimum unmoved. Dispatch flipped; grader 9/9.
 - log: 2026-07-23 promoted; iter 5 ACCEPTED.
 
-### H-025 [strain: op-reduction] [status: two sub-attempts made, neither
+### H-025 [strain: op-reduction] [status: three sub-attempts made, none
 closes k<=10 -- CEGIS inconclusive, enumerative MITM closed-negative at a
-stated depth<=7 coverage boundary]
+stated depth<=7 coverage boundary (now landed+reverified on main), kf=3
+extension closed infeasible (memory-bound, not time-bound)]
 - statement: (H-016's P-8) global synthesis attack on "the 11-op hash in
   10": CEGIS/SAT over the machine op set with free 32-bit constants —
   counterexample-guided: synthesize candidate on a few IO pairs (z3 bitvec),
@@ -468,8 +469,58 @@ stated depth<=7 coverage boundary]
   `main`'s renamed `fusion_search.rs` (manual constant-name translation
   risked an unverified error) -- see op-reduction/STATE.md iter 6b for
   the exact re-implementation note for a future pass.
+  ITER 7 (2026-07-25, bounded research agent, worktree fast-forwarded
+  from stale 5da6061 to main@92be85c first): two parts, both actually
+  RUN, not estimated.
+  (1) Re-ported `full_hash` for real onto current main's renamed
+  `fusion_search.rs` (current identifiers: `hs::fused_hash`,
+  `STAGE0_ADD_CONSTANT`/`STAGE0_MULTIPLIER`/`STAGE1_XOR_CONSTANT`/
+  `F23_P_MULTIPLIER`/`F23_P_CONSTANT`/`F23_Q_MULTIPLIER`/
+  `F23_Q_CONSTANT`/`STAGE4_ADD_CONSTANT`/`STAGE5_XOR_CONSTANT`; same
+  pool/seed methodology as `a2d`/`b2e`/`c2out`: 23-item forward pool [12
+  hashseg consts + common(3) + 8 shifts], 16-item engine-A pool, 26-item
+  link seed -> the file's fixed 72-const/1284-link cap). Build clean,
+  9/9 tests. RAN to completion (2220.2s, ~37 min): engine A k<=4 =
+  2,868,020,060,885 candidates (1568.9s, same order of magnitude as iter
+  6b's 2,940,520,863,935/1290.7s); engine C = 2,118,285,916 chain nodes
+  (405.0s) -- IDENTICAL node count to iter 6b's figure (link pool
+  matched exactly, cross-validating the port); engine B = 6,935,605,852
+  forward nodes (245.0s), larger than iter 6b's reported 1,033,714,835
+  because this port's engine B searches the fuller 23-item forward pool
+  (per iter 6b's own pool spec) rather than an unspecified leaner one --
+  a coverage SUPERSET, not a weakening. **RESULT UNCHANGED: no <=10-op
+  program found at the same depth<=7 boundary**, now actually landed and
+  reverified in-tree on main rather than only documented.
+  (2) P-12 kf=3 scoping, ACTUALLY ATTEMPTED rather than estimated cold:
+  implemented real kf=3 support in `build_fwd_tab` (diagnostic-only,
+  gated behind a new `--kf-scale` probe, not wired into engine C or any
+  verified target -- zero risk to (1)'s result) and measured real
+  wall-clock/memory at increasing pool sizes on the same 8-core/24GB
+  box: pool=4..16 items took 0.1s/1.0s/4.8s/13.9s/33.1s/81.2s/284.3s
+  (55.9K/437K/2.0M/6.3M/17.5M/40.6M/85.6M table entries respectively),
+  with the log-log growth exponent ACCELERATING from ~6.8 (pool 4->6)
+  down to ~5.2 (8->12) then back up to ~10.0 (14->16) -- not a fixed
+  polynomial degree, getting worse as pool grows. At the REAL 23-item
+  pool used by every target (kf<=2 independently reconfirmed identical
+  to run (1): 611,535 kf=2 entries, 0.531s), kf=3 was KILLED after ~10
+  min with RSS still climbing unboundedly past 8GB (freed ~16GB
+  system-wide on kill -- nowhere near converging). **CLOSED INFEASIBLE:
+  kf=3 is a MEMORY wall, not the ~1000x-CPU-time wall P-7 estimated** --
+  a pool small enough to finish in minutes (<=12 items) is too
+  impoverished to contain the real multi-stage hash constants needed for
+  meaningful coverage of ANY span (even the smallest 6-op sub-span needs
+  ~13 items to be non-trivial); no pool size is simultaneously
+  tractable-in-hours and representative. Recommend NOT re-attempting kf=3
+  without a fundamentally different table representation (external/
+  streaming dedup, or a proven order-of-magnitude algebraic
+  canonicalization) -- more wall-clock will hit the same memory wall this
+  iteration hit in ~10 minutes. P-12(b) (CEGIS case-split fix) is now the
+  more promising remaining lever, untried. perf_takehome.py/dev.py
+  untouched throughout.
 - log: 2026-07-23 promoted from op-reduction P-8; 2026-07-25 closed
-  inconclusive, see result.
+  inconclusive (CEGIS) + closed negative (enumerative MITM, iter 6b);
+  2026-07-25 iter 7 landed the MITM re-port on main and closed the kf=3
+  scoping question infeasible (memory-bound).
 
 ### H-026 [strain: cross] [status: accepted]
 - statement: mem_prime — per-level in-mem C5-priming of deep gather levels

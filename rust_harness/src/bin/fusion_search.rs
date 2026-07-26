@@ -1640,7 +1640,36 @@ fn build_fwd_tab(ctx: &Ctx, prefix_op_count: usize) -> FwdTab {
                 w.pop(undo);
             }
         }
-        _ => unreachable!("forward tables only go to kf = 2"),
+        // kf=3 (P-12/H-025 scoping probe only; NOT wired into the default
+        // engine C, which stays kf<=2 exactly as verified). Same chaining
+        // rule as kf=2, one level deeper: op2 must use t1, op3 must use t2 --
+        // "every non-last temp is referenced" is satisfied because each
+        // temp is consumed by the very next op.
+        3 => {
+            let mut w = SearchState::new(ctx);
+            let mut first_level_candidates: Vec<(Inst, ProbeValues)> = Vec::new();
+            enumerate_level(&w, |inst, v| first_level_candidates.push((inst, v)));
+            for (i1, v1) in first_level_candidates {
+                let undo1 = w.push(i1.clone(), v1);
+                let mut second_level_candidates: Vec<(Inst, ProbeValues)> = Vec::new();
+                enumerate_level(&w, |i2, v2| {
+                    if inst_uses(&i2, base_count) {
+                        second_level_candidates.push((i2, v2));
+                    }
+                });
+                for (i2, v2) in second_level_candidates {
+                    let undo2 = w.push(i2.clone(), v2);
+                    enumerate_level(&w, |i3, v3| {
+                        if inst_uses(&i3, base_count + 1) {
+                            tab.add(v3, vec![i1.clone(), i2.clone(), i3], base_count + 2);
+                        }
+                    });
+                    w.pop(undo2);
+                }
+                w.pop(undo1);
+            }
+        }
+        _ => unreachable!("forward tables only go to kf = 3"),
     }
     tab
 }
@@ -2345,6 +2374,87 @@ fn mitm_targets() -> Vec<MTarget> {
             enable_engine_c: false,
             reference_fn: Box::new(|x| hs::stage5(hs::stage4(hs::f23(x[0])))),
         },
+        MTarget {
+            name: "full_hash",
+            desc: "whole 11-op chain, NO waypoint assumption: stage5(stage4(f23(stage1(stage0(a))))) == myhash(a) [madd,shr,xor,xor,madd,madd,xor,madd,xor,shr,xor]",
+            input_count: 1,
+            current_ops: 11,
+            // Engine A here is the expensive one (full k<=4 exhaustive over every
+            // stage's constants at once, no segment cut) -- kept to a leaner
+            // 16-item pool (12 hashseg consts + common + 1 shift) to stay in
+            // budget; the richer 23-item `pool` below (12 hashseg consts + common
+            // + 8 shifts) only has to survive engines B/C's DFS-over-tables shapes.
+            engine_a_kmax: 4,
+            engine_a_pool_override: mk(&[
+                ("STAGE0_ADD_CONSTANT", STAGE0_ADD_CONSTANT),
+                ("STAGE0_MULTIPLIER", STAGE0_MULTIPLIER),
+                ("STAGE1_XOR_CONSTANT", STAGE1_XOR_CONSTANT),
+                ("F23_P_MULTIPLIER", F23_P_MULTIPLIER),
+                ("F23_P_CONSTANT", F23_P_CONSTANT),
+                ("F23_Q_MULTIPLIER", F23_Q_MULTIPLIER),
+                ("F23_Q_CONSTANT", F23_Q_CONSTANT),
+                ("STAGE4_MULTIPLIER", 9),
+                ("STAGE4_ADD_CONSTANT", STAGE4_ADD_CONSTANT),
+                ("STAGE5_XOR_CONSTANT", STAGE5_XOR_CONSTANT),
+                ("C1i", c1_xorshift19),
+                ("C5i", c5_xorshift16),
+                ("s19", 19),
+            ]),
+            pool: mk(&[
+                ("STAGE0_ADD_CONSTANT", STAGE0_ADD_CONSTANT),
+                ("STAGE0_MULTIPLIER", STAGE0_MULTIPLIER),
+                ("STAGE1_XOR_CONSTANT", STAGE1_XOR_CONSTANT),
+                ("F23_P_MULTIPLIER", F23_P_MULTIPLIER),
+                ("F23_P_CONSTANT", F23_P_CONSTANT),
+                ("F23_Q_MULTIPLIER", F23_Q_MULTIPLIER),
+                ("F23_Q_CONSTANT", F23_Q_CONSTANT),
+                ("STAGE4_MULTIPLIER", 9),
+                ("STAGE4_ADD_CONSTANT", STAGE4_ADD_CONSTANT),
+                ("STAGE5_XOR_CONSTANT", STAGE5_XOR_CONSTANT),
+                ("C1i", c1_xorshift19),
+                ("C5i", c5_xorshift16),
+                ("s12", 12),
+                ("s19", 19),
+                ("s5", 5),
+                ("s9", 9),
+                ("s3", 3),
+                ("s16", 16),
+                ("s13", 13),
+                ("s14", 14),
+            ]),
+            seed: vec![
+                STAGE0_ADD_CONSTANT,
+                STAGE0_MULTIPLIER,
+                STAGE1_XOR_CONSTANT,
+                F23_P_MULTIPLIER,
+                F23_P_CONSTANT,
+                F23_Q_MULTIPLIER,
+                F23_Q_CONSTANT,
+                STAGE4_ADD_CONSTANT,
+                STAGE5_XOR_CONSTANT,
+                c1_shifted_right_19,
+                c1_xorshift19,
+                c5_shifted_right_16,
+                c5_xorshift16,
+                c0_shifted_right_19,
+                kp_times_c1,
+                kq_times_c1,
+                f23_p_branch_at_c1,
+                f23_q_branch_at_c1,
+                kp_times_k4,
+                kq_times_k4,
+                stage4_of_ap,
+                aq_times_k4,
+                k0_times_65536,
+                k0_times_c4,
+                k0_times_c5,
+                k0_times_k4,
+            ],
+            shifts: vec![12, 19, 5, 9, 3, 16, 13, 14],
+            stretch: true,
+            enable_engine_c: true,
+            reference_fn: Box::new(|x| hs::fused_hash(x[0])),
+        },
     ]
 }
 
@@ -2465,12 +2575,60 @@ fn summarize(tg: &MTarget, ctx_a: &Ctx, ctx: &Ctx, kmax_use: usize, t_start: Ins
     }
 }
 
+/// P-12/H-025 kf=3 feasibility scoping probe (NOT wired into any verified
+/// search result -- purely diagnostic). Times `build_fwd_tab` at kf=0..=3
+/// over increasing prefixes of the `full_hash` target's pool, to empirically
+/// calibrate how kf=3's cost actually scales with pool size instead of
+/// trusting a hand-derived exponent. Self-limiting: skips remaining kf at a
+/// pool size once a single build exceeds 120s, and stops entirely at a
+/// 15-minute total wall budget.
+fn run_kf_scale_probe() {
+    use std::io::Write;
+    let all = mitm_targets();
+    let tg = all.iter().find(|t| t.name == "full_hash").expect("full_hash target missing");
+    println!("== kf-scale probe (P-12 kf=3 feasibility calibration, full_hash pool/fn) ==");
+    println!("   full pool has {} consts (incl. common); input_count={}", tg.pool.len(), tg.input_count);
+    let probe_deadline = Instant::now() + std::time::Duration::from_secs(900);
+    let sizes: Vec<usize> = vec![4, 6, 8, 10, 12, 14, 16, tg.pool.len()];
+    'sizes: for &n in &sizes {
+        if n > tg.pool.len() {
+            continue;
+        }
+        let pool_subset = &tg.pool[..n];
+        let ctx = build_ctx(tg.input_count, pool_subset, &*tg.reference_fn);
+        print!("   pool={n:>2} (leaves={:>2}):", n + tg.input_count);
+        std::io::stdout().flush().ok();
+        for kf in 0..=3usize {
+            if Instant::now() >= probe_deadline {
+                println!(" [15-min probe budget exhausted, stopping]");
+                break 'sizes;
+            }
+            let t0 = Instant::now();
+            let tab = build_fwd_tab(&ctx, kf);
+            let dt = t0.elapsed().as_secs_f64();
+            print!(" kf{kf}=[{}e,{:.3}s]", tab.entries.len(), dt);
+            std::io::stdout().flush().ok();
+            if dt > 120.0 {
+                println!(" [>120s, skipping larger kf at this pool size]");
+                continue 'sizes;
+            }
+        }
+        println!();
+    }
+    println!("== probe complete ==");
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let long = args.iter().any(|a| a == "--long");
     let mitm = args.iter().any(|a| a == "--mitm");
     let stretch = args.iter().any(|a| a == "--stretch");
+    let kf_scale = args.iter().any(|a| a == "--kf-scale");
     let names: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
+    if kf_scale {
+        run_kf_scale_probe();
+        return;
+    }
     let threads = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4);

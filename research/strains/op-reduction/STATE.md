@@ -37,6 +37,22 @@ assumption (new `full_hash` MITM target): also NEGATIVE at depth<=7
 global. k=10 for the whole hash is unresolved beyond this depth-7
 boundary; see P-12 for the two concrete (expensive/unattempted) paths
 that remain.
+Iter 7 (H-025 re-port + P-12 kf=3 scoping) landed `full_hash` for real on
+current `main`'s renamed `fusion_search.rs` (iter 6b's copy was never
+applied) and RE-CONFIRMED the depth<=7 negative directly on this
+codebase (9/9 tests green; 2,868B engine-A candidates, 1284-link/72-const
+suffix pool byte-identical in derivation to iter 6b's). It also actually
+attempted P-12's kf=3 extension (not just estimated it): implemented kf=3
+in `build_fwd_tab` behind a diagnostic-only `--kf-scale` probe and
+measured real wall-clock/memory cost at increasing pool sizes. VERDICT:
+kf=3 is memory-bound, not CPU-bound, at any pool rich enough to matter --
+entries hit 85.6M (284s) at a 16-const toy pool and the growth exponent
+was still ACCELERATING (~5.2 -> ~10) as pool size approached the 23-const
+pool every real target needs; the real-pool kf=3 attempt was killed after
+~10 min with RSS still climbing past 8GB unbounded (freed ~16GB on kill).
+No pool size is both tractable in hours and rich enough to represent the
+actual hash-stage constants. See P-12 for the updated verdict and the
+iteration log entry below for full numbers.
 
 ## Assigned
 - H-003 (iter 1): DONE — see iteration log.
@@ -49,6 +65,10 @@ that remain.
 - H-025 (iter 6b): PARTIAL — enumerative global-MITM sub-attempt (no
   waypoint assumption) CLOSED NEGATIVE at a stated coverage boundary
   (kf<=2 + suffix<=5, i.e. depth<=7 of the 10 needed). See log.
+- H-025 (iter 7): DONE — `full_hash` re-ported and re-verified for real on
+  current main (depth<=7 negative reconfirmed); P-12's kf=3 extension
+  actually attempted and CLOSED as memory-infeasible at any pool rich
+  enough to be meaningful. See log.
 Queued: H-012 (floor recalibration).
 
 ## Iteration log
@@ -371,6 +391,104 @@ Queued: H-012 (floor recalibration).
   neighboring `a2d`/`b2e`/`c2out` targets) to get the result properly
   landed in-tree rather than only documented here.
 
+- 2026-07-25 iter 7 (H-025 re-port + P-12 kf=3 scoping, bounded research
+  agent, worktree fast-forwarded to main@92be85c first since it started
+  stale at 5da6061 -- same trap iter 6b's agent hit): two parts.
+
+  PART 1 (re-port `full_hash` for real): added the `full_hash` MTarget to
+  current main's `fusion_search.rs` (`mitm_targets()`, next to
+  `a2d`/`b2e`/`c2out`) using the CURRENT renamed identifiers throughout
+  (`hs::fused_hash`, `STAGE0_ADD_CONSTANT`/`STAGE0_MULTIPLIER`/
+  `STAGE1_XOR_CONSTANT`/`F23_P_MULTIPLIER`/`F23_P_CONSTANT`/
+  `F23_Q_MULTIPLIER`/`F23_Q_CONSTANT`/`STAGE4_ADD_CONSTANT`/
+  `STAGE5_XOR_CONSTANT`, the file's existing `c1_xorshift19`/
+  `c5_xorshift16`/etc. helper locals). Pool/seed/shifts reconstructed to
+  match iter 6b's documented shape exactly: 12 hashseg consts (10 raw +
+  C1i/C5i) + common(3) + 8 shifts = 23-item forward pool;
+  engine_a_pool_override = common(3) + same 12 hashseg consts + 1 shift =
+  16 items; seed = 26 constants (9 raw stage consts + 17 already-defined
+  cross-stage helper locals reused verbatim from the neighboring
+  targets) -> capped at the file's fixed 72-constant/1284-link pool
+  (LINK_CONSTANT_POOL_CAP), same for every target. `stretch: true` (kept
+  out of the default `--mitm` sweep, matching a2d/b2e/c2out).
+  Build clean; `cargo test --release --bin fusion_search`: 9/9 passing
+  (unchanged count -- no test added, matching iter 6b's choice).
+  RAN FOR REAL: `fusion_search --mitm full_hash`, 2220.2s (~37 min) total
+  on the same 8-core box:
+    - engine A (k<=4, 16-item pool): 2,868,020,060,885 candidates,
+      1568.9s. Same order of magnitude as iter 6b's 2,940,520,863,935/
+      1290.7s (slower here mostly because a second background job, the
+      kf-scale probe below, was sharing the box's 8 cores for part of
+      this run).
+    - link pool: 72 constants, 16 odd Ks, 1284 links -- from the
+      26-constant seed, EXACTLY matching iter 6b's printed pool size.
+    - engine B (fwd DFS depth<=3 x suffix<=2 tables): 6,935,605,852
+      forward nodes, 245.0s -- LARGER than iter 6b's 1,033,714,835/34.9s.
+      Root cause (an honest deviation, not a bug): engine B always
+      searches the target's `pool` field, and this port's `pool` is the
+      full 23-item forward pool (per the "12 hashseg + common + 8
+      shifts" spec quoted in iter 6b's own writeup) rather than whatever
+      leaner pool iter 6b's pre-refactor copy actually used for engine B
+      specifically -- iter 6b's own text does not pin down a separate
+      leaner engine-B pool, so this port used the one it documented.
+      Coverage-wise this is a SUPERSET (more forward nodes checked, not
+      fewer), so it does not weaken the negative result.
+    - engine C (suffix chain DFS<=5 x kf=0/1/2 prefix tables: 1, 829,
+      611,535 prefixes): 2,118,285,916 chain nodes, 405.0s -- chain-node
+      count is IDENTICAL to iter 6b's reported 2,118,285,916 (this side
+      of the search depends only on the link pool, which matched
+      exactly, cross-validating the reconstruction).
+    - RESULT: NO program of <= 10 ops found. Current 11-op form stands.
+  COVERAGE: same depth<=7-of-10 boundary as iter 6b (kf<=2 forward +
+  suffix<=5, or forward-DFS-3 + suffix<=2), now landed and verified
+  in-tree on current main rather than only documented. Kernel port: NONE.
+  perf_takehome.py/dev.py untouched.
+
+  PART 2 (P-12 kf=3 feasibility scoping -- actually investigated, not
+  just estimated): P-12 estimated kf=3 at ~1000x kf=2's cost, "likely >1
+  CPU-day per target." Rather than trust that cold, implemented genuine
+  kf=3 support in `build_fwd_tab` (same chaining rule as the existing
+  kf<=2 code: op2 must use temp1, op3 must use temp2) gated behind a new
+  diagnostic-only `--kf-scale` CLI probe -- NOT wired into engine C or
+  any verified target, zero risk to the Part-1 result. Measured real
+  wall-clock and memory on the same 8-core/24GB box, at increasing
+  prefixes of `full_hash`'s own 23-item pool:
+    pool=4:  kf3=55,929 entries,      0.102s
+    pool=6:  kf3=437,189 entries,     0.996s
+    pool=8:  kf3=1,977,727 entries,   4.758s
+    pool=10: kf3=6,341,693 entries,   13.889s
+    pool=12: kf3=17,491,440 entries,  33.102s
+    pool=14: kf3=40,610,167 entries,  81.231s
+    pool=16: kf3=85,638,360 entries,  284.266s
+    pool=23 (the real forward pool): kf<=2 confirmed IDENTICAL to the
+      real run (611,535 kf=2 entries, 0.531s -- cross-validates both
+      runs), but kf=3 was KILLED after ~10 minutes with RSS still
+      climbing past 8GB unbounded (killing it freed ~16GB system-wide,
+      confirming it was mid-blowup, not near done) -- to protect the box
+      and the concurrently-running Part-1 verification.
+  Fitted growth exponent (log-log slope of consecutive points): ~6.8 at
+  pool 4->6, decaying to ~5.2-5.3 through pool 8->12, then RE-ACCELERATING
+  to ~6.3 (12->14) and ~10.0 (14->16) -- i.e. not a fixed polynomial
+  degree; cost gets WORSE per additional pool item as pool grows, so
+  extrapolating from small pools understates the true cost at pool=23.
+  Both time and memory are driven by the same quantity (table entry
+  count), so the memory wall and the time wall are the same wall.
+  VERDICT: kf=3 is NOT tractable in a 2-6 hour window at any pool rich
+  enough to be a meaningful test of the real hash. A pool small enough to
+  finish in minutes (<=12 items, 33s) is too impoverished to contain the
+  actual multi-stage hash constants needed for genuine coverage of ANY
+  span -- even the smallest existing sub-span targets (b2d, 6 ops) already
+  need a ~13-item pool to be non-trivial, and the full hash needs all 23.
+  There is no pool size simultaneously tractable-in-hours AND
+  representative of the real function; the constraint that would need to
+  relax is the table's per-entry memory footprint / dedup strategy
+  (e.g. external-memory or streaming dedup, or an algebraic
+  canonicalization proven to cut table size by 2-3+ orders of magnitude),
+  not more wall-clock. Recommend NOT attempting kf=3 again without such a
+  representation change; "just let it run longer" will hit the same
+  memory wall this iteration hit in ~10 minutes, not resolve it.
+  Kernel port: NONE. perf_takehome.py/dev.py untouched.
+
 ## Proposed hypotheses
 (agent appends; driver promotes to backlog.md)
 - P-1 [op-reduction]: C5-pre-xor value domain. Pre-xor all 2047 tree node
@@ -538,20 +656,33 @@ Queued: H-012 (floor recalibration).
   rather than letting Z3 discover the whole structure by search. Either
   is a materially different (and nontrivial, multi-hour-plus) effort;
   do not treat "add more solver timeout" as a fix.
-- P-12 [op-reduction, iter-6b]: with H-016's per-cut kf<=2/j<=5 ceiling now
-  confirmed to also hold GLOBALLY (no waypoint assumption, via the new
-  `full_hash` MITM target — not yet ported to current `main`'s
-  `fusion_search.rs`, see iter 6b's implementation note), the ONLY
-  concrete remaining moves for "11 in 10" are: (a) extend engine C's
-  forward-table builder to kf=3 (cost estimate from P-7: ~1000x the kf=2
-  cost, i.e. likely >1 CPU-day per target on an 8-core box — not
-  attempted, out of any single iteration's reasonable budget), or (b) fix
-  CEGIS's scaling wall by making `multiply_add` NOT unconditionally
-  bit-blast a symbolic 32x32 multiplier — e.g. encode op-kind as a hard
-  case-split (one z3.Solver branch per kind, most of which are linear/
-  cheap) rather than a single mux'd expression the solver must reason
-  about uniformly regardless of which kind is selected; this is a real,
-  actionable fix to try before another CEGIS run, not just "more
-  timeout." Absent either, H-025/G-10 stay open only in the "unreachable
-  at current tooling scale" sense — treat as effectively closed for
-  practical purposes unless one of (a)/(b) is actually funded.
+- P-12 [op-reduction, iter-6b, UPDATED iter-7]: with H-016's per-cut
+  kf<=2/j<=5 ceiling now confirmed to also hold GLOBALLY (no waypoint
+  assumption, `full_hash` MITM target, now actually landed and
+  re-verified on current `main` in iter 7 -- 2,868B engine-A candidates,
+  2,118,285,916 engine-C chain nodes, no <=10-op program), the two
+  remaining moves for "11 in 10" were: (a) extend engine C's forward-table
+  builder to kf=3, or (b) fix CEGIS's scaling wall (case-split op-kind
+  instead of one mux'd expression). Iter 7 ACTUALLY ATTEMPTED (a) rather
+  than just estimating it: implemented real kf=3 support in
+  `build_fwd_tab` and measured it directly (not extrapolated) at
+  increasing pool sizes on the real 8-core/24GB box. RESULT: (a) is
+  CLOSED INFEASIBLE, and for a different reason than the original ~1000x
+  CPU estimate suggested -- it's a MEMORY wall, not a time wall. Entries
+  hit 85.6M (284s, 16-item toy pool) with the growth exponent still
+  ACCELERATING (~5.2 -> ~10.0 as pool size climbed toward 16-23), and the
+  real 23-item pool's kf=3 attempt had to be killed after ~10 min with
+  RSS unboundedly climbing past 8GB (freed ~16GB system-wide on kill --
+  it was nowhere near converging). A pool small enough to finish in
+  minutes (<=12 items) is too impoverished to contain the actual
+  multi-stage hash constants needed for ANY meaningful span (even the
+  smallest 6-op sub-span target needs ~13 items to be non-trivial). There
+  is no pool size simultaneously tractable-in-hours and representative of
+  the real function -- "more wall-clock" will not fix this, only a
+  different table representation would (external/streaming dedup, or a
+  proven 2-3-order-of-magnitude algebraic canonicalization). (b) (the
+  CEGIS case-split fix) remains untried and is now the more promising
+  remaining lever, since it doesn't share this memory-blowup failure
+  mode. Absent (b) being funded, H-025/G-10 stay open only in the
+  "unreachable at current tooling scale" sense -- treat as effectively
+  closed for practical purposes.
