@@ -1669,7 +1669,45 @@ fn build_fwd_tab(ctx: &Ctx, prefix_op_count: usize) -> FwdTab {
                 w.pop(undo1);
             }
         }
-        _ => unreachable!("forward tables only go to kf = 3"),
+        // kf=4 (iter-11/P-12 follow-up scoping probe only; NOT wired into any
+        // verified engine C search yet -- table-construction-cost measurement
+        // for the segment-scale targets, same chaining rule one level deeper
+        // than kf=3: each temp must be consumed by the very next op.
+        4 => {
+            let mut w = SearchState::new(ctx);
+            let mut l1: Vec<(Inst, ProbeValues)> = Vec::new();
+            enumerate_level(&w, |inst, v| l1.push((inst, v)));
+            for (i1, v1) in l1 {
+                let undo1 = w.push(i1.clone(), v1);
+                let mut l2: Vec<(Inst, ProbeValues)> = Vec::new();
+                enumerate_level(&w, |i2, v2| {
+                    if inst_uses(&i2, base_count) {
+                        l2.push((i2, v2));
+                    }
+                });
+                for (i2, v2) in l2 {
+                    let undo2 = w.push(i2.clone(), v2);
+                    let mut l3: Vec<(Inst, ProbeValues)> = Vec::new();
+                    enumerate_level(&w, |i3, v3| {
+                        if inst_uses(&i3, base_count + 1) {
+                            l3.push((i3, v3));
+                        }
+                    });
+                    for (i3, v3) in l3 {
+                        let undo3 = w.push(i3.clone(), v3);
+                        enumerate_level(&w, |i4, v4| {
+                            if inst_uses(&i4, base_count + 2) {
+                                tab.add(v4, vec![i1.clone(), i2.clone(), i3.clone(), i4], base_count + 3);
+                            }
+                        });
+                        w.pop(undo3);
+                    }
+                    w.pop(undo2);
+                }
+                w.pop(undo1);
+            }
+        }
+        _ => unreachable!("forward tables only go to kf = 4"),
     }
     tab
 }
@@ -2458,7 +2496,7 @@ fn mitm_targets() -> Vec<MTarget> {
     ]
 }
 
-fn run_mitm_target(tg: &MTarget, threads: usize, max_kf: usize) {
+fn run_mitm_target(tg: &MTarget, threads: usize, max_kf: usize, force_engine_c: bool) {
     let kmax_use = tg.current_ops - 1;
     let wanted: u32 = (2u32 << kmax_use) - 2; // bits 1..=kmax_use
     println!(
@@ -2527,13 +2565,19 @@ fn run_mitm_target(tg: &MTarget, threads: usize, max_kf: usize) {
     drop(bwd_tabs);
 
     // Engine C: suffix-chain DFS x forward-prefix tables.
-    if !tg.enable_engine_c {
+    if !tg.enable_engine_c && !force_engine_c {
         println!(
             "   engine C skipped (CPU budget): MITM coverage here = engine B shapes only \
              (forward<=3 + [solved meet]? + 1..2-op invertible suffix)"
         );
         summarize(tg, &ctx_a, &ctx, kmax_use, t_start);
         return;
+    }
+    if force_engine_c && !tg.enable_engine_c {
+        println!(
+            "   engine C FORCE-ENABLED via --force-engine-c (target's own enable_engine_c=false; \
+             this is a first-time/untested run for this target's chain-DFS cost)"
+        );
     }
     // max_kf is normally 2 (the verified/default engine C coverage: kf in
     // {0,1,2}). Iter 9 (P-12 follow-up) adds an opt-in `--kf3` extension that
@@ -2675,12 +2719,20 @@ fn run_kf_scale_target_probe(name: &str) {
         }
     });
 
-    for kf in 0..=3usize {
+    // Iter 11/P-12 follow-up: extended from kf<=3 to kf<=4 now that
+    // build_fwd_tab has a kf=4 arm. Self-limiting: stop before a kf whose
+    // build is expected to dwarf the remaining wall budget by bailing out
+    // once a single build exceeds 45 minutes (2700s).
+    for kf in 0..=4usize {
         let t0 = Instant::now();
         let tab = build_fwd_tab(&ctx, kf);
         let dt = t0.elapsed().as_secs_f64();
         println!("   kf={kf}: {} entries, {dt:.3}s", tab.entries.len());
         std::io::stdout().flush().ok();
+        if dt > 2700.0 {
+            println!("   [>45min at kf={kf}, stopping before next kf]");
+            break;
+        }
     }
     done.store(true, Ordering::Relaxed);
     mon.join().ok();
@@ -2700,6 +2752,13 @@ fn main() {
     // iter 7/8, so this cannot silently alter any already-verified result.
     let kf3 = args.iter().any(|a| a == "--kf3");
     let max_kf: usize = if kf3 { 3 } else { 2 };
+    // Opt-in iter-11/P-12 extension: force engine C on for a named target even
+    // when its own MTarget.enable_engine_c is false (a2d/b2e/c2out were an
+    // iter-4 CPU-budget guess, never actually timed). Only affects targets
+    // whose struct already says `false`; targets that already run engine C
+    // (enable_engine_c=true) are unaffected either way. Default (no flag)
+    // behavior is byte-for-byte unchanged.
+    let force_engine_c = args.iter().any(|a| a == "--force-engine-c");
     let kf_scale_target: Option<String> =
         args.iter().position(|a| a == "--kf-scale-target").and_then(|i| args.get(i + 1).cloned());
     let names: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
@@ -2724,7 +2783,7 @@ fn main() {
                 names.iter().any(|n| n.as_str() == tg.name)
             };
             if selected {
-                run_mitm_target(tg, threads, max_kf);
+                run_mitm_target(tg, threads, max_kf, force_engine_c);
                 ran += 1;
             }
         }

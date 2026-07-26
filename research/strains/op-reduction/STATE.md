@@ -82,6 +82,20 @@ confirmed at a genuinely deeper coverage boundary than before. The memory
 wall iter 7 found is real but applies ONLY to the full 23-item
 `full_hash` pool -- not to any individual segment target. See the iter 10
 log entry and updated P-12 for full detail.
+Iter 11 closed both of iter 10's flagged next steps. (1) `a2d`/`b2e`/
+`c2out`'s chain-DFS cost (never timed before, since their
+`enable_engine_c=false` was an untested iter-4 CPU-budget guess) turned
+out CHEAPER than b2d/xr5/xr3p's (377-481s vs 592-922s, via a new opt-in
+`--force-engine-c` flag that leaves default behavior untouched) -- ran
+to completion at kf<=2 and kf<=3 for all three: ALL STILL NEGATIVE, no
+<=6-op form for any of the three 7-op interior spans. Every real
+individual segment target (all six: b2d/xr5/xr3p/a2d/b2e/c2out) is now
+closed negative at kf<=3. (2) kf=4 at the segment scale (probed on
+`b2d`, the cheapest kf=3 build) did NOT complete within a 47.5-minute
+wall-clock budget -- a genuine CPU-time wall (confirmed NOT a memory
+wall: RSS stayed in a stable 3.9-5.9GB band throughout) -- CLOSED
+INFEASIBLE at current tooling/budget; kf=4 was never wired into a real
+search. See iter 11 log entry for full detail.
 
 ## Assigned
 - H-003 (iter 1): DONE — see iteration log.
@@ -113,6 +127,12 @@ log entry and updated P-12 for full detail.
   full 23-item `full_hash` pool. Ran the real kf<=3-extended search to
   completion for b2d/xr5/xr3p (the smallest still-open boundary targets):
   all three STILL closed negative at this deeper boundary. See log.
+- H-025 (iter 11): DONE — enabled + timed engine C for a2d/b2e/c2out for
+  the first time (opt-in `--force-engine-c` flag, default unchanged);
+  all three closed negative at kf<=3, cheaper than b2d/xr5/xr3p's runs.
+  Probed kf=4 at the segment scale (b2d, cheapest case): CLOSED
+  INFEASIBLE -- a genuine CPU-time wall (not memory), didn't finish in
+  47.5 min. See log.
 Queued: H-012 (floor recalibration).
 
 ## Iteration log
@@ -777,6 +797,92 @@ Queued: H-012 (floor recalibration).
   `max_kf`). Build clean; `cargo test --release --bin fusion_search`:
   9/9 passing, unchanged. Default (`--mitm` with no `--kf3`) behavior
   verified byte-identical to before.
+- 2026-07-26 iter 11 (H-025, bounded research agent, worktree
+  fast-forwarded from stale 5da6061 to main@994e41b via `git merge main`
+  first): took iter 10's two flagged next steps.
+  STEP 1: enabled engine C for `a2d`/`b2e`/`c2out` and TIMED their
+  chain-DFS for the first time ever. Rather than permanently flipping
+  each target's `MTarget.enable_engine_c` (an iter-4 CPU-budget guess
+  that predated any real timing), added an opt-in `--force-engine-c` CLI
+  flag: forces engine C on for a named target even when its own struct
+  says `enable_engine_c=false`, with zero effect on any target that
+  already has it `true` and zero effect when the flag is absent (default
+  `--mitm` reconfirmed byte-identical: `head4u` re-run with no flags
+  reproduced iter 4's exact candidate/node counts: 410,492,695
+  op_count=3 candidates, 336,272,337 chain nodes, 6.4s). Ran all three
+  targets to completion, one at a time, at the verified default kf<=2
+  first (parity check), then again at kf<=3 (`--force-engine-c --kf3`):
+    * a2d: kf<=2 total 376.7s (engine A op3 897,443,941 cands 0.4s;
+      engine B 748,712,546 fwd nodes 25.9s; engine C 2,118,285,916 chain
+      nodes 349.9s; peak RSS 375MB). kf<=3: fwd tabs kf=0..3 =
+      1/405/149,601/60,055,880 entries; chain nodes IDENTICAL
+      (2,118,285,916, confirming zero new DFS nodes, same as iter 10's
+      b2d/xr3p cross-check); total 480.5s; peak RSS 12.06GB.
+    * b2e: kf<=2 total 386.8s (engine A 905,632,153 cands 0.7s; engine B
+      759,217,852 nodes 26.2s; engine C 2,118,285,916 nodes 359.4s; peak
+      RSS 361MB). kf<=3: kf=3 table 40,037,130 entries; chain nodes
+      identical; total 454.6s; peak RSS 12.64GB.
+    * c2out: kf<=2 total 386.8s (engine A 905,629,134 cands 0.5s; engine
+      B 759,200,698 nodes 26.9s; engine C 2,118,285,916 nodes 359.0s;
+      peak RSS 361MB). kf<=3: kf=3 table 40,201,721 entries; chain nodes
+      identical; total 452.9s; peak RSS 13.04GB.
+  **ALL THREE STILL NEGATIVE at kf<=3**: no <=6-op program found for any
+  of the three 7-op interior spans, at the deepest boundary now tested
+  for them. Surprising sub-finding: despite being nominally "one op
+  longer" targets than b2d/xr5/xr3p, their FULL runs (377-481s) were
+  actually CHEAPER than b2d/xr5/xr3p's (592-922s, iter 10) -- because
+  `max_chain_ops = 5.min(kmax_use)` caps engine C's chain-DFS depth at 5
+  regardless (kmax_use=6 for these three still hits the same cap as
+  kmax_use=5), while these three's `engine_a_kmax=3` (vs 4 for b2d) makes
+  their engine A phase cheaper. The original iter-4 CPU-budget rationale
+  for `enable_engine_c=false` on these three is now empirically retired:
+  their chain-DFS was cheap all along, just never measured.
+  STEP 2: kf=4 at the segment scale. Added a kf=4 arm to `build_fwd_tab`
+  (one more nesting level than kf=3, same "every temp consumed by the
+  very next op" chaining rule) and extended `run_kf_scale_target_probe`'s
+  loop from `0..=3` to `0..=4` (with a 45-minute-per-kf self-limit check
+  -- a known-incomplete safeguard since it can only fire AFTER a given
+  kf's `build_fwd_tab` call returns, not during one very slow build).
+  Picked `b2d`: the fastest kf=3 build of all six real segment targets
+  per iter 10 (31.6s, 25,108,399 entries at its 13-item pool). Ran
+  `--kf-scale-target b2d` to completion (blocking foreground, real
+  `timeout` budget). **RESULT: kf=4 did NOT complete.** The process was
+  killed by its own outer 2850s (47.5 min) timeout, still mid-build, with
+  no output for kf=4 itself. Crucially this is a CPU-time wall, NOT a
+  memory wall: an in-process RSS sampler (every 5s) showed memory
+  oscillating in a stable 3.9-5.9GB band for the entire run, never
+  approaching the box's 24GB limit and never showing the unbounded climb
+  iter 7 saw for `full_hash`'s kf=3 memory wall. Since kf=3 took 31.6s at
+  this exact same pool, kf=4 costs AT LEAST ~90x kf=3 (2850s and still
+  not done) -- a much steeper per-kf-step cost jump than kf=2->kf=3 was
+  at this pool size. Given table construction alone didn't finish in
+  47.5 minutes for the cheapest of the six segment targets, wiring kf=4
+  into a real, verified engine C search was NOT attempted (would cost
+  many more hours per target with no evidence it would ever land, and no
+  reason to expect a materially cheaper pool elsewhere -- b2d was already
+  the best case). CLOSED INFEASIBLE (time-bound) at the tooling/budget
+  available this iteration; a reopen needs either a fundamentally
+  different forward-table representation (as iter 7 already concluded
+  for the memory-wall case) or a much larger wall-clock allowance
+  (multi-hour-plus per target, unverified whether it would even
+  terminate short of the box's actual resource limits).
+  NOTE: the `--kf-scale-target` invocation's stdout was piped through
+  `tail -100` for capture; because the RSS sampler alone produced ~570
+  lines before the outer timeout fired, the per-kf `kf=N: entries, Xs`
+  lines for kf=0..3 on this specific run scrolled out of the captured
+  window before they could be logged verbatim here -- the kf=3 reference
+  numbers above are iter 10's already-verified figures for `b2d`, not a
+  fresh re-print from this run; this does not affect the kf=4 timeout
+  conclusion, which was observed directly (process still running past
+  2850s with no kf=4 line ever printed).
+  Kernel port: NONE (both steps are negative/infeasible findings).
+  `perf_takehome.py`/`dev.py` untouched throughout. Only `fusion_search.rs`
+  changed: new `--force-engine-c` CLI flag, `run_mitm_target`'s added
+  `force_engine_c` parameter, a `build_fwd_tab` kf=4 arm, and
+  `run_kf_scale_target_probe`'s loop extended to kf<=4 with a
+  best-effort per-kf time guard. Build clean; `cargo test --release
+  --bin fusion_search`: 9/9 passing, unchanged. Default (`--mitm` with no
+  flags) behavior reconfirmed byte-identical.
 
 ## Proposed hypotheses
 (agent appends; driver promotes to backlog.md)
@@ -1000,3 +1106,25 @@ Queued: H-012 (floor recalibration).
   (untested; likely still cheap given the trend, but not measured). Only
   the FULL 23-item `full_hash` pool remains a genuine memory wall
   requiring a different table representation to progress past kf<=2.
+  UPDATE (iter 11): both (i) and (ii) are now taken. (i) enabled and
+  timed for real via a new opt-in `--force-engine-c` flag (default
+  `--mitm` behavior unaffected): a2d/b2e/c2out's chain-DFS turned out
+  CHEAPER than b2d/xr5/xr3p's (377-481s vs 592-922s total, because
+  `max_chain_ops` caps at 5 for both groups while these three's
+  `engine_a_kmax=3` vs 4 makes their engine A phase faster) -- ran to
+  completion at kf<=2 and kf<=3 for all three, ALL STILL NEGATIVE. Every
+  real segment target (all six) is now closed negative at kf<=3 with
+  nothing left in this class untested at that depth. (ii) kf=4 measured
+  for real on `b2d` (cheapest kf=3 case, 31.6s/25.1M entries at iter 10):
+  did NOT complete a single kf=4 table build within a 47.5-min wall-clock
+  budget -- CLOSED INFEASIBLE, but as a genuine CPU-TIME wall this time,
+  not memory (RSS held steady at 3.9-5.9GB throughout, no runaway growth
+  at all unlike iter 7's kf=3-on-full_hash memory wall). kf=4 was never
+  wired into any real search as a result. The trend guess in the
+  previous paragraph ("likely still cheap") is now falsified: kf=3->kf=4
+  costs at least ~90x at the SAME pool where kf=2->kf=3 cost roughly
+  the accelerating-but-still-tractable growth iter 10 measured -- a much
+  steeper step. Absent a fundamentally different forward-table
+  representation, kf=4 is closed at the segment scale too, for a
+  different resource reason than `full_hash`'s kf=3 closure but the same
+  practical conclusion: not reachable with this tooling.

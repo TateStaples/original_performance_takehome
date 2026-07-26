@@ -435,13 +435,14 @@ further gain found]
   kept as control. Retune: optimum unmoved. Dispatch flipped; grader 9/9.
 - log: 2026-07-23 promoted; iter 5 ACCEPTED.
 
-### H-025 [strain: op-reduction] [status: six sub-attempts made, none
+### H-025 [strain: op-reduction] [status: seven sub-attempts made, none
 closes k<=10 -- three independent CEGIS attempts all inconclusive (each
 narrowing the diagnosis further), enumerative MITM closed-negative at a
 stated depth<=7 coverage boundary (now landed+reverified on main), kf=3
 closed infeasible for the FULL/global 23-item target only, closed
-NEGATIVE (genuinely searched, not infeasible) for every real individual
-segment target]
+NEGATIVE (genuinely searched, not infeasible) at kf<=3 for every one of
+the six real individual segment targets, kf=4 closed infeasible at the
+segment scale (a CPU-time wall, not memory)]
 - statement: (H-016's P-8) global synthesis attack on "the 11-op hash in
   10": CEGIS/SAT over the machine op set with free 32-bit constants —
   counterexample-guided: synthesize candidate on a few IO pairs (z3 bitvec),
@@ -637,6 +638,48 @@ segment target]
   port. perf_takehome.py/dev.py untouched (only fusion_search.rs changed:
   the new `--kf-scale-target` probe, the opt-in `--kf3` flag, and a
   parameterized `max_kf`). Build clean; 9/9 tests unchanged.
+  ITER 11 (2026-07-26, bounded research agent, worktree fast-forwarded
+  from stale 5da6061 to main@994e41b via `git merge main` first): closed
+  both of iter 10's flagged next steps.
+  (1) Enabled + timed engine C for `a2d`/`b2e`/`c2out` for the first time
+  ever. Added an opt-in `--force-engine-c` CLI flag rather than
+  permanently flipping each target's `enable_engine_c=false` -- it forces
+  engine C on for a named target while leaving every other target and
+  the flag-less default run byte-identical (reconfirmed: `head4u` with
+  no flags reproduced iter 4's exact 410,492,695-candidate/336,272,337-node
+  counts). Ran all three to completion at kf<=2 (parity baseline) then
+  kf<=3: a2d (376.7s / 480.5s, peak RSS 375MB / 12.06GB), b2e (386.8s /
+  454.6s, 361MB / 12.64GB), c2out (386.8s / 452.9s, 361MB / 13.04GB).
+  Every kf<=3 fwd-table build produced an IDENTICAL chain-node count to
+  its own kf<=2 run (2,118,285,916), confirming -- same as iter 10's
+  b2d/xr3p cross-check -- that adding a table adds lookups, not new DFS
+  nodes. **ALL THREE STILL NEGATIVE at kf<=3**: no <=6-op program for any
+  of the three 7-op interior spans. Sub-finding: these three's FULL runs
+  were actually cheaper than b2d/xr5/xr3p's (377-481s vs 592-922s)
+  because `max_chain_ops` caps engine C's depth at 5 for both groups
+  while these three's leaner `engine_a_kmax=3` (vs 4) makes engine A
+  faster -- the iter-4 CPU-budget guess that skipped engine C here was
+  wrong in the conservative direction. Every one of the six real segment
+  targets (b2d/xr5/xr3p/a2d/b2e/c2out) is now closed negative at kf<=3.
+  (2) kf=4 at the segment scale: added a kf=4 arm to `build_fwd_tab`
+  (one more chaining level than kf=3) and extended the diagnostic
+  `--kf-scale-target` probe to kf<=4. Ran it on `b2d` (the cheapest kf=3
+  build of all six, 31.6s at iter 10) with a real, blocking 2850s
+  (47.5-min) timeout. **kf=4 DID NOT COMPLETE** -- killed mid-build by
+  the timeout, never printing a result. Confirmed via an in-process RSS
+  sampler that this is a CPU-TIME wall, not a memory wall (RSS held
+  steady in a 3.9-5.9GB band the entire run, nowhere near the 24GB box
+  limit, unlike iter 7's unbounded-climb memory wall for `full_hash`'s
+  kf=3). kf=3->kf=4 costs at least ~90x at this exact pool (2850s and
+  still unfinished vs kf=3's 31.6s) -- a much steeper jump than
+  kf=2->kf=3's growth at the same pool size. kf=4 was therefore never
+  wired into any real, verified engine C search; CLOSED INFEASIBLE at
+  current tooling/budget (a reopen needs a fundamentally different
+  forward-table representation or a much larger, unverified wall-clock
+  allowance). perf_takehome.py/dev.py untouched throughout; only
+  fusion_search.rs changed (`--force-engine-c` flag, `build_fwd_tab`'s
+  kf=4 arm, the probe's kf<=4 extension). Build clean; `cargo test
+  --release --bin fusion_search`: 9/9 passing, unchanged.
 - log: 2026-07-23 promoted from op-reduction P-8; 2026-07-25 closed
   inconclusive (CEGIS) + closed negative (enumerative MITM, iter 6b);
   2026-07-25 iter 7 landed the MITM re-port on main and closed the kf=3
@@ -645,7 +688,10 @@ segment target]
   inconclusive but each narrowing the diagnosis further; 2026-07-25/26
   iter 10 corrected the kf=3 verdict to closed NEGATIVE (genuinely
   searched, not infeasible) for the three smallest real individual
-  segment targets (b2d/xr5/xr3p).
+  segment targets (b2d/xr5/xr3p); 2026-07-26 iter 11 closed the
+  remaining three segment targets (a2d/b2e/c2out) negative at kf<=3 too
+  (all six now covered) and closed kf=4 at the segment scale infeasible
+  (a CPU-time wall, confirmed not memory-bound).
 
 ### H-026 [strain: cross] [status: accepted]
 - statement: mem_prime — per-level in-mem C5-priming of deep gather levels
