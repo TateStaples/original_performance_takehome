@@ -508,6 +508,7 @@ class KernelBuilder:
         vals_first: bool | str = False,
         tie_break: str | Iterable[str] = (),
         derive_consts: bool = False,
+        flow_residual_consts: bool = False,
         alu_val_addrs: bool = False,
         lazy_val_loads: bool = False,
         store_pair: bool = False,
@@ -804,6 +805,25 @@ class KernelBuilder:
           (placement backfills, so this only moves slot-contention
           tie-breaks). All default off; defaults are bit-identical.
 
+        - `flow_residual_consts` (H-034, follow-up to H-024/H-031): the six
+          arbitrary hash addends `derive_consts` cannot derive (C0, C1, ap,
+          aq, C4, C5) still cost one `load:const` slot each on the
+          2/cycle-saturated load engine during the setup ramp. Unlike
+          `flow_consts` (H-021, which routes EVERY scalar constant through
+          flow and just relocates the bottleneck there, measured negative
+          both alone and composed with `derive_consts`), this only moves
+          those six residual values: a single scratch zero word is
+          materialized with one alu `^` (not a load), then each of the six
+          is emitted as `flow: add_imm(dest, zero, value)` instead of
+          `load: const`, freeing six load-engine slots for the ramp's vload
+          stream. Requires `derive_consts=True` (it targets exactly that
+          flag's documented residual set). Default off; bit-identical when
+          off. MEASURED NEGATIVE (H-034): 1038 -> 1041 (+3), reproduced
+          across 6 draws -- the six extra early flow ops flip some of the
+          existing valu-vs-flow fold races (dual_fold etc.) from flow onto
+          the already-saturated valu engine, costing more than the freed
+          load slots save. Kept as a negative control.
+
         - `store_pair` (H-028, cross): allow two mem WRITES to share a
           cycle in the scheduler's coarse memory model. Writes commit at
           end of cycle and every store in this kernel targets a distinct
@@ -1054,12 +1074,24 @@ class KernelBuilder:
             scheduler.emit("load", ("const", zero_c, 0), writes=(zero_c,))
             self.const_map[0] = zero_c
 
+        # H-034: narrower sibling of flow_consts -- only the handful of
+        # arbitrary hash addends derive_consts can't derive get moved to
+        # flow. Populated below (after fused_hash_constants is known) when
+        # flow_residual_consts is on; left empty/unset otherwise so const()
+        # below falls through to the plain load:const path unchanged.
+        residual_flow_const_values: set[int] = set()
+        residual_zero_c: int | None = None
+
         def const(val: int, name: str | None = None) -> int:
             if val not in self.const_map:
                 addr = self.alloc_scratch(name)
                 if flow_consts:
                     scheduler.emit("flow", ("add_imm", addr, zero_c, val),
                            (zero_c,), (addr,))
+                elif flow_residual_consts and val in residual_flow_const_values:
+                    assert residual_zero_c is not None
+                    scheduler.emit("flow", ("add_imm", addr, residual_zero_c, val),
+                           (residual_zero_c,), (addr,))
                 else:
                     scheduler.emit("load", ("const", addr, val), writes=(addr,))
                 self.const_map[val] = addr
@@ -1320,6 +1352,20 @@ class KernelBuilder:
                    ("+", two_c, one_c), ("+", None, sh5_c))
             dconst((1 << 32) - 2, "dc_negtwo",             # -2 = (1^1)-2
                    ("^", one_c, one_c), ("-", None, two_c))
+
+        if flow_residual_consts:
+            # H-034: move derive_consts's residual arbitrary addends (the
+            # six with no 1-op algebraic relation to anything already
+            # loaded) off the load engine and onto flow via add_imm. The
+            # zero base is itself materialized on the (ramp-idle) alu, not
+            # a load, so this frees the load engine entirely of these six
+            # slots rather than trading them for one `load:const 0`.
+            assert derive_consts, "flow_residual_consts targets derive_consts's residual set"
+            residual_flow_const_values = {fused_hash_constants[k] for k in
+                  ("C0", "C1", "ap", "aq", "C4", "C5")}
+            residual_zero_c = self.alloc_scratch("rfc_zero")
+            scheduler.emit("alu", ("^", residual_zero_c, one_c, one_c),
+                   (one_c,), (residual_zero_c,))
 
         one_vec = broadcast_vec(one_c, "one_vec")
         two_vec = broadcast_vec(const(2), "two_vec")

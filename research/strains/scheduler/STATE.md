@@ -544,3 +544,61 @@ was built against a stale pre-refactor base commit.
   global scheduler. Not ported; documented for any future reopen attempt
   (distinct-descendant downstream, regional priority, or a hybrid
   drain/middle policy are the concrete unexplored variants).
+- iter 7 (H-034, ported from the external repo's now-1020-cycle commit):
+  ported the `add_imm`-off-a-zero-register scalar-constant mechanism,
+  scoped narrowly to `derive_consts`'s documented residual set (C0, C1,
+  ap, aq, C4, C5 -- the six with no 1-op algebraic relation, per H-024).
+  Measured WORSE, 1038 -> 1041 (+3), reproduced identically on seeds
+  {1,2,3,7,42,unseeded} and correct under `debug_compares=True`. Not
+  adopted; see H-034 below.
+
+## H-034: flow_residual_consts (six residual hash addends via flow add_imm
+off an alu-derived zero) -- correct, reproducible +3 regression. Not adopted.
+
+**What was built.** New `derive_consts`-dependent flag `flow_residual_consts`
+in `dev.py`. When on: a scratch zero word is materialized with one alu `^`
+(`residual_zero_c = one_c ^ one_c`, costing an idle-ramp alu slot, NOT a
+load -- unlike H-021's `flow_consts`, which spends one real `load:const 0`
+for its zero base), then each of `derive_consts`'s six un-derivable
+arbitrary addends (C0, C1, ap, aq, C4, C5) is emitted as
+`flow: add_imm(dest, residual_zero_c, value)` instead of `load: const`,
+inside the existing `const()` closure (checked before the plain load
+fallback, gated on `val in residual_flow_const_values`). Confirmed valid
+against `problem.py`'s `Machine`: `add_imm(dest, a, imm) = (scratch[a] +
+imm) % 2**32`, so `add_imm(dest, zero, C) == C` exactly. This is a
+narrower, more targeted mechanism than H-021's `flow_consts` (which routes
+ALL scalar constants through flow and was already measured negative, both
+alone at the old mainline -- 1085 vs 1070 -- and composed with
+`derive_consts` -- 1066 vs 1064): here only 6 of the ~20+ setup consts
+move, and the zero base itself doesn't cost a load slot either.
+
+**Measured: 1038 -> 1041 (+3), reproduced on 6 seeds, correct on all
+(`debug_compares=True` green).** `tools/sched_profile.py` shows why: the
+setup-ramp empty-valu-slot count DOES drop slightly (22 -> 19, confirming
+the 6 freed load slots help the ramp itself), but total valu slots
+INCREASE (6125 -> 6131, +6) and total gap cycles rise (44 -> 52, +8),
+with a brand-new 8-slot gap appearing at `r0-0 L0` (round-0 startup) that
+didn't exist before, plus `flow:vselect` newly appearing as a gap-blocker
+producer (10.8 weighted slots) where it wasn't one previously. Mechanism:
+this kernel's `emit_any` fold races dual-encode some ops as EITHER a flow
+`vselect`/`add_imm` OR a valu op, resolved by whichever engine is free
+first at emission time (H-021's `tie_break=fold_flow` territory). Adding
+6 extra flow ops early in the ramp shifts those race outcomes -- some fold
+races that used to win flow now lose it and fall onto valu instead,
+which is the already-saturated 6-wide engine everywhere except the ramp/
+drain. The net (+6 valu slots, delayed round-0 start) costs more than the
+6 freed load slots save. This is the same qualitative mechanism H-024
+noted in passing for `alu_val_addrs` ("one fold race wins flow back") and
+the same failure mode documented for `flow_consts` -- moving scalar setup
+work onto flow is not free here because flow is a shared resource with
+the fold-race encoder, not an idle sink.
+
+**Verdict: not adopted.** Flag kept in `dev.py`, default off, as a
+negative control (same precedent as `flow_consts`, `lazy_val_loads`,
+`mem_prime_ignore_l4_hazard`). Mainline (`perf_takehome.py`,
+`tools/run_variant.py` `BASE_KWARGS`) untouched at 1038; the six residual
+constants stay as `load:const` -- H-024's floor analysis (43 load ops,
+ceil(43/2)=22 ramp cycles, zero idle load slots) is reaffirmed as tight
+in the sense that even successfully removing load-engine pressure doesn't
+help once the freed engine (flow) has second-order coupling to the fold
+races elsewhere in the schedule.
