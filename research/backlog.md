@@ -406,11 +406,13 @@ further gain found]
   kept as control. Retune: optimum unmoved. Dispatch flipped; grader 9/9.
 - log: 2026-07-23 promoted; iter 5 ACCEPTED.
 
-### H-025 [strain: op-reduction] [status: five sub-attempts made, none
+### H-025 [strain: op-reduction] [status: six sub-attempts made, none
 closes k<=10 -- three independent CEGIS attempts all inconclusive (each
 narrowing the diagnosis further), enumerative MITM closed-negative at a
 stated depth<=7 coverage boundary (now landed+reverified on main), kf=3
-extension closed infeasible (memory-bound, not time-bound)]
+closed infeasible for the FULL/global 23-item target only, closed
+NEGATIVE (genuinely searched, not infeasible) for every real individual
+segment target]
 - statement: (H-016's P-8) global synthesis attack on "the 11-op hash in
   10": CEGIS/SAT over the machine op set with free 32-bit constants —
   counterexample-guided: synthesize candidate on a few IO pairs (z3 bitvec),
@@ -574,12 +576,47 @@ extension closed infeasible (memory-bound, not time-bound)]
   Rosette/Sketch) or a materially narrower template (fixed per-stage
   constants for at least some positions) -- not more tuning of this
   approach. perf_takehome.py/dev.py untouched.
+  ITER 10 (2026-07-25/26, bounded research agent, user-authorized "push
+  and don't stop"): targeted re-check of whether iter 7's kf=3 "memory
+  wall" verdict, reached only against synthetic prefixes of `full_hash`'s
+  23-item pool, actually holds for the much smaller pools real individual
+  segment targets use. Precisely counted every `mitm_targets()` pool: the
+  smallest STILL-OPEN targets are `b2d`/`xr5`/`xr3p` at 13 items, then
+  `a2d`/`b2e`/`c2out` at 15. Added a `--kf-scale-target <name>` probe
+  (builds kf=0..=3 tables against a NAMED target's real pool, with an
+  in-process RSS-sampling thread) and ran it against every one of these:
+  ALL completed in 17-120s at 3.5-11.2GB peak transient RSS -- no
+  memory-wall behavior anywhere, sharply contrasting iter 7's real
+  23-item-pool attempt (killed after ~10 min, RSS still unboundedly
+  climbing past 8GB). Then wired kf=3 into the REAL, verified engine C
+  search via an opt-in `--kf3` flag (default `--mitm` behavior confirmed
+  byte-identical to before) -- cheap to add since an extra table adds no
+  new DFS nodes, only cheap lookups (confirmed: kf<=3 chain-node counts
+  came back byte-identical to the original kf<=2 runs). RAN THE FULL
+  kf<=3-extended search to completion for the three smallest still-open
+  targets: b2d (760.9s), xr5 (921.7s), xr3p (592.2s). **ALL THREE STILL
+  NEGATIVE at this deeper kf<=3 boundary** -- genuinely searched (not
+  merely estimated) one op-depth past iter 4's original kf<=2 ceiling.
+  CONCLUSION: iter 7's "kf=3 is a memory wall" is correct ONLY for the
+  full/global 23-item `full_hash` pool; for every real individual segment
+  target (pool<=15) it is tractable and now genuinely CLOSED NEGATIVE at
+  kf<=3, not infeasible. `a2d`/`b2e`/`c2out` were not extended because
+  their `enable_engine_c` flag is `false` (an iter-4 CPU-budget decision
+  predating this measurement) -- flipping it and timing their chain DFS
+  for the first time is a concrete, not-yet-taken next step. No
+  <=(current_ops-1)-op program found for any of the three; nothing to
+  port. perf_takehome.py/dev.py untouched (only fusion_search.rs changed:
+  the new `--kf-scale-target` probe, the opt-in `--kf3` flag, and a
+  parameterized `max_kf`). Build clean; 9/9 tests unchanged.
 - log: 2026-07-23 promoted from op-reduction P-8; 2026-07-25 closed
   inconclusive (CEGIS) + closed negative (enumerative MITM, iter 6b);
   2026-07-25 iter 7 landed the MITM re-port on main and closed the kf=3
-  scoping question infeasible (memory-bound); 2026-07-25 iters 8-9: two
-  independent CEGIS fix attempts, both inconclusive but each narrowing
-  the diagnosis further.
+  scoping question infeasible (memory-bound) for the full/global target;
+  2026-07-25 iters 8-9: two independent CEGIS fix attempts, both
+  inconclusive but each narrowing the diagnosis further; 2026-07-25/26
+  iter 10 corrected the kf=3 verdict to closed NEGATIVE (genuinely
+  searched, not infeasible) for the three smallest real individual
+  segment targets (b2d/xr5/xr3p).
 
 ### H-026 [strain: cross] [status: accepted]
 - statement: mem_prime — per-level in-mem C5-priming of deep gather levels

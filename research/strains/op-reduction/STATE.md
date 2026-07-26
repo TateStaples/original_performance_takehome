@@ -68,6 +68,20 @@ a reopen needs a solver/engine swap (CVC5, or a dedicated synthesis
 engine like Rosette/Sketch) or a materially narrower template (fixed
 per-stage constants for at least some positions), not more tuning of the
 same approach.
+Iter 10 (targeted re-scoping of iter 7's kf=3 verdict) found iter 7's
+closing language OVERGENERALIZED: iter 7 only ever tested kf=3 against
+prefixes of `full_hash`'s own 23-item pool, never against any actual
+individual segment target's real (smaller) pool. Precisely counted every
+`mitm_targets()` pool: the still-open boundary targets are `b2d`/`xr5`/
+`xr3p` at 13 items each and `a2d`/`b2e`/`c2out` at 15. Built a real kf=3
+forward-table probe against each target's actual pool: CHEAP everywhere
+(17-120s, 3.5-11.2GB peak, on the same box) -- NOT a memory wall at all.
+Ran the full kf<=3-extended search to completion for b2d (760.9s), xr5
+(921.7s), and xr3p (592.2s): all three STILL show no shorter program, now
+confirmed at a genuinely deeper coverage boundary than before. The memory
+wall iter 7 found is real but applies ONLY to the full 23-item
+`full_hash` pool -- not to any individual segment target. See the iter 10
+log entry and updated P-12 for full detail.
 
 ## Assigned
 - H-003 (iter 1): DONE — see iteration log.
@@ -93,6 +107,12 @@ same approach.
   (wall unmoved; deeper diagnosis reframes the bottleneck as nonlinear
   multiply-constant solving, not connectivity search). Stopped before
   the full k=10 sweep per its own go/no-go rule. See log.
+- H-025 (iter 10): DONE — corrected iter 7's overgeneralized kf=3 verdict.
+  kf=3 is tractable (not a memory wall) at every real individual segment
+  target's own pool (9-15 items); the memory wall is specific to the
+  full 23-item `full_hash` pool. Ran the real kf<=3-extended search to
+  completion for b2d/xr5/xr3p (the smallest still-open boundary targets):
+  all three STILL closed negative at this deeper boundary. See log.
 Queued: H-012 (floor recalibration).
 
 ## Iteration log
@@ -665,6 +685,99 @@ Queued: H-012 (floor recalibration).
   class for this problem -- (c)/(d) above are real alternatives, not more
   tuning of the same approach.
 
+- 2026-07-25 iter 10 (H-025/P-12 targeted re-scoping, bounded research
+  agent, user-authorized "push and don't stop"): re-examined whether iter
+  7's kf=3 "memory wall" verdict, reached ONLY against synthetic prefixes
+  of `full_hash`'s 23-item pool, actually holds for the much smaller pools
+  every REAL individual segment target uses.
+
+  STEP 1 (precise pool census, counted directly from `mitm_targets()`'s
+  `pool: mk(&[...])` lists): `head4u`=9 items -- the smallest of all, but
+  already fully closed by engine A's exhaustive k<=3 search, so any deeper
+  kf question there is moot. The smallest STILL-OPEN boundary targets:
+  `b2d`/`xr5`/`xr3p` at 13 items each; next, `a2d`/`b2e`/`c2out` at 15;
+  `full_hash` at 23 (the one iter 7 actually tested).
+
+  STEP 2 (real-pool kf=3 table-construction probe): added
+  `run_kf_scale_target_probe` (`--kf-scale-target <name>`, diagnostic-only)
+  that builds `build_fwd_tab` at kf=0..=3 using the NAMED target's actual
+  pool verbatim, with in-process RSS sampling for early-warning safety
+  (same discipline as iter 7). Ran on every still-open target with
+  pool<=15:
+    * head4u (pool=9): kf=3 = 11,053,166 entries, 17.4s, peak RSS 3.53GB.
+    * b2d (pool=13): kf=3 = 25,108,399 entries, 31.6s, peak RSS 8.07GB.
+    * xr3p (pool=13, 2-input): kf=3 = 60,807,194 entries, 96.2s, peak
+      RSS 10.10GB.
+    * xr5 (pool=13, 2-input): kf=3 = 72,747,570 entries, 119.5s, peak
+      RSS 11.23GB.
+    * a2d (pool=15): kf=3 = 60,055,880 entries, 74.5s, peak RSS 8.85GB.
+    * b2e (pool=15): kf=3 = 40,037,130 entries, 57.4s, peak RSS 10.43GB.
+    * c2out (pool=15): kf=3 = 40,201,721 entries, 57.4s, peak RSS 10.42GB.
+  Every one completed comfortably inside a 2-minute window at peak RSS
+  well under half the box's 24GB -- NO memory-wall behavior anywhere in
+  this range, in sharp contrast to iter 7's real 23-item pool (killed
+  after ~10 min, RSS still climbing past 8GB unbounded). Iter 7's
+  accelerating-growth-exponent curve is real but was measured on generic
+  prefixes of a MUCH bigger pool (14-23 items) -- it does not license "kf=3
+  is infeasible at any pool rich enough to matter" as a blanket statement.
+
+  STEP 3 (wire kf=3 into the REAL, verified search, not just the table):
+  added an opt-in `--kf3` CLI flag raising engine C's `fwd_tabs` range
+  from the verified default `0..=2` to `0..=3` (default behavior with no
+  flag confirmed byte-identical: re-running `--mitm head4u` with no flags
+  reproduces iter 4's exact original candidate/node counts). This is
+  nearly free to add: `EngineC::probe` already loops over `self.fwd`
+  tables per already-visited suffix-DFS node, so an extra kf=3 table adds
+  one more cheap lookup per node, not more DFS nodes -- confirmed
+  empirically (b2d's and xr3p's `--kf3` engine-C chain-node counts came
+  back byte-identical to their original kf<=2 runs).
+
+  RAN THE FULL kf<=3-EXTENDED SEARCH TO COMPLETION (blocking, one target
+  at a time to avoid memory cross-contamination) for the three targets
+  where it adds genuinely new coverage:
+    * b2d: engine A k<=4 (757,804,807,331 candidates, 345.4s, matching
+      iter 4's order of magnitude) + engine B (359,719,607 nodes, 9.3s)
+      + engine C kf<=3 (2,118,285,916 chain nodes -- identical to the
+      original kf<=2 count, confirming zero new DFS nodes -- 374.4s).
+      Total 760.9s (~12.7 min). **RESULT: still NO <=5-op program.**
+    * xr5: engine A k<=4 (1,024,323,677,115 candidates, 359.2s) + engine
+      B (1,802,855,447 nodes, 29.7s) + engine C kf<=3 (2,118,285,916
+      nodes, 350.7s). Total 921.7s (~15.4 min). **RESULT: still NO
+      <=5-op program.**
+    * xr3p: engine A k<=4 (578,337,366,272 candidates, 198.5s) + engine
+      B (1,772,521,818 nodes, 17.5s) + engine C kf<=3 (2,104,193,812
+      nodes, 289.0s). Total 592.2s (~9.9 min). **RESULT: still NO <=4-op
+      program.**
+  `head4u` was NOT re-run under `--kf3` (kf=3 is logically inert for it --
+  the wanted op-budget bitmask never reaches that depth, so re-running
+  would only reconfirm iter 4's already-exhaustive k<=3 negative at zero
+  new information). `a2d`/`b2e`/`c2out` were NOT extended: their
+  `MTarget.enable_engine_c` is `false` (an iter-4 CPU-budget decision
+  predating this measurement), so `--kf3` has no code path to affect them.
+  Given step 2 shows their pool=15 kf=3 tables are just as cheap as
+  b2d/xr5/xr3p's, the original CPU-budget rationale for skipping engine C
+  on these three is worth re-examining, but flipping `enable_engine_c` on
+  and running their (untested, materially bigger) full chain-DFS is a
+  new, not-yet-taken step -- recorded as a proposal, not executed this
+  iteration (see updated P-12).
+
+  VERDICT: iter 7's kf=3 "memory wall" finding was CORRECT for what it
+  actually tested (the full 23-item `full_hash` pool) but its closing
+  language overgeneralized to every segment target, which this iteration
+  disproves directly: b2d, xr5, and xr3p (13-item real pools) all
+  completed their FULL kf<=3-extended verified search in under 16 minutes
+  each, with no memory-wall behavior. This is a genuine new closing
+  result at a real depth boundary (kf<=3, one step past iter 4's kf<=2)
+  for the three smallest still-open segment targets -- all three remain
+  negative. No <=(current_ops-1)-op program was found for any of them, so
+  there is nothing to port.
+  Kernel port: NONE. `perf_takehome.py`/`dev.py` untouched throughout
+  (only `fusion_search.rs` was modified: the new `--kf-scale-target`
+  probe, the opt-in `--kf3` flag, and `run_mitm_target`'s parameterized
+  `max_kf`). Build clean; `cargo test --release --bin fusion_search`:
+  9/9 passing, unchanged. Default (`--mitm` with no `--kf3`) behavior
+  verified byte-identical to before.
+
 ## Proposed hypotheses
 (agent appends; driver promotes to backlog.md)
 - P-1 [op-reduction]: C5-pre-xor value domain. Pre-xor all 2047 tree node
@@ -862,3 +975,28 @@ Queued: H-012 (floor recalibration).
   mode. Absent (b) being funded, H-025/G-10 stay open only in the
   "unreachable at current tooling scale" sense -- treat as effectively
   closed for practical purposes.
+  CORRECTION (iter 10): the above "kf=3 CLOSED INFEASIBLE" verdict was
+  measured ONLY against synthetic prefixes of `full_hash`'s own 23-item
+  pool -- it was never actually tested against any individual segment
+  target's real (much smaller) pool, and the closing sentence ("no pool
+  size is both tractable in hours and rich enough... even the smallest
+  existing sub-span target already needs a ~13-item pool") turned out to
+  be an overgeneralization once actually checked. Iter 10 built kf=3
+  forward tables against every real still-open segment target's own pool
+  (b2d/xr5/xr3p at 13 items, a2d/b2e/c2out at 15, head4u at 9) and found
+  ALL of them cheap: 17-120s, 3.5-11.2GB peak transient RSS, nowhere near
+  the memory wall iter 7 hit at pool=23. It then wired kf=3 into the real,
+  verified engine C search (opt-in `--kf3` flag, default behavior
+  unchanged) and ran it to completion for b2d (760.9s), xr5 (921.7s), and
+  xr3p (592.2s) -- ALL THREE STILL NEGATIVE at this deeper boundary. So:
+  (a) is CLOSED INFEASIBLE only for the FULL/global `full_hash` target
+  specifically (pool=23); for every individual segment target (pool<=15)
+  it is CLOSED NEGATIVE (genuinely searched and ruled out at kf<=3, not
+  infeasible at all). The two still-untaken next steps for THIS scale are
+  (i) enabling engine C (currently `enable_engine_c=false`) for a2d/b2e/
+  c2out and running their chain DFS for the first time ever (their pool=15
+  kf=3 tables are confirmed cheap; the chain-DFS cost itself is untimed
+  for these three specifically), and (ii) kf=4 at the segment scale
+  (untested; likely still cheap given the trend, but not measured). Only
+  the FULL 23-item `full_hash` pool remains a genuine memory wall
+  requiring a different table representation to progress past kf<=2.

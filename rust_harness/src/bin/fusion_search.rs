@@ -2458,7 +2458,7 @@ fn mitm_targets() -> Vec<MTarget> {
     ]
 }
 
-fn run_mitm_target(tg: &MTarget, threads: usize) {
+fn run_mitm_target(tg: &MTarget, threads: usize, max_kf: usize) {
     let kmax_use = tg.current_ops - 1;
     let wanted: u32 = (2u32 << kmax_use) - 2; // bits 1..=kmax_use
     println!(
@@ -2535,14 +2535,25 @@ fn run_mitm_target(tg: &MTarget, threads: usize) {
         summarize(tg, &ctx_a, &ctx, kmax_use, t_start);
         return;
     }
-    let fwd_tabs: Vec<FwdTab> = (0..=2).map(|prefix_op_count| build_fwd_tab(&ctx, prefix_op_count)).collect();
+    // max_kf is normally 2 (the verified/default engine C coverage: kf in
+    // {0,1,2}). Iter 9 (P-12 follow-up) adds an opt-in `--kf3` extension that
+    // raises this to 3 for a real (not just diagnostic) run -- table-build
+    // cost for kf=3 was confirmed cheap (seconds-to-minutes, single-digit-GB
+    // peak RSS) at every individual segment target's REAL pool (9-15 items),
+    // in contrast to the 23-item `full_hash` pool which hits a memory wall.
+    // Adding one more FwdTab only adds O(1) extra hashmap lookups per engine
+    // C suffix-DFS node (see EngineC::probe's `for tab in self.fwd` loop), so
+    // this does not blow up engine C's own chain-DFS cost.
+    let fwd_tabs: Vec<FwdTab> = (0..=max_kf).map(|prefix_op_count| build_fwd_tab(&ctx, prefix_op_count)).collect();
     let max_chain_ops = 5.min(kmax_use);
     println!(
-        "   engine C: chain DFS to {} ops (caps: <=3 unary links, 5-op chains need <=1 unary) probing prefix tables (kf=0: {}, kf=1: {}, kf=2: {} prefixes)",
+        "   engine C: chain DFS to {} ops (caps: <=3 unary links, 5-op chains need <=1 unary) probing prefix tables ({})",
         max_chain_ops,
-        fwd_tabs[0].entries.len(),
-        fwd_tabs[1].entries.len(),
-        fwd_tabs[2].entries.len()
+        fwd_tabs
+            .iter()
+            .map(|t| format!("kf={}: {}", t.prefix_op_count, t.entries.len()))
+            .collect::<Vec<_>>()
+            .join(", ")
     );
     let tc = Instant::now();
     run_engine_c(&ctx, &links, &fwd_tabs, max_chain_ops, wanted, &stats, threads);
@@ -2618,15 +2629,86 @@ fn run_kf_scale_probe() {
     println!("== probe complete ==");
 }
 
+/// Real-pool kf=3 feasibility probe for a SPECIFIC named MITM target (iter 9,
+/// P-12 follow-up). `--kf-scale` (above) only ever swept synthetic prefixes
+/// of `full_hash`'s 23-item pool; this instead builds `build_fwd_tab` at
+/// kf=0..=3 using the named target's REAL `pool` field verbatim (whatever
+/// engine C would actually use for that target), with a background
+/// RSS-sampling thread every 5s for early-warning visibility. Diagnostic
+/// only -- not wired into any verified search result.
+fn run_kf_scale_target_probe(name: &str) {
+    use std::io::Write;
+    let all = mitm_targets();
+    let tg = all.iter().find(|t| t.name == name).unwrap_or_else(|| {
+        eprintln!(
+            "no MITM target named {name:?}; available: {}",
+            all.iter().map(|t| t.name).collect::<Vec<_>>().join(", ")
+        );
+        std::process::exit(1);
+    });
+    println!("== kf-scale-target probe ({}): {} ==", tg.name, tg.desc);
+    println!(
+        "   REAL pool has {} consts (incl. common); input_count={}; current_ops={}",
+        tg.pool.len(),
+        tg.input_count,
+        tg.current_ops
+    );
+    let ctx = build_ctx(tg.input_count, &tg.pool, &*tg.reference_fn);
+
+    let done = std::sync::Arc::new(AtomicBool::new(false));
+    let done_r = std::sync::Arc::clone(&done);
+    let pid = std::process::id();
+    let mon = std::thread::spawn(move || {
+        while !done_r.load(Ordering::Relaxed) {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            if done_r.load(Ordering::Relaxed) {
+                break;
+            }
+            if let Ok(out) = std::process::Command::new("ps").args(["-o", "rss=", "-p", &pid.to_string()]).output() {
+                if let Ok(s) = String::from_utf8(out.stdout) {
+                    if let Ok(kb) = s.trim().parse::<u64>() {
+                        println!("      [rss={:.2} GB]", kb as f64 / 1_048_576.0);
+                        std::io::stdout().flush().ok();
+                    }
+                }
+            }
+        }
+    });
+
+    for kf in 0..=3usize {
+        let t0 = Instant::now();
+        let tab = build_fwd_tab(&ctx, kf);
+        let dt = t0.elapsed().as_secs_f64();
+        println!("   kf={kf}: {} entries, {dt:.3}s", tab.entries.len());
+        std::io::stdout().flush().ok();
+    }
+    done.store(true, Ordering::Relaxed);
+    mon.join().ok();
+    println!("== probe complete ==");
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let long = args.iter().any(|a| a == "--long");
     let mitm = args.iter().any(|a| a == "--mitm");
     let stretch = args.iter().any(|a| a == "--stretch");
     let kf_scale = args.iter().any(|a| a == "--kf-scale");
+    // Opt-in iter-9/P-12 extension: raise engine C's forward-prefix coverage
+    // from the verified default kf<=2 to kf<=3 for a real (non-diagnostic)
+    // run. Only meaningful with --mitm; the plain forward-only suite is
+    // unaffected. Default (no flag) behavior is byte-for-byte unchanged from
+    // iter 7/8, so this cannot silently alter any already-verified result.
+    let kf3 = args.iter().any(|a| a == "--kf3");
+    let max_kf: usize = if kf3 { 3 } else { 2 };
+    let kf_scale_target: Option<String> =
+        args.iter().position(|a| a == "--kf-scale-target").and_then(|i| args.get(i + 1).cloned());
     let names: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
     if kf_scale {
         run_kf_scale_probe();
+        return;
+    }
+    if let Some(name) = kf_scale_target {
+        run_kf_scale_target_probe(&name);
         return;
     }
     let threads = std::thread::available_parallelism()
@@ -2642,7 +2724,7 @@ fn main() {
                 names.iter().any(|n| n.as_str() == tg.name)
             };
             if selected {
-                run_mitm_target(tg, threads);
+                run_mitm_target(tg, threads, max_kf);
                 ran += 1;
             }
         }
