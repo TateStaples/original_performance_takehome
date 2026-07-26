@@ -418,3 +418,129 @@ monotonically better placement once slot contention is involved. Mainline
 stays on the exact H-031 mechanism; no flag added to `perf_takehome.py`
 or `tools/run_variant.py`'s `BASE_KWARGS` (both investigation flags kept
 `dev.py`-only, default off, for reproducibility).
+
+## H-033 (iter 6): collect-then-schedule PriorityScheduler prototype
+
+**Result: implemented, verified CORRECT, measured WORSE.** This was built
+in a worktree checked out from an old base commit (predating this
+session's idx_select/fold_flow/H-031 wins), so all measurements below are
+against that worktree's own "mainline" of **1053 cycles**, not the 1038
+this session's true current mainline achieves. The DESIGN and MECHANISM
+findings are architecture-level (about global-DAG scheduling vs streaming
+placement on this workload's reuse pattern) and hold regardless of the
+absolute baseline number; only the raw cycle counts below are relative to
+the older 1053 checkpoint, not today's 1038.
+
+### Design (see the agent's worktree `dev.py` `ListScheduler.collect_tasks`/
+`_collect_task` and the new `PriorityScheduler` class, right after
+`ListScheduler` -- NOT applied to this repo's `dev.py`, see Porting below)
+
+A genuine collect-then-schedule architecture, per the external repo's
+description: flat task DAG, backward pass (priority = longest path to a
+sink, downstream = fanout with multiplicity), forward pass (global
+ready-set re-evaluation per cycle, greedy pick by `(priority, downstream,
+-task_index)` per engine, same SLOT_LIMITS/RAW(1)/WAW(1)/WAR(0) gap
+semantics as `ListScheduler.ready()`).
+
+Key engineering decision (avoiding a rewrite of the ~2000-line hash/
+tournament/idx builder body against a second placement-deferred
+interface): the existing `ListScheduler` run IS the collection phase.
+It gained an additive, default-off `collect_tasks` flag: when on, every
+`put()` (including the ones `emit_any`'s local race resolution and
+`dual_fold`/`_sched_vec` already call) ALSO appends a Task and derives
+hazard edges from task-id analogs of `last_write`/`last_read`, with ZERO
+change to any cycle ListScheduler itself returns or any race it resolves
+-- the build produces the exact same op stream as `scheduler_mode="list"`,
+byte for byte (confirmed: total ops per engine identical in every
+measurement). `PriorityScheduler` then consumes ONLY the collected
+tasks/edges -- never ListScheduler's own cycle numbers -- and re-derives
+placement completely from scratch, a real (not simulated) global pass
+that can and does place tasks in a different cycle order than emission
+order.
+
+One real bug found and fixed en route: tracking only the SINGLE latest
+reader of an address (mirroring `ListScheduler.last_read`'s single-max-
+cycle dict) is UNSOUND for a DAG meant to support arbitrary rescheduling
+-- two independent readers with no edge between them can land in either
+order under a from-scratch forward pass. Fixed by tracking the full
+reader list since the last write and adding a WAR edge to every one of
+them. Caught by the correctness harness at forest_height>=4 (small shapes
+never exercised the failure mode) -- a silent wrong-answer bug before the
+fix.
+
+### Correctness
+60/60 passing (6 shapes x 5 seeds x {list, priority}, `debug_compares=True`
+full per-value trace assertions) after the WAR fix, plus 6 seeds at the
+full graded shape (forest_height=10, batch=256, rounds=16) with the
+complete accepted flag combination -- correct every time. `list` mode
+(mainline) confirmed bit-identical throughout.
+
+### Measured cycles (full graded shape, seed 1, identical across 6 seeds)
+| scheduler | cycles | delta vs list |
+|---|---|---|
+| list (that worktree's mainline) | 1053 | -- |
+| priority (priority+downstream tie-break) | 1097 | **+44** |
+| priority, downstream forced to 0 (priority+index only) | 1081 | +28 |
+| priority, priority forced to 0 (downstream+index only) | 1066 | +13 |
+| priority, both forced to 0 (pure task-index / program order) | 1072 | +19 |
+
+Total ops per engine identical across every row -- every regression is
+100% placement, not op count.
+
+### Where the extra cycles go
+`list`: 37 gap cycles, concentrated in the ramp (7) and the drain (28) --
+the parallel middle has 0, confirming this strain's prior findings.
+`priority`: 139 gap cycles -- 123 of the 139 are in the DRAIN alone
+(modest +11 in the ramp); almost the entire regression is the priority
+scheduler's drain being much worse than list's.
+
+### Why (best-supported mechanism, not fully root-caused)
+The ablation table is the key evidence: removing the priority (longest-
+path-to-sink) signal HELPS (1066, downstream+index-only is least bad),
+and the full priority+downstream combo is WORST (1097) -- critical-path
+prioritization is actively counterproductive here, not merely unhelpful.
+But even "no reprioritization at all" (both forced to 0, strict emission
+order over a globally-reevaluated ready set) is still +19 over
+`ListScheduler`'s incremental greedy placement. That isolates the real
+cost: a from-scratch forward pass over a fully-expanded task DAG cannot
+losslessly reproduce `ListScheduler`'s tighter packing on this workload's
+dense small-pool (temp/cond pool sizes 16/4) WAR/WAW reuse pattern --
+correctness requires an edge to EVERY reader since the last write (not
+just the latest), a strictly larger constraint set than the single
+per-address cycle floor `ListScheduler.ready()` uses, and this denser
+edge set binds harder in the resource-starved drain (few groups left, few
+ready tasks, narrow slack) than in the wide parallel middle (always >=6
+ready valu tasks regardless of extra edges). `ListScheduler`'s cycle-
+based, incrementally-updated, monotonic `first_free_cycle_hint` placement
+appears to be a better fit for THIS workload's specific reuse pattern
+than a generic priority-DAG re-derivation, at least with the priority/
+downstream metrics implemented here. Untried follow-ups: a distinct-
+descendant (bitmask) downstream count, a regionally-normalized priority,
+or a hybrid (list-schedule the drain, priority-schedule the middle).
+
+### Porting to `perf_takehome.py`
+NOT PORTED -- the measured result is a regression. The code lives only in
+the now-cleaned-up agent worktree (not this repo's `dev.py`); a future
+session that wants to pick this up would need to re-implement it (design
+fully specified above: additive `collect_tasks` bookkeeping on
+`ListScheduler` + a new `PriorityScheduler` class + a `scheduler_mode`
+kwarg on `build_kernel_scheduled`) rather than restore a patch, since it
+was built against a stale pre-refactor base commit.
+
+## Iteration log addendum
+- iter 6 (H-033): built a genuine collect-then-schedule alternative
+  (`PriorityScheduler`), NOT a local tweak -- the thing this strain
+  repeatedly flagged as the one unattempted lever that could close the
+  gap to the external repo's 1026. Verified correct (60/60 small-shape
+  runs + 6 full-graded-shape seeds, one real WAR-edge soundness bug found
+  and fixed). Measured WORSE at every priority/downstream configuration
+  tried, worst case +44 (that worktree's 1053 -> 1097), concentrated 84%+
+  in the drain. This is a substantive, well-executed NEGATIVE result: the
+  external repo's architectural pattern, correctly replicated, does not
+  help THIS kernel's specific op-mix/pool-size regime -- the streaming
+  scheduler's single-per-address-cycle-floor approximation turns out to
+  be a genuine asset (not just a limitation) for a workload with small,
+  densely-reused temp/cond pools, not a strict downgrade from a "real"
+  global scheduler. Not ported; documented for any future reopen attempt
+  (distinct-descendant downstream, regional priority, or a hybrid
+  drain/middle policy are the concrete unexplored variants).

@@ -662,3 +662,55 @@ steady-gather branch unconditionally): mainline 1053 -> 1043 -> 1041
   See scheduler/STATE.md's H-031 section for full per-region detail.
 - log: 2026-07-25 opened (driver-scoped drill-down), accepted and flipped
   same session.
+
+### H-033 [strain: scheduler] [status: rejected, real negative -- verified
+correct, measured worse at every configuration tried]
+- statement: the biggest remaining unattempted lever -- replicate the
+  external repo's collect-then-schedule scheduler architecture (flat task
+  DAG, backward critical-path-priority pass, global forward
+  priority-greedy pass) instead of this codebase's streaming,
+  immediate-placement `ListScheduler`, to see if it closes any of the
+  gap to their 1026-cycle result.
+- predicted: uncertain (this session's own floor analysis found
+  scheduling/placement tricks are largely exhausted on this kernel, but
+  a genuinely different architecture was explicitly flagged as the one
+  thing not yet tried).
+- cost: L (explicitly authorized as a large effort: "push and don't
+  stop"). depends: none.
+- result: REJECTED. Built a real, working `PriorityScheduler` (flat task
+  DAG + backward longest-path-to-sink priority/fanout pass + global
+  forward greedy pass over a re-evaluated ready set every cycle) as an
+  additive alternative to `ListScheduler` in `dev.py` (a `collect_tasks`
+  bookkeeping mode on the existing scheduler avoided rewriting the
+  ~2000-line builder body against a second interface). Verified CORRECT:
+  60/60 across 6 shapes x 5 seeds with full per-value debug_compares, plus
+  6 seeds at the full graded shape; one real WAR-edge soundness bug found
+  and fixed en route (tracking only the latest reader per address, sound
+  for streaming placement, is UNSOUND once cycles are re-derived from
+  scratch -- needed an edge to every reader since the last write).
+  MEASURED WORSE at every priority-heuristic configuration tried (tested
+  in a worktree based on an older commit, so absolute numbers are
+  relative to that checkpoint's own 1053 baseline, not today's 1038):
+  full priority+downstream 1053->1097 (+44, worst); priority-only +28;
+  downstream-only +13 (least bad); even a "no reprioritization, strict
+  emission order over a re-evaluated ready set" control is +19 -- so the
+  regression isn't really about which priority heuristic was chosen, it's
+  inherent to the from-scratch global re-derivation itself. 84%+ of the
+  extra cycles land in the final-round drain, not the ramp or the
+  saturated middle. Root mechanism (well-supported, not exhaustively
+  proven): correctness under arbitrary global rescheduling requires a WAR
+  hazard edge to EVERY past reader of a scratch address, a strictly
+  larger constraint set than `ListScheduler`'s single-per-address-cycle-
+  floor approximation -- and this denser edge set binds harder in the
+  resource-starved drain (few groups left, few ready tasks, this
+  workload's small 16/4 temp/cond pools reused densely across 32 groups)
+  than in the wide, already-saturated parallel middle. CONCLUSION: the
+  external repo's architecture, correctly replicated, does not help this
+  specific kernel's op-mix/pool-size regime -- the streaming scheduler's
+  simplifying approximation is a genuine asset here, not just a
+  limitation, for this workload's shape. NOT ported (regression). Full
+  design, ablation table, and untried follow-ups (distinct-descendant
+  downstream count, regional priority, hybrid drain/middle scheduling) in
+  `research/strains/scheduler/STATE.md`'s H-033 section.
+- log: 2026-07-25 opened (user-authorized large effort); same session,
+  implemented, verified correct, measured and rejected.
