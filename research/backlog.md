@@ -1162,3 +1162,21 @@ correct, measured worse at every configuration tried]
 - follow-ups: F-1 port parity_ring+gmin(7,30) to perf_takehome.py
   (mainline 1034); F-2 scratch thresholds (24w = +1 ring; 384w = full
   retention ~ 16 ideal cyc); F-5 unpark H-042 re-scoped.
+
+### H-048 result addendum [status: PARTIAL ACCEPT — frontier 1032; SUPPLY SOLVED, CONVERSION IS THE BLOCKER]
+- audit tool (tools/audit_ring_windows.py): 384 audited-safe ring words
+  exist TODAY (= the F-2 full-retention threshold) — adjacent blocks'
+  windows are emission-disjoint, lv re-funds rings nearly everywhere,
+  ringed donors free their own st8-12. Only desert: the e0-tail/e1-head
+  overlap chain. Constant dedup: zero (no duplicates).
+- winner: parity_ring + l4_gmin=(8,30) + 4-ring plan (96 words) = 1032;
+  gains come from relief-funded gmin slide, not rings per se; rings
+  beyond ~4-6 cost more in borrow-hazard serialization than they recover
+  -> the remaining 12 rings are H-042's job (schedule hazards off the
+  critical path), not a word hunt (F-8).
+- SOUNDNESS finding: trace liveness is UNSOUND for emit_any-raced
+  operands (only the race winner's reads appear; schedule shifts flip
+  races) — proven by real miscompare. Borrowing restricted to structural
+  classes (st/nv/lv/root_nv_vec). Applies to ALL future borrowing.
+- follow-ups: F-6 mainline flip 1032 (derive plan addresses from named
+  vectors, not raw numbers); F-7 re-audit after any emission change.
