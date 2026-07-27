@@ -142,5 +142,11 @@
     "label": "ring_plan",
     "cycles": 1032,
     "note": "H-048 word-level ring borrowing (4 plan rings, 96 words) + gmin(8,30); F-6 port"
+  },
+  {
+    "step": "1031",
+    "label": "spelling_flip",
+    "cycles": 1031,
+    "note": "H-042 offline spelling plan: (13,29) L2 fold forced off flow; F-9 port"
   }
 ]
