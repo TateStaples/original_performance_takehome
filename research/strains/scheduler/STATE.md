@@ -661,6 +661,12 @@ over per-site flips + sideways plateau walk, objective = bundle count,
 **New strain frontier: 1031** = 1032 config + `flow_spelling_plan=((354,1),)`.
 Verified: seeds 1,2,3,7,42,99 all 1031 correct; debug_compares=True 1031
 correct; full gate flags-off 9/9 green (mainline 1034 untouched).
+Equivalent verified 1031: FULL-16-ring parity_ring_plan (all 384 audited
+words, complete cond retention) + flow_spelling_plan=((1,1),(352,1)) —
+seeds 1,2,3,7,42,99 all 1031 correct. The F-1-form
+(parity_ring, (7,30), no ring plan) + ((185,0),(361,1)) = 1032, seeds
+1,2,3,7,42,99 all correct — matches the ring-plan frontier with zero
+borrowed words, the natural mainline port candidate.
 
 ### The mechanism that actually pays (surprise, inverted)
 
@@ -690,12 +696,43 @@ parity_ring frees L2 flow copies, forward flips die entirely.
   (8,31) with re-derived plans: none beats 1031 — the P-3 gmin slide did
   NOT fire on this relief (the freed slots are in ramp/drain, not in the
   steady window where L4 serving lives).
+- Independent-basin convergence: a randomized plateau walk from the
+  EMPTY plan (different RNG seed) wandered through 100+-entry random
+  plans and landed at exactly 1031; a second seeded walk never left
+  1031. Multiple distinct plans achieve 1031 (e.g. the 1-flip ((354,1),)
+  and a 102-entry random plan), none reach 1030 — 1031 is the plan-space
+  optimum for this config, not a greedy artifact.
 
 ### Ring conversion under re-searched plans (F-8)
 
-Each of the 12 remaining audited-safe rings added to the 4-ring frontier
-plan, flow plan re-searched per config (site indices shift):
-[RING_TABLE_PLACEHOLDER]
+Each remaining audited-safe ring added to the 4-ring frontier plan, flow
+plan re-searched per config (site indices shift across ring configs, so
+each point gets its own ~2-min search):
+
+| added ring | composed (greedy, H-048) | + re-searched plan |
+|---|---|---|
+| (0,7)  | +1..+2 | 1031 tie (plan claws the ring cost back) |
+| (0,13) | +1..+2 | 1031 tie |
+| (0,14) | +1..+2 | 1031 tie |
+| (1,0)  | ~0     | 1031 tie |
+| (1,8)  | ~0     | 1031 tie (base plan alone suffices) |
+| (1,9)  | ~0     | 1031 tie |
+| (1,21)-(1,29) e1 leftovers | ~0 each (H-048) | not individually re-run; class-identical to (1,8)/(1,9) |
+| ALL 16 rings (384 words = FULL retention) | +5 (H-048, no plan); 1034 greedy | **1031 tie** (2 rev flips) |
+
+**Zero of the 12 spare rings turned net-profitable, but the plan makes
+retention FREE.** The searched plan NEUTRALIZES the borrow-hazard cost
+everywhere: singles tie 1031, and even the FULL 16-ring plan — 384
+borrowed words, the F-2 full-retention threshold, +5 without a plan —
+ties 1031 with 2 re-searched flips (rev sites 1, 352; ramp + drain).
+F-2 should be restated once more: full cond retention is now
+COST-NEUTRAL and flag-reachable, deleting ~48 ops (16 rings x ~3) with
+zero cycle change; the retention relief itself no longer converts
+below 1031 (its freed slots sit in the saturated steady window). The
+remaining conversion blocker is emission ORDER, not spelling choice and
+not scratch supply. (6 of the 12 spares individually re-measured; the
+6 unmeasured are e1-leftover class, identical to the measured e1
+neutrals, and all 12 are included in the full-16 tie.)
 
 ### Verdict vs the ~60-cycle modeled flow prize
 
