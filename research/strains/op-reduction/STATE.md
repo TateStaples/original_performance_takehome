@@ -1332,3 +1332,107 @@ the remaining credible route to 892 is outside the hash op count
   slots between them at zero cycle cost today.
 - P-10 can be moved to CLOSED in the backlog with the fp=1/copy-budget
   argument above (stronger than the previous "likely rejected").
+
+## H-038 (2026-07-27): compare/select-extended hash program search — CLOSED NEGATIVE
+
+Scope: the ONE vocabulary gap all three closed tool classes explicitly name
+(G-10 fusion/MITM, G-20 re-derivation, H-025 CEGIS/MITM): programs using the
+machine's compare ops `<` / `==` (alu/valu, 0/1 result) and the flow engine's
+`select(cond, a, b)`. Searched honestly at every previously-closed boundary;
+NOTHING survives. No kernel change (no candidate reached emission); mainline
+untouched at 1038; full gate green (tests/submission_tests.py exit 0,
+CYCLES 1038, worktree byte-clean vs main for perf_takehome.py/dev.py).
+
+### New tooling (all in tools/ or rust_harness/, kernel untouched)
+- `fusion_search --cmpsel` (rust_harness/src/bin/fusion_search.rs): interior
+  enumeration extended with lt/eq over all operand pairs and select over all
+  (cond, a, b) triples (cond non-const, a != b); final level adds pooled
+  lt/eq/select, solved select arms (select(c,x,C) / select(c,C,x) /
+  select(c,C1,C2)), and solved thresholds lt(x,C)/lt(C,x)/eq(x,C) for
+  0/1-valued targets. The MITM engines' FORWARD sides inherit the extension
+  through the shared enumerate_level. Flag default off — byte-identical
+  legacy behavior, 9/9 pre-existing self-tests green.
+- `--selftest-cmpsel` positive controls: 3 planted functions whose shortest
+  forms REQUIRE the new vocabulary (carry-add x+(x<2^31); two-constant
+  branch; select mix over two inputs) — all rediscovered at planted length
+  and verified on 10M+ inputs. The tool even found equal-length alternates
+  (madd on a boolean with solved (K,C)), i.e. the new op interactions
+  genuinely enumerate.
+- `--engine-a-kmax N`: caps MITM engine A forward depth (cmpsel multiplies
+  the k=4 general layer ~10-30x into a CPU wall; base-vocabulary k<=4
+  closure stands from iters 4/7).
+- `tools/hash_cmpsel_probe.py`: 1-op compare/select re-derivation probe over
+  the 25-node two-round trace DAG (extends G-20's family (b)).
+
+### Why the MITM suffix/meet sides need no compare/select extension (proved,
+stated in the tool header): a compare link collapses the chain value to
+{0,1}; a select link with constant arms collapses to <=2 distinct values;
+every requirement battery for a full-width target has >2 distinct probe
+values, so no suffix containing one can reproduce it; a compare as the meet
+op is impossible for the same reason. The only non-collapsing unary select
+link, select(x,x,C) = (x==0 ? C : x), differs from the identity link at the
+single input 0 — probe-indistinguishable from identity (already covered) and
+able to repair a program at only one point of 2^32.
+
+### Coverage (all NEGATIVE; 32-probe batteries; any find verified on 10M+
+inputs before reporting)
+1. 1-op re-derivations (hash_cmpsel_probe.py): 337,548 candidates over the
+   25-node DAG, N=64 structured+random samples — 0 hits. Measured structural
+   facts: NO trace node is 0/1-valued (compares can never equal a node);
+   only x on the structured x=0 sample is ever zero (select cond==0
+   branches degenerate over this node set).
+2. Forward suite, depth = current-1 (fusion_search --cmpsel), 12 full-width
+   targets, 13.84B candidates total: full 11->\<=3 4.19B; g01 4->3 1.02B;
+   a2u 3->2 285K; b2c 3->2 391K; g123mid 4->3 2.15B; f23 3->2 692K; g234
+   4->3 2.15B; g45 4->3 1.53B; e2out 3->2 200K; head2 2->1 766; xr3 4->3
+   655M; par_c 8->\<=3 2.14B. All negative. par_d/par_e "finds" are the
+   KNOWN 2-op parity forms (madd + shr31) plus new equal-length lt-flavored
+   sign-test variants (lt(t1, 0x80000000) == shr31 here) — parity already
+   costs 0 ops in mainline (H-015), so no gain; compares' only appearance
+   anywhere in the campaign is as these equal-length parity alternates.
+3. Depth-4 forward closures (the old --long questions, cmpsel): head3 5->4
+   453.4B; xr4 5->4 440.8B; u2e 5->4 303.8B; par_c_deep 5->4 289.1B
+   (parity target searched WITH solved compare thresholds). Total 1.487T,
+   all negative.
+4. MITM boundary questions (--mitm --cmpsel --engine-a-kmax 3
+   --force-engine-c; engines: A = forward exhaustive k<=3 cmpsel, B =
+   fwd-DFS-3 cmpsel probing 1.4M inverted suffix chains, C = chain DFS <=5
+   probing kf<=2 cmpsel prefix tables), A/B/C counts per target, all
+   negative:
+   - b2d 6->5: 1.50B / 1.05B / 2.12B      - xr5 6->5: 1.78B / 3.89B / 2.12B
+   - xr3p 5->4: 1.14B / 3.84B / 2.10B     - xr4r 5->4: — / 3.73B / 2.10B
+   - head3r 5->4: — / 3.77B / 2.10B       - head4u 4->3: 1.11B / 540K / 336M
+   - u2er 5->4: — / 2.16B / 2.10B         - a2d 7->6: 3.05B / 2.16B / 2.12B
+   - b2e 7->6: 3.07B / 2.19B / 2.12B      - c2out 7->6: 3.07B / 2.19B / 2.12B
+5. full_hash 11->10, NO waypoint/segment assumption (the iter-6b/7 global
+   question, cmpsel): engine A k<=3 4.15B; engine B 19.66B forward nodes
+   (1,221 j=1 + 1,423,563 j=2 inverted chains); engine C 2.12B chain nodes
+   against kf<=2 cmpsel prefix tables of 995,640 entries. NEGATIVE.
+
+Grand total: ~1.586T explicit candidates/nodes with the extended vocabulary.
+
+### Honest boundary (NOT covered)
+- Interior compare thresholds / select arms drawn from the per-target
+  constant pool only (final-op constants are solved) — the same pool caveat
+  every prior fusion_search run states.
+- MITM engine A k=4 under cmpsel (CPU wall; base vocabulary k<=4 closed in
+  iters 4/7). Compare/select ops sitting in the LAST ~4 ops in non-chain /
+  non-meet positions beyond engine B's depth-3 forward reach are the same
+  already-stated base-tool caveat class ("binary op of two temps atop a
+  depth-4 prefix").
+- kf=3 cmpsel prefix tables (base closed kf<=3 in iter 11; cmpsel grows
+  tables ~13-25x into the same wall class as base kf=4).
+- 32-probe probabilistic identity, as in all prior runs.
+
+### Verdict
+CLOSED NEGATIVE. G-20's reopen-if clause ("a compare/select-based branchy
+form is shown viable") is answered: not viable at any searched boundary.
+Hash op-count is now closed by a FOURTH independent tool class; the only
+thing compares buy on this DAG is equal-length sign-test alternates for
+parity bits (worthless — parity is 0 ops). Structural moral: a compare
+contributes at most 1 bit (carry/borrow material, e.g. distributing shifts
+over adds), and for these constants no such redistribution shortens
+anything; a select must be paid on flow (1/cyc, ~76% utilized) even if one
+existed. Recommend graveyarding as the final hash-op-count entry: the 892
+gap is NOT in the hash program; remaining credible mass is loads/schedule
+shape (H-039/H-040 territory).
