@@ -1095,14 +1095,19 @@ correct, measured worse at every configuration tried]
   idealized regime removes — its -144 lane-ops/level-pair is real
   (reopened as H-046). Same class: G-18's vload variant.
 
-### H-045 [strain: algo] [status: open] (H-043's N-1, top ranked)
-- statement: FLOW-MAXIMIZATION of selects. Every vector select spelled on
-  flow (vselect, 1/cyc) exits the 60-lane-op/cyc alu+valu budget; solving
-  c=(60,841-8X)/60 with X=c-797 gives ideal floor ~988 (-50 vs 1038).
-  idx_boundary_select (landed flag-gated, -283 alu/valu slots) is the
-  first installment. Binding open question (H-044 is counting): whether
-  ~190 additional selects admit legal flow spellings.
-- predicted_gain: ideal -50. cost: M. depends: H-044's count.
+### H-045 [strain: algo] [status: testing — RE-SCOPED by H-044 to the full modeled prize]
+- statement: FLOW-SATURATION BUILD, the complete H-044 prescription:
+  (1) retain parity vectors as tournament conds instead of re-extracting
+  (~2,000 lanes deleted — the infinite-scratch enabler; scratch
+  liberation is the gating prerequisite), (2) serve 25->31 L4 group-
+  rounds, (3) prime L4(half)/L5/L6 (H-046 mechanism, already flag-gated
+  from G-22), (4) ~930 selects spelled on a bubble-free flow engine
+  (100% busy vs 76.8%), 253 valu-first selects, madd-only spill,
+  (5) load ~1,863 slots at ~100% util. Modeled endpoint: 931.6 ideal;
+  940 needs no new algebra. idx_boundary_select (-283 slots, landed)
+  is the first installment.
+- predicted_gain: the entire 1038->~940 path per the LP. cost: XL
+  (this is a reorganization, not a knob). depends: H-044 (done).
 
 ### H-046 [strain: algo] [status: open] (reopens G-22 under algo-first)
 - statement: idealized C5-priming generalization — G-22's measured -144
@@ -1123,3 +1128,20 @@ correct, measured worse at every configuration tried]
 - note: H-042 (joint selection-during-scheduling beam = H-043's N-3) stays
   PARKED as the fitting-side converter of these ideal gains; unpark when
   the algo side lands.
+
+### H-044 [strain: algo] [status: closed ANSWERED -> strains/algo/STATE.md, tools/ideal_floor.py]
+- result: LP-based ideal-floor model (validated: reproduces 1014-1021 for
+  the as-built census). BEST SERVING MIX UNDER INFINITE SCRATCH: C=931.6
+  — serve L1-L3 + 31/64 L4, prime L4(half)/L5/L6, 918 selects on flow +
+  253 valu-first, gather L5-L10; drives valu=alu=load=flow floors exactly
+  equal (independently derives corsix's 7.5:2:1). 940 NEEDS ZERO NEW
+  ALGEBRA: the reorganization suffices. With the as-built mix pinned, 940
+  is unreachable by ANY compute removal (load floor 951 binds).
+  Gap decomposition: 1038 -(24 friction)-> 1014 -(63 overhead+flow-shift)->
+  951 -(20 mix)-> 932. Sensitivity at optimum: ~97 lane-ops/cyc (not 60);
+  loads LIVE again (~0.15 cyc/load — G-22's verdict was mix-relative);
+  key enabler: tournament conds are FREE under infinite scratch (path
+  bits = last d parity vectors, already materialized; as-built re-extracts
+  ~2,000 lanes). Flow-disabled control: 1040 (G-4/G-12/G-14 confirmed
+  model-side). 892 under our rules needs ~0.93 more ops/hash removed —
+  consistent with H-040.
