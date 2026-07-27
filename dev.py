@@ -618,6 +618,7 @@ class KernelBuilder:
         idx_select_before_madd: bool = False,
         gather_load_offset: bool = False,
         idx_boundary_select: bool = False,
+        parity_ring: bool | tuple[tuple[int, int], ...] = False,
         store_order: str = "group",
         reverse_newest_parity_fold: bool | Iterable[int] = (),
         newest_parity_last_fold_race: bool = True,
@@ -1262,6 +1263,53 @@ class KernelBuilder:
             shallow_newest_parity_last_rounds = set()
         shallow_newest_parity_last_rounds = {r for r in shallow_newest_parity_last_rounds if level(r) in (2, 3)}
         assert not shallow_newest_parity_last_rounds or parity_conds, "bl_last requires parity_conds"
+
+        # parity_ring (H-045): retain the raw parity VECTORS across a
+        # group's tournament rounds in a per-group 3-slot ring, so the
+        # tournament conditions are read directly (exact 0/1 parities)
+        # instead of re-extracted from the packed position accumulator.
+        # Per ringed group-round this deletes: the L2 flow copy of b0
+        # (1 flow slot), both L3 mask extractions (2 valu/alu-raced ops)
+        # and all 3 served-L4 mask extractions -- with ZERO added ops:
+        # the parity write simply targets a ring slot instead of st/nv,
+        # the newest L4 bit keeps riding nv, and the position accumulator
+        # is SEEDED at L2 (madd st = 2*P0 + P1, replacing the fold madd)
+        # then folded as before, so every downstream st reader (epoch-exit
+        # gaddr conversions, b3_last packed folds) sees identical values.
+        # The ring registers are BORROWED from other skew blocks' st/nv
+        # vectors whose real accesses sit strictly on the other side of
+        # the ring's accesses in EMISSION order; the scheduler's
+        # per-address hazard tracking can then only serialize, never
+        # corrupt. Safe slices at the (4,3)/32-group shape (slot = global
+        # diagonal step; blocks emit in block order within a step):
+        #   (0, 0): groups 0-7 ring in block 2's st/nv (first real write:
+        #           block 2's round 0 at slot 6 > last ring read slot <= 4)
+        #   (0, 1): groups 8-15 ring in block 3's st/nv (born slot 9 > 7)
+        #   (1, 2): groups 16-23 ring in block 0's st/nv (dead after its
+        #           r14/r15 at slots 14/15 < first ring write slot 17)
+        #   (1, 3): groups 24-31 ring in block 1's st/nv (dead after
+        #           slots 17/18 < first ring write slot 20)
+        # Each slice funds floor(16/3) = 5 of its 8 groups (st+nv of one
+        # donor block = 16 vectors; a ring is 3); with lazy_val_loads the
+        # e0 slices may also borrow the donor block's val vectors (their
+        # first write moves to the donor's round 0) and fund all 8.
+        # b3_last's round-15 dead-register pool writes the same donors
+        # strictly AFTER the last ring read in emission order (slot 24).
+        if parity_ring is True:
+            parity_ring_slices = {(0, 0), (0, 1), (1, 2), (1, 3)}
+        elif parity_ring:
+            parity_ring_slices = {(int(e), int(b)) for e, b in parity_ring}
+        else:
+            parity_ring_slices = set()
+        if parity_ring_slices:
+            assert parity_conds, "parity_ring requires parity_conds"
+            assert not parity_early_levels, "parity_ring is incompatible with parity_early"
+            assert not (hard_speculated_fold_levels or auto_speculated_fold_levels), \
+                "parity_ring is incompatible with spec_fold (those branches read the st/nv parities)"
+            assert not shallow_newest_parity_last_rounds, "parity_ring is incompatible with bl_last"
+            assert tournament_level_count == 3, "parity_ring assumes levels 1-3 are all served"
+            assert skew == (4, 3) and group_count == 32, \
+                "parity_ring's dead-register funding map is derived for the (4,3)/32-group shape"
 
         def is_shallow_newest_parity_last_fold(r: int, g: int) -> bool:
             # bs_ (groups per skew block) is defined before emission runs.
@@ -2144,6 +2192,47 @@ class KernelBuilder:
                 comb(r0, mask_b0, r1, r0)                 # winner = b0 ? q1 : q0
             madd(node_val_, node_val_, d_lo, e_lo)                    # node_val = E + b3*D
 
+        # H-045 (parity_ring): (epoch, group) -> 3 ring vector bases holding
+        # the retained parities P0/P1/P2 (P3 keeps riding nv). Built after
+        # alloc_state so the donor registers exist; groups a slice cannot
+        # fund (donors run out at 5/8 without vals) keep the legacy path.
+        parity_ring_map: dict[tuple[int, int], tuple[int, int, int]] = {}
+
+        def build_parity_ring_map() -> None:
+            if not parity_ring_slices or parity_ring_map:
+                return
+            assert state_vecs is not None and node_val_vecs is not None and hash_chain_vecs is not None
+            bs8 = group_count // 4  # 8 at the asserted shape
+
+            def donors_of(block: int, with_vals: bool) -> list[int]:
+                gs = range(block * bs8, (block + 1) * bs8)
+                d = [state_vecs[g] for g in gs] + [node_val_vecs[g] for g in gs]
+                if with_vals:
+                    # Safe only under lazy_val_loads: the donor's val vload
+                    # is then emitted at the donor's round 0 (after every
+                    # ring access of an e0 slice in emission order).
+                    d += [hash_chain_vecs[g] for g in gs]
+                return d
+
+            for (epoch, block) in sorted(parity_ring_slices):
+                if epoch == 0:
+                    assert block in (0, 1), "e0 slices are safe for blocks 0/1 only"
+                    donor_block = block + 2
+                    with_vals = bool(lazy_val_loads)
+                else:
+                    assert block in (2, 3), "e1 slices are safe for blocks 2/3 only"
+                    donor_block = block - 2
+                    with_vals = False  # final vstores read every val at the drain
+                donors = donors_of(donor_block, with_vals)
+                # Served-at-L4 groups first: they delete 6 ops/ring vs 3.
+                targets = sorted(range(block * bs8, (block + 1) * bs8),
+                                 key=lambda g: (not is_pair_tournament_served(
+                                     4 if epoch == 0 else rounds - 1, g), g))
+                for g in targets:
+                    if len(donors) < 3:
+                        break
+                    parity_ring_map[(epoch, g)] = (donors.pop(0), donors.pop(0), donors.pop(0))
+
         # --- rounds ---
         # The round body is a GENERATOR yielding at stage boundaries
         # (node_val block, each hash dependency level, state update), so the
@@ -2166,6 +2255,9 @@ class KernelBuilder:
                 st = state_vecs[g]
                 vl = hash_chain_vecs[g]
                 nv = node_val_vecs[g]
+                # H-045 (parity_ring): retained-parity ring of this
+                # (epoch, group), or None for the legacy packed-st path.
+                ring = parity_ring_map.get((r // period, g))
 
                 # ---- node_val: broadcast root / tournament select / gather ----
                 if L == 0:
@@ -2218,8 +2310,11 @@ class KernelBuilder:
                             vsel(vl, st, nv, t)
                             nvsrc = None
                         else:
-                            # p is the single parity bit itself.
-                            first_fold(nv, st, diffs[0], evens[0])
+                            # p is the single parity bit itself (H-045:
+                            # retained in ring[0] for ringed groups; st is
+                            # then first written by the L2 seed madd).
+                            first_fold(nv, ring[0] if ring is not None else st,
+                                       diffs[0], evens[0])
                     elif L == 2 and parity_conds and L in hard_speculated_fold_levels:
                         # H-010 at L2: 4 speculated xors + 3 selects.
                         # b0 rides st (copied to condB; st folds b1 next),
@@ -2247,6 +2342,16 @@ class KernelBuilder:
                             vsel(tm[j], st, evens[1], evens[0])
                             fold_position(st, nv)                    # st = b0b1
                             madd(nv, nv, t, tm[j])
+                        elif parity_conds and ring is not None:
+                            # H-045 (parity_ring): b1 = ring[1], b0 =
+                            # ring[0] -- the b0 flow copy disappears, and
+                            # the position accumulator is SEEDED here
+                            # (st = 2*P0 + P1; st was never written this
+                            # epoch) instead of lag-folded.
+                            first_fold(t, ring[1], diffs[0], evens[0])
+                            first_fold(tm[j], ring[1], diffs[1], evens[1])
+                            vsel(nv, ring[0], tm[j], t)
+                            madd(st, ring[0], two_vec, ring[1])
                         elif parity_conds:
                             # nv = b1 (raw parity), st = b0 (single bit).
                             # b0 copy (st folds next); vselect(c,a,a,a) is a
@@ -2287,6 +2392,20 @@ class KernelBuilder:
                         vsel(tm[j], condA[j], tmM[j], tm[j])      # Dw
                         fold_position(st, nv)                     # st = b0b1b2
                         madd(nv, nv, tm[j], t)        # Ew + b2*Dw
+                    elif parity_conds and ring is not None:  # L == 3
+                        # H-045 (parity_ring): b2 = ring[2] (newest), b1 =
+                        # ring[1], b0 = ring[0] -- both mask extractions
+                        # disappear and nv is a pure fold destination. The
+                        # position fold still runs (st = 2*st + P2) so the
+                        # epoch-exit gaddr conversions see identical st.
+                        fold_position(st, ring[2])
+                        first_fold(t, ring[2], diffs[0], evens[0])   # m0
+                        first_fold(tmM[j], ring[2], diffs[1], evens[1])  # m1
+                        first_fold(tm[j], ring[2], diffs[2], evens[2])   # m2
+                        first_fold(nv, ring[2], diffs[3], evens[3])      # m3
+                        vsel(t, ring[1], tmM[j], t)   # q0 = b1 ? m1 : m0
+                        vsel(nv, ring[1], nv, tm[j])  # q1 = b1 ? m3 : m2
+                        vsel(nv, ring[0], nv, t)      # b0 ? q1 : q0
                     elif parity_conds:  # L == 3
                         # nv = b2 (raw parity), st = b0b1 (bit1=b0, bit0=b1);
                         # both conds extract from st at round START.
@@ -2387,26 +2506,41 @@ class KernelBuilder:
                         u_combine: Callable[[int, int, int, int], object] = race_sel if pair_tournament_second_fold_race else (
                             lambda dst, cond, wa, wb: (
                                 vec("-", wa, wa, wb), madd(dst, cond, wa, wb)))
-                        vec("&", condB[j], st, one_vec)             # b2 (0/1)
+                        # H-045 (parity_ring): ringed groups read b2/b1/b0
+                        # straight from the retained parities (exact 0/1)
+                        # -- all three mask extractions disappear.
+                        if ring is not None:
+                            b2c = ring[2]
+                        else:
+                            vec("&", condB[j], st, one_vec)         # b2 (0/1)
+                            b2c = condB[j]
                         if should_fold_b3:
                             fold_position(st, nv)                           # b0b1b2b3
                         w_fold(t, nv, level4_diffs[0], level4_evens[0])        # W0
                         w_fold(tm[j], nv, level4_diffs[1], level4_evens[1])        # W1
-                        u_combine(t, condB[j], tm[j], t)           # U0
+                        u_combine(t, b2c, tm[j], t)           # U0
                         w_fold(tmM[j], nv, level4_diffs[2], level4_evens[2])       # W2
                         w_fold(tm[j], nv, level4_diffs[3], level4_evens[3])        # W3
-                        u_combine(tmM[j], condB[j], tm[j], tmM[j])         # U1
+                        u_combine(tmM[j], b2c, tm[j], tmM[j])         # U1
                         w_fold(tm[j], nv, level4_diffs[4], level4_evens[4])        # W4
                         w_fold(condA[j], nv, level4_diffs[5], level4_evens[5])     # W5
-                        u_combine(tm[j], condB[j], condA[j], tm[j])        # U2
+                        u_combine(tm[j], b2c, condA[j], tm[j])        # U2
                         w_fold(condA[j], nv, level4_diffs[6], level4_evens[6])     # W6
                         w_fold(nv, nv, level4_diffs[7], level4_evens[7])           # W7 (b3 dead)
-                        u_combine(nv, condB[j], nv, condA[j])              # U3 (b2 dead)
-                        vec("&", condA[j], st, four_vec if should_fold_b3 else two_vec)  # b1
-                        vsel(t, condA[j], tmM[j], t)        # q0
-                        vsel(nv, condA[j], nv, tm[j])               # q1
-                        vec("&", condB[j], st, eight_vec if should_fold_b3 else four_vec)  # b0
-                        vsel(nv, condB[j], nv, t)               # winner
+                        u_combine(nv, b2c, nv, condA[j])              # U3 (b2 dead)
+                        if ring is not None:
+                            b1c: int = ring[1]
+                        else:
+                            vec("&", condA[j], st, four_vec if should_fold_b3 else two_vec)  # b1
+                            b1c = condA[j]
+                        vsel(t, b1c, tmM[j], t)        # q0
+                        vsel(nv, b1c, nv, tm[j])               # q1
+                        if ring is not None:
+                            b0c: int = ring[0]
+                        else:
+                            vec("&", condB[j], st, eight_vec if should_fold_b3 else four_vec)  # b0
+                            b0c = condB[j]
+                        vsel(nv, b0c, nv, t)               # winner
                 elif is_pair_tournament_served(r, g):
                     # Two-stage level-(maxT+1) select: with t = p>>1 the
                     # level-maxT position and b3 = p&1 the newest parity,
@@ -2506,7 +2640,15 @@ class KernelBuilder:
                     par = t
                     parity = lambda dst: vec("&", dst, vl, one_vec)
                 if is_served_without_gather(r + 1, g):
-                    if L == 0:
+                    # H-045 (parity_ring): the parity feeding a ringed
+                    # tournament round at level 1..3 is written straight
+                    # into its ring slot (P0/P1/P2); the L4 feeder keeps
+                    # riding nv (the ring only needs the three OLDER bits).
+                    ring_next = parity_ring_map.get(((r + 1) // period, g))
+                    next_lvl = level(r + 1)
+                    if ring_next is not None and 1 <= next_lvl <= 3:
+                        parity(ring_next[next_lvl - 1])
+                    elif L == 0:
                         parity(st)                         # p := b
                     elif parity_conds:
                         # Newest parity rides nv into the next tournament
@@ -2688,6 +2830,7 @@ class KernelBuilder:
             tail_from = n_steps - n_tail
             tail_mode = "rev" if emit_order.startswith("rev") else "stage"
             order = "group"
+        build_parity_ring_map()  # H-045: after alloc_state, before any round emits
         for step in range(n_steps):
             waves: list[tuple[int, Sequence[int]]] = []  # (round, group-range) active at this diagonal step
             for lag, group_range in block_specs:
