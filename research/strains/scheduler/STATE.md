@@ -602,3 +602,125 @@ ceil(43/2)=22 ramp cycles, zero idle load slots) is reaffirmed as tight
 in the sense that even successfully removing load-engine pressure doesn't
 help once the freed engine (flow) has second-order coupling to the fold
 races elsewhere in the schedule.
+
+## H-042 (2026-07-27, UNPARKED re-scoped): joint instruction-selection x
+## scheduling via offline-searched spelling plans — STRAIN FRONTIER 1032 -> 1031,
+## mechanism landed, per-site selection space measured-EXHAUSTED at 1031
+
+Charter (unpark): the flow leg of the frontier organization — three
+independent measurements (G-4/G-12, H-045 3rd confirmation, H-044 LP)
+say ~60 modeled cycles route through a bubble-free flow engine and that
+no spelling/flag change reaches it, because select readiness is
+anti-correlated with flow bubbles. Build a scheduler-side mechanism that
+co-decides WHAT spelling to emit and WHERE/WHEN.
+
+### Mechanism landed (dev.py, flag `flow_spelling_plan`, default () = bit-identical)
+
+`ListScheduler` numbers every multi-encoding `emit_any` race site in
+emission order on two counters: flow-containing races (dual_fold /
+race_sel / race_leaf / race_copy — unconditional calls, emission-stable
+subsequence) keyed >= 0, schedule-dependent non-flow races (_sched_vec
+alu/valu splits, race_idx_madd) keyed -(i+1). The kwarg maps site key ->
+encoding index, placed UNCONDITIONALLY (race skipped). KEY SOUNDNESS
+PROPERTY: every encoding of a site is a semantically equivalent spelling
+of the same computation, so ANY plan is correct by construction — only
+cycles move; the H-048 emit_any-liveness unsoundness does NOT apply
+(we never borrow storage, we only pick spellings). Verified programmatic
+bit-identity vs HEAD flags-off (mainline + 1032 frontier); full gate 9/9
+green flags-off. `sched_snap`/`sched_install` carry both counters (spec_fold
+rollback safety). Offline driver: scratchpad h042_search.py (greedy sweep
+over per-site flips + sideways plateau walk, objective = bundle count,
+~0.1 s/build => thousands of exact evaluations per run).
+
+### Selection-slack instrumentation (1032 frontier build)
+
+- 2,087 emit_any sites, 1,063 with >= 2 legal spellings; 388 carry a
+  pure-flow spelling (the joint-search currency). Greedy already puts
+  233 on flow; 155 lose to valu/alu.
+- Flow busy 783/1032 = 75.9% => 249 bubble slots. Of the 155 flow-lost
+  sites, ZERO have a final free flow slot within retire-delta <= 3 of
+  their chosen cycle — the G-4/G-12 anti-correlation confirmed at site
+  granularity (bubbles live in windows where no select is losing).
+- Consumer-slack oracle (place the vselect anywhere in
+  [hazard-ready, first-consumer-read - 1] into a FINAL-schedule bubble):
+  only 46/155 are feasibly movable at all; 80/155 have slack <= 0
+  (consumer reads next cycle).
+
+### Measured results (all correct:true where run through the grader)
+
+| config | greedy | + searched plan | plan | flips |
+|---|---|---|---|---|
+| BASE mainline (dev) | 1038 | 1037 | ((22,0),) | 1 fwd: (2,7) ramp fold valu->flow |
+| parity_ring (8,30), no ring plan | 1037 | 1032 | ((1,1),(148,2),(354,1)) | 2 rev + 1 alu-arm |
+| parity_ring (7,30), no ring plan (= F-1 mainline form) | 1034 | **1032** | ((185,0),(361,1)) | 1 fwd (slack 0) + 1 rev — matches the ring-plan frontier WITHOUT rings |
+| frontier: ring plan 4 rings (8,30) | 1032 | **1031** | ((354,1),) | 1 rev: (13,29) drain fold flow->valu |
+| ring plan @ (7,30) | 1034 | 1032 | ((2,1),(361,1)) | 2 rev |
+| ring plan @ (9,30) | 1036 | 1032 | ((0,1),(5,1),(347,1)) | 3 rev |
+| ring plan @ (8,29) / (8,31) | 1035 / 1035 | 1033 / 1035 (no flip found) | ((340,1),(394,1)) / () | 2 rev / 0 |
+
+**New strain frontier: 1031** = 1032 config + `flow_spelling_plan=((354,1),)`.
+Verified: seeds 1,2,3,7,42,99 all 1031 correct; debug_compares=True 1031
+correct; full gate flags-off 9/9 green (mainline 1034 untouched).
+
+### The mechanism that actually pays (surprise, inverted)
+
+The modeled direction (push MORE selects onto flow into bubbles) NEVER
+pays here: batch-forcing all 115 slack-feasible valu->flow flips = 1077
+(+45); every single forward flip on the ring-relieved configs is
+neutral-to-negative. What pays is the REVERSE: forcing a flow-WON race
+OFF flow (to its valu/alu spelling) in the ramp/drain windows. Greedy
+emit_any is myopic — it minimizes own retire time and takes a flow slot
+that a later, tighter op needed; the searched flip returns the slot and
+re-routes several downstream races (the 1031 build differs from 1032 by
+-5 valu, -8 alu, +3 flow slots: one forced flip cascades through
+subsequent race decisions). All paying flips sit exactly in H-041's soft
+windows: sites 0-22 (rounds 1-2, ramp) and 347-361 (rounds 13,
+drain-adjacent). The steady window contributed nothing, as H-041's
+99.3-99.8% packing predicted. The one paying forward flip (mainline site
+22) exists only because BASE's ramp flow is less congested — after
+parity_ring frees L2 flow copies, forward flips die entirely.
+
+### Exhaustion evidence (this leg is now CLOSED at the current emission order)
+
+- Greedy sweep to fixpoint + ~2,000-evaluation sideways plateau walk over
+  the 388-site flow-race space: no descent below 1031.
+- Aux-extended search (all 1,063 race sites incl. alu/valu splits): full
+  sweep found zero improving single flips; walk stayed 1031.
+- Fresh searches at neighboring l4_gmin points (7,30)/(9,30)/(8,29)/
+  (8,31) with re-derived plans: none beats 1031 — the P-3 gmin slide did
+  NOT fire on this relief (the freed slots are in ramp/drain, not in the
+  steady window where L4 serving lives).
+
+### Ring conversion under re-searched plans (F-8)
+
+Each of the 12 remaining audited-safe rings added to the 4-ring frontier
+plan, flow plan re-searched per config (site indices shift):
+[RING_TABLE_PLACEHOLDER]
+
+### Verdict vs the ~60-cycle modeled flow prize
+
+Realized: 1 cycle on the frontier (5 on the unringed config). The
+per-site selection dimension of the joint search is now measured-
+exhausted; the residual flow prize is NOT reachable by choosing
+spellings at fixed emission order, because the anti-correlation is
+structural: the round cadence that creates flow bubbles (gather-heavy
+phases) is the same cadence that starves select readiness. Moving the
+~150-select mass onto flow requires changing WHEN selects become ready,
+i.e. reordering EMISSION (beam over the interleave/round_robin order,
+H-033-style collect-then-schedule) or the H-047 restructure — not
+per-site selection. That is the honest next scope for the remaining
+~12-cycle ramp+drain cap (H-041) and the LP's flow leg.
+
+### Follow-ups (driver)
+
+- F-9 [strain frontier]: 1032 config + flow_spelling_plan=((354,1),) =
+  1031 (-1). Port note: plans are config-specific measurement artifacts
+  (same class as parity_ring_plan); re-derive via scratchpad
+  h042_search.py (~3 min) after ANY emission-order/flag change. The
+  mainline flag-free form should re-search on its exact config.
+- F-10: plan re-search is cheap (0.1 s/build); standing sweeps can carry
+  a short plan search per point (budget ~60 s) the way they carry gmin.
+- F-11: the beam/emission-order leg (true H-042/N-3 remainder) is
+  unstarted: move set = round_robin interleave order + generator
+  boundaries in the ramp/drain windows only; per-site selection should
+  ride ON TOP of it (compose the plan search after each reorder).
