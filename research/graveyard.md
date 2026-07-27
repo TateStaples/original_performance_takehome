@@ -339,3 +339,24 @@ Seeded 2026-07-23 from the 2148->1140 campaign's measured rejections.
   scratch words free up, or an op-mix change makes valu no longer the
   binder. The 39 L4 group-rounds reactivate FIRST (15 ops/8 loads, zero
   new scratch — the standing l4_gmin sweep slides there on its own).
+
+### G-24 Compare/select hash vocabulary — THE FINAL HASH-OP-COUNT ENTRY (H-038)
+- claim: programs using compares (<, ==) and selects — the one vocabulary
+  gap G-10/G-20 left open — might shorten the 11-op hash.
+- evidence: closed negative, ~1.586T explicit candidates/nodes
+  (fusion_search --cmpsel + tools/hash_cmpsel_probe.py; full per-target
+  table in op-reduction STATE.md). 1-op probe 337,548 (0 hits; no trace
+  node is 0/1-valued); forward depth-1-shorter 13.84B; depth-4 closures
+  1.487T (head3/xr4/u2e/par_c_deep); MITM cmpsel at all 10 segment
+  boundaries + full_hash 11->10 with NO waypoint assumption; 3 planted
+  positive controls rediscovered. Compares' only appearance: sign-test
+  respellings of already-known parity forms (worthless — parity is 0 ops).
+- stated uncovered (CPU walls, same class as prior closures): interior
+  compare thresholds pool-only; MITM engine-A k=4 cmpsel; kf=3 cmpsel.
+- moral: FOUR independent tool classes (fusion/MITM G-10, CEGIS H-025,
+  re-derivation G-20, cmpsel here) bottom out identically, and the
+  frontier provably runs our exact form (H-043 SVG decode). Hash op-count
+  research is DONE. Do not reopen without a leaderboard disclosure of a
+  <11-op form or a depth-8+ search breakthrough.
+- housekeeping: H-025 iter-12 uncommitted leftovers preserved at
+  scratchpad h025_iter12_leftover_uncommitted.diff.
