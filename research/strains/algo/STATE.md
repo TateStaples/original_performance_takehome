@@ -179,3 +179,136 @@ Readings:
 4. If any op-removal lever ever reopens: value it at ~1/97 cyc per lane-op
    (not 1/60), and remember loads are back on the exchange at ~0.15
    cyc/load once the mix is balanced.
+
+## H-045 (2026-07-27): flow-saturation build — PARTIAL LANDING, mainline-candidate 1038 -> 1034 (-4) via parity-vector cond retention in dead-register rings + l4_gmin slide
+
+Charter: build the full H-044 prescription (cond retention, flow ~100%,
+serve 31 L4, prime L4/L5/L6, load ~100%; modeled endpoint 931.6). What
+landed is the retention enabler + the serving-mix slide it unlocks; the
+flow-saturation and priming legs were measured and did NOT convert at the
+new mix. All flag-gated in dev.py, default OFF; default stream verified
+BIT-IDENTICAL to HEAD (programmatic instr compare, dispatch + BASE_KWARGS);
+full gate 9/9 green at 1038 with flags off.
+
+### Landed frontier
+
+run_variant, correct: true on seeds 1,2,3,7,42,99 + 2 unseeded runs +
+debug_compares=True:
+
+    parity_ring=True l4_gmin=(7,30)            -> **1034**  (BASE otherwise)
+    + c5_primed_gather_levels=(5,6) + region_hazards + dead_reg_staging
+      at l4_gmin=(8,30)                        -> 1034 (tie, seeds 2/7 too)
+
+### Mechanism 1 — parity_ring (THE new primitive)
+
+The tournament conds at depth d ARE the last d parity vectors (H-044 fact).
+`parity_ring` retains them: each round's raw parity is written into a
+per-(epoch, group) 3-slot ring (P0/P1/P2; the newest L4 bit keeps riding
+nv), the position accumulator is SEEDED at L2 (madd st = 2*P0 + P1 —
+replaces the lag fold, so st is identical downstream: epoch-exit gaddrs,
+b3l packed folds all unchanged), and every cond re-extraction disappears:
+per ringed group-round, the L2 flow copy (1 flow), both L3 mask extractions
+(2), all 3 served-L4 mask extractions, and (b3l rewiring, step 2) the 5
+b3l mask ops of a served r15 group. ZERO ops added anywhere.
+
+SCRATCH-LIBERATION LEDGER (the gating problem; all zero-net borrows —
+permanent allocation stays 1533/1536):
+- liveness audit (scratchpad tool over sched_trace, 1038 build): 3 words
+  never touched (1533-35); lv[0..23] dead after cycle ~36; root_pr_vec
+  free [7,382]; root_nv_vec dead after ~316; block 0/1's st/nv dead from
+  ~[655-790] to the b3l pool claims (~1009); block 2/3's st/nv/val unborn
+  until ~[260-390].
+- ring funding (emission-order-safe: every donor's real accesses sit
+  strictly on the other side of the ring's accesses in emission order, so
+  the scheduler's per-address hazards can only serialize, never corrupt):
+    (0,0) groups 0-7   <- block 2 st/nv (16 vec, born slot 6)  : 5 rings
+    (0,1) groups 8-15  <- block 3 st/nv (born slot 9)          : 5 rings
+    (1,2) groups 16-23 <- block 0 st/nv (dead after slot 14/15): 5 rings
+    (1,3) groups 24-31 <- block 1 st/nv (dead after slot 17/18): 5 rings
+  = 480 borrowed words, 20/32 groups per epoch ringed, served-at-L4
+  groups funded first (6 ops/ring vs 3). val vectors are NOT usable
+  donors on the e1 side (final vstores read them at the drain) and on the
+  e0 side only under lazy_val_loads (measured +13 alone — dead end).
+- extras (landed, default OFF via parity_ring_extras): lv[0..23] as one
+  more ring per epoch + root_nv_vec (e1): e1 extras NEUTRAL (1034), e0
+  extras +3 (lv false-deps against the setup table stream delay an early
+  tournament). Not worth it.
+- b3l interop: the r15 dead-register pool now EXCLUDES served groups'
+  ring bases (still read at r15 by the rewired masks); with ring conds a
+  served group pops 5 private temps instead of 9 (E/D share the hi temp).
+
+### Measured composed results (seed 1; all correct)
+
+| config | cycles |
+|---|---|
+| BASE (mainline) | 1038 |
+| parity_ring alone | 1035 |
+| slices (0,0)/(0,1)/(1,2)/(1,3) alone | 1039 / 1038 / 1038 / 1037 |
+| (0,0)+(0,1) / (1,2)+(1,3) | 1036 / 1037 (superadditive to 1035) |
+| parity_ring + gmin (7,30) | **1034** ((8,30) 1037, (9,30) 1035, (6,30) 1038, (7,29)/(7,31) 1037) |
+| + idx_boundary_select (any gmin tried) | 1037-1040 — REJECT in composition |
+| + mem_prime (5,6)+region+dead_reg @ (8,30) | 1034 tie ((7,30) 1037; (5,6,7) 1038) |
+| + parity_ring_extras (0,) / (1,) | 1037 / 1034 |
+| + pool (16,3) / (17,4) | 1047 / OOM |
+| + lazy_val_loads | 1055 (alone 1051) |
+| tie_break () / +idx_alu | 1035 / 1040 |
+
+### Occupancy vs the LP targets (occupancy_hist, 1034 build vs 1038)
+
+| engine | 1038 slots (floor) | 1034 slots (floor) | LP target |
+|---|---|---|---|
+| valu | 6119 (1020) | 6093 (1015.5) | 5589 (932) |
+| alu  | 11881 (990) | 11801 (983)   | 11179 |
+| load | 1900 (950)  | 1884 (942)    | 1863 @ ~100% |
+| flow | 797 (76.8%) | 794 (76.8%)   | 932 @ ~100% |
+
+Friction above the valu floor: 18 -> 18.5 (unchanged). Deletion realized:
+~106 alu+valu slots (~570 lanes) of the ~2,000-lane modeled overhead;
+L4 served 25 -> 27 group-rounds (LP wants 31); flow util DID NOT MOVE.
+
+### Distance-to-model diagnosis (1038 -> 932 gap: realized 4)
+
+1. Cond retention is REAL but 2/3-blocked by scratch: full coverage needs
+   ~512-1,024 ring words; the mid-schedule slices (blocks 2/3 in epoch 0,
+   blocks 0/1 in epoch 1) have NO dead registers — every st/nv/val is live
+   mid-window, and the only real reserves (lv 24w + root vecs 16w + 3w)
+   fund ~1 ring per epoch, measured neutral-to-negative. The LP's +23.6cyc
+   pessimism probe (all conds re-materialized) bounds what full retention
+   is worth beyond this partial: ~2/3 of ~24 = ~16 ideal cycles still on
+   the table, needing a >=384-word liberation nothing visible provides.
+2. Flow saturation did not engage: deleting the 20 L2 flow copies freed
+   flow slots, but no new selects moved onto flow (76.8% before and
+   after); idx_boundary_select (the designated first installment) is +3
+   composed — its boundary vselects land in locally-full flow windows
+   (G-4/G-12 mechanism, third confirmation). The LP's ~930-selects-on-
+   flow endpoint needs bubble-free flow, which no local spelling change
+   reaches from here — this is H-042/N-3 (joint selection x scheduling)
+   territory, not spelling territory.
+3. Serving-mix slide: P-3 pattern held AGAIN ((9,30) -> (7,30), +2 L4
+   group-rounds funded by the retention relief, worth -1 of the -4). The
+   LP's 31-served endpoint stays gated on ~400 more valu slots of relief.
+4. Priming: L6 crossed from +1..+3 to NEUTRAL at the new mix — direction
+   as the LP predicted, magnitude still zero; L7 still +4. The (5,6)
+   tie is a free option if load ever binds (removes 136 alu lanes for +8
+   loads).
+5. Honest read of H-044 after this build: the model's coupled-prize story
+   is CONFIRMED in direction (gmin slid, L6 crossed to neutral, pieces
+   compose superadditively) but the conversion rate is ~150 lanes/cycle,
+   not the ideal 97, and the two big legs (full retention, flow ~100%)
+   are blocked by scratch supply and flow-window structure respectively —
+   neither is a spelling/knob problem.
+
+### Follow-ups (driver)
+
+- F-1 [mainline flip candidate]: parity_ring=True + l4_gmin=(7,30) = 1034
+  (-4). Needs porting into perf_takehome.py's flag-free form + full gate.
+- F-2: any future accept that frees >=24 contiguous words funds one more
+  e1 ring (+~3-6 ops); >=384 words reopens full retention (~16 ideal cyc).
+- F-3: standing sweeps should carry parity_ring as a dimension; the gmin
+  optimum under it is (7,30) and will slide again after any accept.
+- F-4: the b3l ring-mask rewiring + donor-pool filter is load-bearing for
+  ANY future e1-ring extension serving r15 groups — do not fund served
+  groups' rings from registers the b3l pool claims without the filter.
+- F-5: flow-saturation leg: re-scope as a scheduler-side hypothesis
+  (H-042 beam / N-3), not further spelling flags; three independent
+  negatives now show local flow-window flooding eats every spelling win.
