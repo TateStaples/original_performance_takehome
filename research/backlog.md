@@ -1219,3 +1219,16 @@ correct, measured worse at every configuration tried]
   from flow-bubble windows in the steady state.
 - predicted_gain: unknown; bounded above by ~55 modeled; ramp+drain ~12
   measured-recoverable. cost: XL. depends: H-042 tooling (landed).
+
+### H-050 [strain: scheduler] [status: folded into H-049's move set] (external 1018 analysis)
+- statement: dynamic schedule-time valu->alu binding deferral (external
+  repo's SCHED_FLEX_ALU: op carries both spellings, scheduler binds
+  per-cycle on slack). The ONLY portable mechanism in their 1026->1020->
+  1018 diffs — the rest is catch-up to our H-015/H-026 op-removals plus
+  their-scheduler knob tuning (their architecture loses here per H-033).
+  Static rebalancing is triple-closed (G-14/G-15, H-007 +60); only the
+  dynamic form is untested. Their 1018 < our 1021 valu floor puts mild
+  reopen-pressure on G-15 in its dynamic form only.
+- predicted_gain: -2..-6 (valu binder 1021 -> toward 1014). Routed to the
+  running H-049 agent (beam move set + optional post-pass) 2026-07-27.
+- analysis doc: scratchpad external_1018_analysis.md (session 5cfbd141).
