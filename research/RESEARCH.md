@@ -26,16 +26,21 @@
   cycles vs 1,038 actual. Gathers wait mean 25.5 cyc for SLOTS, not
   addresses (13/1,851 placed at dep-ready).
 - Scratch: 1533/1536 words used (3 free).
-- **Leaderboard target analysis (2026-07-27): 892 confirmed achievable by
-  someone (vliw-challenge.fly.dev).** 892 is 123 cyc BELOW our op-count
-  floor -> requires removing ~6,389 lane-ops (10.5% of compute) even with
-  flow saturated, plus loads 1,900 -> <=1,784. If hash is held fixed that
-  is 45% of all non-hash arithmetic. Idx alone is 7,448 lane-ops — folding
-  the position recurrence into existing hash madds nearly closes the gap by
-  itself. Alternatively a hash form ~1.56 ops/hash shorter closes it
-  exactly (suspiciously clean — H-016 closed FUSIONS of the current form,
-  never alternative decompositions). Caveat: the site has two boards
-  (with/without final-idx writeback); 892's board is unverified.
+- **Leaderboard RESOLVED (H-040, 2026-07-27, see strains/cross/STATE.md):
+  892 sits on the relaxed "Without Indices" board (paired entries show the
+  no-idx relief is only 9-23 cyc); under OUR exact rules the public
+  frontier is 940 (@josusanmartin), then 958/981/994/1002. Same problem,
+  same VM, same params — no rule difference to hunt. Our 1038 appears on
+  both boards.**
+- **The 1,015 "floor" is an ARTIFACT: it holds the gather count fixed.**
+  Corsix (971/994, corsix.org/content/anthropics-compiler-challenge):
+  >280 gathers can be replaced by selection trees over preloaded node
+  values, then valu:load:flow balanced to 7.5:2:1 in every individual
+  cycle — instruction selection and scheduling as ONE joint search.
+  Austin Wallace (austinwallace.ca/kernel): beam search over bundle
+  packing beats greedy. G-20/G-21 (hash + idx closures) remain correct;
+  the op MIX, not the op count of the current mix, is the frontier lever.
+  Realistic target under our rules: ~940.
 
 ## Strain roster
 
@@ -78,3 +83,4 @@ Global: 6 dry iterations -> one cross-pollination iteration. Status report to us
 - iter 12 (in flight, loop restart off 892-leaderboard analysis) | spawned H-035 (idx-fold-into-madd), H-036 (hash re-decomposition), H-037 (load_offset); sweep phase-5 restarted at base 1038. H-037 CLOSED NEGATIVE -> G-19: load_offset is a compile-time alias of load (operands are immediates; +offset folds at assembly) — premise false, delta exactly 0; census should not list it as an opportunity. Path to -116 loads: mem_prime generalization (H-026) or collision-sharing (repays itself in vselects) | best 1038
 - iter 12 | H-036 CLOSED NEGATIVE -> G-20: re-derivation probe (340,023 candidates, 2-round trace DAG) found zero long-range coincidences; structural proof sharing can never win (every DAG node already costs 1 op); xor/affine conjugation domains analytically closed; parity-from-prefix moot (already 0 ops). Hash op-count now closed by 3 independent tool classes (MITM, CEGIS, re-derivation) — STOP reopening; 892 route must be H-035 idx folding + load/schedule shape. H-035 still running | best 1038
 - iter 12 CLOSED | H-035 REJECTED -> G-21 (fold algebraically impossible: parity-isolating multiplier is only 2^31; steady floor extract+madd+combine already reached; best case 4x short of 892 gap; idx_boundary_select landed flag-gated OFF, cycle-neutral, frees 283 alu/valu slots). Tally: 3 investigations, 3 high-value negatives (G-19/G-20/G-21), mainline 1038 unchanged. STRATEGIC RESULT: G-20+G-21 close BOTH internal 892 levers — the lane-op arithmetic cannot reach 892 in the current program organization. Iter 13 queued: H-038 (compare/select hash vocabulary, the one sanctioned reopening), H-039 (mem_prime generalization, only path to -116 loads), H-040 (characterize 892 externally). Sweep phase-5: 119+ configs, 0 winners | best 1038
+- iter 13 | H-040 CLOSED ANSWERED: 892 = no-indices board + different organization; same-rules frontier 940; the 1,015 floor is a fixed-gather-count artifact. Loop redirected: H-041 select-tree gather conversion + per-cycle engine-mix balance (corsix: >280 gathers convertible, valu:load:flow 7.5:2:1), H-042 beam-search bundle packing (wallace: beats greedy). H-038/H-039 still running | best 1038

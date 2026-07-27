@@ -1016,3 +1016,32 @@ correct, measured worse at every configuration tried]
   grading), any public writeups/repos/commits by entrants. Pure
   research/web task, no kernel edits.
 - predicted_gain: strategic (redirects or retires the 892 target). cost: S.
+
+### H-041 [strain: flow-balance] [status: open]
+- statement: convert more gather levels to selection trees over preloaded
+  node values, with the engine mix rebalanced JOINTLY (corsix, 971 with-idx:
+  ">280 gathers can be gainfully replaced", then valu:load:flow held at
+  7.5:2:1 in every individual cycle; instruction selection and scheduling
+  as one search problem). We already do this for shallow levels (tournament)
+  and primed level 5 (H-026); the frontier result says push it much further
+  and rebalance globally rather than per-feature. First step: measure
+  per-cycle valu/load/flow occupancy histogram of the 1038 build and count
+  gathers by level; compare against the >280-convertible bound.
+- predicted_gain: the with-idx frontier is 940 (-98 from us); this is its
+  named primary lever. cost: L. Touches: tournament/gather emission + mix.
+- source: H-040 (strains/cross/STATE.md), corsix writeup.
+
+### H-042 [strain: scheduler] [status: open]
+- statement: replace greedy bundle packing with a small beam/anneal search
+  over candidate bundles (wallace, austinwallace.ca/kernel: beam width 2,
+  3 candidates over the first 25 cycles already paid at 1,137). Our
+  scheduler strain was retired on "the 26-cyc gap is latency/throughput-
+  bound, not order-fixable" — that verdict predates the select-tree mix
+  (H-041); re-scoped as: beam over PACKING CHOICES (which ready op goes to
+  which engine-slot, including select-vs-gather instruction choice), not
+  merely order. Prereq: H-041's mix makes the choice space rich enough to
+  matter; run after/with it.
+- predicted_gain: unknown, evidence it beats greedy at the frontier.
+  cost: M-L. Touches: scheduler only.
+- source: H-040, wallace writeup. reopen-context: supersedes G-15's
+  "rebalancing exhausted" ONLY in the joint selection+scheduling sense.
