@@ -171,3 +171,97 @@ at ~1 cyc/group (P-3 pattern held twice more this iteration).
   harvested (b3l_diffs); rewrite the entry to point at H-027's
   mechanism and the bl_last L2/L3 negative (flow flood confirmed a
   second time, drain-side).
+
+## H-040 — Web research: what explains the 892 leaderboard score (2026-07-27)
+
+Pure research hypothesis; no kernel changes. Question: our floors say 1,015 lane-op floor for the
+current program organization, both known levers to 892 are closed — so what is 892?
+
+### Verified facts (all URLs fetched 2026-07-27)
+
+**1. The leaderboard and its two boards.**
+- Site: https://vliw-challenge.fly.dev (community-run, "Based on Anthropic's Original Performance
+  Take-Home", Mastodon login). Scoreboard API is public, no auth:
+  - Without Indices: `https://vliw-challenge.fly.dev/api/scoreboard`
+  - With Indices: `https://vliw-challenge.fly.dev/api/scoreboard?indices=1`
+- Grading pipeline (from `https://vliw-challenge.fly.dev/static/pyodide-worker.js`): the browser runs
+  the submitted `perf_takehome.py` in Pyodide, calls `KernelBuilder(); kb.build_kernel(10, 2047, 256, 16)`,
+  and POSTs `kb.instrs` (the instruction stream JSON) to the server for validation. **Identical
+  problem parameters to ours** (forest_height=10, n_nodes=2047, batch=256, rounds=16). The site's
+  `problem.py` (`/static/problem.py`) is the upstream VM (same SLOT_LIMITS, valu=6, etc.) — only
+  cosmetic/annotation diffs vs our copy. So it is NOT a different problem variant.
+- The two boards differ only in the server-side output check: "Without Indices" does not require the
+  final `inp.indices` writeback; "With Indices" is the full reference-kernel contract (our rules).
+
+**2. Where 892 sits.**
+- 892 = rank 1 on the **Without Indices** board: @wouterkool (https://mastodon.social/@wouterkool),
+  5 submissions. Next: 900 (@saifalharthi, 66 subs), 908, 922, 923 (@josusanmartin, 136 subs), 924,
+  926, 927, 941 (@jamespayor), 955, ... 971 (@corsix), 993 (@dougall), 1000, ...
+- **With Indices** board (our exact grading): top = **940** (@josusanmartin), then 958 (@jamespayor),
+  981 (@glentaggart), 994 (@corsix), 995, 996, 1002 (@dougall), 1018, 1033, 1038 (@b2_4814d920 — our
+  own mainline score appears here), ...
+- So: 892 is on the relaxed board, but that is NOT the main explanation of the gap — under our exact
+  rules the frontier is 940, i.e. ~98 cycles below our 1038 and 75 below our claimed 1,015 floor.
+- Measured cost of the indices requirement at the frontier: Austin Wallace reports 1,137 (no idx
+  storage) vs 1,152 (with) = **15 cycles** for his solution (https://www.austinwallace.ca/kernel);
+  board-top deltas: wouterkool 892 (no-idx board only), josusanmartin 923 vs 940 = 17, jamespayor
+  941 vs 958 = 17, corsix 971 vs 994 = 23, dougall 993 vs 1002 = 9. Consistent with our G-21 cap:
+  idx-writeback relief is worth ~10-25 cycles, not 146.
+- wouterkool has no public Mastodon posts (0 statuses via API) and no public takehome repo on GitHub;
+  he is a combinatorial-optimization researcher (beam search, VRP, Gumbel-top-k sampling —
+  github.com/wouterkool) — search-based scheduling is a plausible but unverified inference.
+
+**3. Disclosed frontier techniques.**
+- **corsix (971/994), blog post 2026-02-08** https://www.corsix.org/content/anthropics-compiler-challenge:
+  - Frames the kernel as 512 copies (16 rounds x 32 vector lanes) of a small computation graph to be
+    placed on a grid of per-cycle cells: 7.5 "valu" (6 valu + 12 alu/8), 2 load, 2 store, 1 flow.
+  - Naive gathers alone need 4096 load cells => >=2048 cycles; sub-1000 requires (a) shrinking the
+    graph (op-count reduction) and (b) **replacing "+base"+gather with selection trees**: "preload
+    the values of every possible idx, and use the output from all earlier &1 boxes to select"; cost
+    grows with tree level (level k: 2^(k-1)-ish selects, each 1 flow OR 1-2 valu); "**more than 280
+    gathers can be gainfully replaced with selection trees**".
+  - Key claim: the real problem is **balancing the instruction mix to 7.5:2:1 valu:load:flow in every
+    individual cycle** — "instruction selection and instruction scheduling are intertwined"; winner =
+    whoever searches that joint space best.
+- **Austin Wallace (1,137/1,152)** https://www.austinwallace.ca/kernel: 16-technique writeup incl.
+  depth-specific node selection (preload/vselect vs gather per level), pointer-form indices,
+  stage-major hash interleaving, ALU offload of constant work, wavefront scheduling across tiles,
+  full list scheduling over dependency graphs, and **beam search over the schedule itself**
+  (beam width 2, 3 candidate bundles, first 25 cycles). Was "tied 11th in the world" on 2026-01-24.
+- Other public writeups are all >=1,105 cycles (epicvogel 1,105 via Claude Code orchestration
+  https://x.com/EpicVogel/status/2029322218505924653; obviy.us 1,524; trirpi.github.io deep-dive;
+  fiigii/ai-comp compiler + HN threads https://news.ycombinator.com/item?id=48911420,
+  https://news.ycombinator.com/item?id=46700594). No public writeup below 1,100 other than the
+  board data itself; nobody has published the 892 recipe.
+- Second leaderboard exists (X-login, server-side sandbox, 30s timeout): https://www.kerneloptimization.fun/
+  — same repo, single board, "code must pass validation tests".
+
+### Interpretation (inference, clearly flagged)
+
+- 892 = (a) a **~920-cycle-class organization under full rules** plus (b) ~20-30 cycles of relief
+  from the no-idx-writeback board. Our two closed hypotheses were closed correctly (hash op-count
+  magic and idx-recurrence folding are not the lever; the idx-writeback lever really is small).
+- The 1,015 "floor" is an artifact of OUR op mix. The frontier's mix is different in kind: they
+  convert hundreds of gathers (load-engine ops) into flow/valu select trees per tree level, then
+  re-balance so valu, load, AND flow are all near-saturated every cycle. Our floor computed over
+  the current organization cannot see this because it holds the gather count fixed.
+- The with-indices frontier (940) proves >=98 cycles of headroom exist for us without any rules
+  change. The levers, in order of evidence strength:
+  1. **Gather -> selection-tree conversion swept per level with global mix re-balancing** (corsix:
+     >280 gathers convertible; check how many we convert today and whether our flow engine is
+     saturated).
+  2. **Joint instruction-selection + scheduling search** (beam/anneal over bundle choices, not
+     greedy list scheduling with fixed selection) — Wallace got 15-30 cycles from a tiny beam;
+     wouterkool's profile suggests much heavier search pays.
+  3. Depth-specific hybrid per level (preload levels 0-k free/cheap, select-tree mid levels,
+     gather only deep levels), with the crossover re-derived from engine-pressure, not op-count.
+
+### Recommended loop redirection
+
+- Retire "hash op-count" and "idx-folding" lines for good (confirmed correct closures).
+- New strain: measure per-cycle engine occupancy histogram of the 1038 build; count current
+  gathers-by-level vs corsix's ">280 convertible" bound; prototype select-tree conversion at one
+  additional level with mix re-balancing.
+- New strain: replace greedy scheduling with a small beam over candidate bundles (Wallace's
+  parameters as a starting point), measured end-to-end.
+- Target restated: 940 is achievable under our exact grading; 892 requires the no-idx board.
