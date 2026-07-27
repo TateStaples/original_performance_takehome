@@ -265,3 +265,114 @@ current program organization, both known levers to 892 are closed — so what is
 - New strain: replace greedy scheduling with a small beam over candidate bundles (Wallace's
   parameters as a starting point), measured end-to-end.
 - Target restated: 940 is achievable under our exact grading; 892 requires the no-idx board.
+# H-043 — Frontier writeup mechanism extraction (2026-07-27)
+
+Status: CLOSED-ANSWERED (research-only; written here because this agent may not
+commit to the repo — paste into research/strains/cross/STATE.md).
+Brief: deep-read all public frontier material (corsix 971/994, wallace 1137/1152,
+plus any dougall/jamespayor/josusanmartin trail), extract every op-level or
+algorithmic technique, map onto our ledger, rank the genuinely-new items with
+idealized-machine gains against census {alu 11,881 / valu 6,119 / load 1,900 /
+flow 797 slots at 1038; 60,841 alu+valu lane-ops; floor 1,015}.
+
+## Sources covered
+
+| source | score | status |
+|---|---|---|
+| corsix.org/content/anthropics-compiler-challenge | 971/994 | FULL — article text + all 3 SVG diagrams decoded (SVG text extraction; diagrams carry the op-level content WebFetch misses) |
+| austinwallace.ca/kernel | 1,137/1,152 | FULL writeup |
+| HN 46700594, user amirhirsch (comments 46709173/46719908/46735107, via Algolia API) | 1,137 claimed, argues floor ~1,014-1,024 | FULL comment text |
+| github.com/fiigii/ai-comp (+ x.com/fiigii thread, HN 48911420) | 1,137 | general-purpose compiler, no algo tricks; HN thread 429'd |
+| josusanmartin (940) | — | NO challenge writeup exists; his blog (josusanmartin.com) covers Highload.fun only; method there = massive vibecoded automated search |
+| jamespayor (958), dougall (1002) | — | NOTHING public found (2 searches each; dougallj github/blog have no takehome material) |
+| trirpi.github.io, medium (Indosambhav, Adityarawat), obviy.us, x.com/EpicVogel | 1,105-1,524 | below our 1038; skimmed via search snippets, nothing beyond the items below |
+
+## Key decode: corsix diagram 2 (his entire "strategy 1", verbatim from SVG)
+
+Reduced per-copy graph: `+base, gather, ^nv, [*4097 + 0x7ED55D16], [>>19, ^0xC761C23C, ^],
+[*33 + 0xE9F8CC1D], [*16896 + 0xACCF6200], [^], [*9 + 0xFD7046C5], [>>16, ^0xB55A4F09, ^], [&1], [*2+]`.
+Verified algebra: 0xE9F8CC1D = (C2+C3) mod 2^32, 0xACCF6200 = (C2<<9) mod 2^32,
+16896 = 33*512 — i.e. stage2∘3 double-madd fusion, EXACTLY our 11-op hash.
+**The 971-frontier hash is 11 ops. G-10/G-20/H-025 are CONFIRMED by the frontier,
+not contradicted.** His idx update is &1 + *2+ (the "+1" folded) = our extract+madd;
+his +base survives as a separate box (we fold boundary/base handling comparably;
+our Idx census 7,448/8/512 ≈ 1.8 vec-ops per copy-round is already ≤ his 3).
+
+Corsix valu-class boxes per steady copy: 15 (12 hash+nv, 2 idx, 1 +base) = 120
+lane-ops; ×512 = 61,440 → 1,024 floor on the 60-lane-op budget — ABOVE ours
+(60,841 → 1,015). **Corsix's raw graph is not smaller than ours. His 971 comes
+from strategy 2: exporting ops out of the 60-budget onto the flow engine and
+deleting gathers/+base via select trees, balanced per-cycle at 7.5:2:1
+("every single one of the ~1000 cycles wants to hit that ratio … instruction
+selection and instruction scheduling are intertwined").**
+
+## Technique-by-technique mapping
+
+| # | technique | source | our status |
+|---|---|---|---|
+| T1 | s0/s2/s4 madd fusions; s2∘3 double-madd+xor (11-op hash) | corsix d2; wallace; amirhirsch | DONE (G-10; constants verified identical) |
+| T2 | ^C5 pre-xor / merge stage-5 xor into next round's ^nv via primed node tables ("first several rounds when every tree value is in use") | amirhirsch 46735107 | DONE for scratch tables (H-015 c5_prexor) + L5 mem (H-026); generalization G-22-rejected — see FLAG-1 |
+| T3 | parity from stage-4 bits {0,16} without constant xor | amirhirsch 46709173 | DONE, stronger (parity = 0 ops, H-015 table reversal, G-20) |
+| T4 | constant/vec-op offload valu→alu (1 valu = 8 alu lanes); "12 scalar + 6 vector xors per cycle" | wallace; amirhirsch | DONE (H-019 emit_any racing; G-15 equilibrium) |
+| T5 | gather → binary select tree over preloaded nodes; each select = 1 flow OR 1-2 valu; >280 gathers gainfully replaced | corsix (cost table L0-L5); wallace depths 0-3 | PARTIAL — our L0-L4 tournaments serve ~281 group-rounds (= his ">280"); G-23: at our census the REMAINING conversions lose. Residual delta = the flow-spelling share, see N-1 |
+| T6 | depth-specific idx representation (1-bit root, 2-bit d1, pointer-form p=base+idx from d2; recurrence p'=2p+const) | wallace | EQUIVALENT — G-21 steady floor extract+madd+combine already reached; pointer form same op count, only relocates the +base (G-21's ov==0 analysis covers) |
+| T7 | compile-time wrap-check elimination (deterministic depth per round) | wallace; amirhirsch phases r1-5/6-9/10/11-14/15 | DONE (round-specialized kernel, boundary selects) |
+| T8 | value scratch residency all 16 rounds; early vstores; DCE; add_imm consts | wallace; amirhirsch | DONE (H-021/H-023/H-024) |
+| T9 | wavefront/skew groups staggered ~1 round | wallace | DONE (skew (4,3), G-6) |
+| T10 | beam-search bundle packing; scored ready-set repair | wallace | PARKED (H-042, fitting) |
+| T11 | per-cycle joint instruction-selection × scheduling at 7.5:2:1 | corsix | PARTIAL — we select spellings before scheduling (races are local); see N-3 |
+| T12 | final-round parity skip (r15 needs no next-idx compute beyond the stored index) | amirhirsch | DONE (drain analyses; with-indices still stores idx) |
+
+## Contradiction flags
+
+- **FLAG-1 (scope hole): G-22** rejected C5-priming generalization on PLACEMENT
+  grounds (waves displace critical path; front compute-saturated) while
+  measuring a real lane-op reduction (-144 at (5,6)). Under the new ALGO-FIRST
+  idealized regime (perfect allocation), that rejection's grounds are exactly
+  what is idealized away → G-22 is closed-for-mainline but OPEN-for-ideal-model.
+  Same class: G-18's vload sibling-pair variant (rejected on alu transpose +
+  scratch, both allocation-side).
+- **No frontier claim contradicts G-10/G-20/G-21/G-23.** Corsix's diagram
+  positively CONFIRMS the 11-op hash closure, and his stated order (shrink
+  graph, THEN convert gathers) confirms G-23's joint condition.
+- amirhirsch (46719908) independently argues sub-900 impossible and floor
+  ~1,014-1,024 from the same arithmetic as our combined-compute floor — the
+  40-75 cycles the real frontier found below that are flow-export + joint
+  scheduling, not op-count magic.
+
+## Genuinely-new items, ranked (idealized-machine gains)
+
+- **N-1 Flow-maximization of routing/idx selects (T5+T12 residual).** Every
+  vector select spelled on flow leaves the 60-lane-op budget entirely. We use
+  797/1038 flow slots; idx_boundary_select (G-21 byproduct, flag-ready OFF)
+  frees 283 alu/valu slots at zero cost today. Solving c=(60,841−8X)/60 with
+  X=c−797 gives **ideal 988** (−27 vs the 1,015 floor, −50 vs actual) if ~190
+  more vector-selects admit flow spellings. This is the single largest ideal
+  lever and is pure spelling, no new algorithm.
+- **N-2 Idealized C5-priming generalization (T2, via FLAG-1).** Lane-op ledger
+  −144 per level-pair measured at (5,6); extended across gather levels ≈
+  −400..−700 lane-ops → **ideal −7..−12** (priming loads fit the 176 free
+  setup/front load slots per G-22's byproduct window).
+- **N-3 Joint per-cycle selection×scheduling (T11).** Not an op remover; it is
+  what converts N-1's ideal into real cycles (spelling chosen per cycle against
+  the live mix, corsix's "intertwined" point) and what plausibly separates
+  940/958 (search-heavy, josusanmartin's known vibecoded-search MO, no writeup)
+  from corsix's 971. Recovers our 23-cycle floor gap only in conjunction with
+  N-1/N-4.
+- **N-4 L5+ select-trees under infinite scratch (T5 tail).** Activates exactly
+  per G-23 once N-1/N-2 land the budget near ~950-per-engine: at 940 the load
+  budget is 1,880 < our 1,900, so ≥1 more level must leave the load engine;
+  L5 costs 16 flow + 15×(flow|2valu) per group-round vs 8 loads + 1 valu —
+  affordable only with flow slots freed by shorter total schedule (joint
+  fixpoint; H-044's solve should iterate N-1→N-4 to convergence, est. landing
+  ~950-960; 940 additionally needs N-3-class search).
+
+Composed ideal estimate: N-1+N-2 ≈ 976-981; +N-4 fixpoint ≈ 950-960; the last
+~10-20 to 940 is N-3 search quality. No public evidence of any mechanism
+outside this set; nothing public from the 940/958/1002 holders at all.
+
+**Bet: the frontier's ~400-valu-slot reduction is not a valu-op deletion — it
+is valu→flow export (N-1) plus the select-tree/load rebalance it unlocks (N-4),
+found by joint selection-scheduling search (N-3). The op census that must
+actually shrink is loads (≥20) and flow-spellable selects, not hash/idx
+arithmetic — which the frontier provably (corsix d2) runs identically to ours.**

@@ -1083,3 +1083,43 @@ correct, measured worse at every configuration tried]
   research can target ONLY those).
 - predicted_gain: strategic compass for all subsequent algo work.
   cost: M. Touches: tools/ only (new file), no kernel changes.
+
+### H-043 [strain: algo] [status: closed ANSWERED -> see strains/cross/STATE.md]
+- result: frontier hash IS our 11-op form (corsix diagram-2 SVG decoded,
+  fused constants verified) — G-10/G-20/G-21/G-23 all CONFIRMED. The
+  ~400-valu-slot gap = valu->flow select EXPORT (exits the 60-lane-op
+  budget) + the select-tree/load rebalance it unlocks, found via joint
+  per-cycle selection x scheduling. amirhirsch (HN) independently derives
+  our ~1,014-1,024 floor. No public 940/958/1002 material exists.
+- SCOPE-HOLE FLAGS: G-22 was rejected on placement friction, which the
+  idealized regime removes — its -144 lane-ops/level-pair is real
+  (reopened as H-046). Same class: G-18's vload variant.
+
+### H-045 [strain: algo] [status: open] (H-043's N-1, top ranked)
+- statement: FLOW-MAXIMIZATION of selects. Every vector select spelled on
+  flow (vselect, 1/cyc) exits the 60-lane-op/cyc alu+valu budget; solving
+  c=(60,841-8X)/60 with X=c-797 gives ideal floor ~988 (-50 vs 1038).
+  idx_boundary_select (landed flag-gated, -283 alu/valu slots) is the
+  first installment. Binding open question (H-044 is counting): whether
+  ~190 additional selects admit legal flow spellings.
+- predicted_gain: ideal -50. cost: M. depends: H-044's count.
+
+### H-046 [strain: algo] [status: open] (reopens G-22 under algo-first)
+- statement: idealized C5-priming generalization — G-22's measured -144
+  lane-ops per level-pair is real op removal; it lost only on placement
+  friction (waves displacing the critical path), which perfect allocation
+  removes. Estimate -400..-700 lane-ops (ideal -7..-12). Also re-examine
+  G-18's vload variant under the same lens.
+- predicted_gain: ideal -7..-12. cost: S (mechanism already landed,
+  flag-gated). depends: only matters composed with H-045/N-4.
+
+### H-047 [strain: algo] [status: open] (H-043's N-4)
+- statement: L5+ select-trees under infinite scratch — activates only
+  after H-045/H-046 free compute (G-23 joint condition); fixpoint ~950-960
+  per H-043's estimate; at 940 the load budget (2x940=1,880 < 1,900)
+  FORCES at least one more level off the load engine, so the frontier
+  provably does this.
+- predicted_gain: path from ~988 to ~950. cost: L. depends: H-045, H-044.
+- note: H-042 (joint selection-during-scheduling beam = H-043's N-3) stays
+  PARKED as the fitting-side converter of these ideal gains; unpark when
+  the algo side lands.
