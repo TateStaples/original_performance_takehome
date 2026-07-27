@@ -937,7 +937,7 @@ correct, measured worse at every configuration tried]
 - log: 2026-07-25 opened (user-authorized large effort); same session,
   implemented, verified correct, measured and rejected.
 
-### H-035 [strain: op-reduction] [status: testing]
+### H-035 [strain: op-reduction] [status: rejected -> graveyard G-21 (fold algebraically impossible; best case 4x short of the 892 gap; idx_boundary_select landed flag-gated, cycle-neutral, -283 alu/valu slots)]
 - statement: fold the position/idx recurrence into the hash's existing
   multiply_add slots. Idx = 7,448 lane-ops (~14.5/group-round) at 1038; the
   recurrence p <- 2p + b and addr = base_d + p are affine, and the hash
@@ -984,3 +984,35 @@ correct, measured worse at every configuration tried]
   feeding arithmetic).
 - predicted_gain: small, -5..-15; cheap to close. cost: S. depends: none.
   Touches: gather-address emission only.
+
+### H-038 [strain: op-reduction] [status: testing]
+- statement: extend the hash program search vocabulary with compare/select
+  ops -- the ONE gap both G-10 (fusion) and G-20 (re-derivation) explicitly
+  name as unsearched. Op set: current base + alu `<`/`==` + flow select
+  (1/cyc) + valu lanewise compares; search short programs (depth <=5-6)
+  for stage subsequences and the two-round DAG, reusing H-016/H-025/H-036
+  tooling. Long shot but it is the only remaining sanctioned reopening of
+  hash op-count (G-20 reopen-if).
+- predicted_gain: -1 op/hash = -68 floor cyc if anything exists; P(hit)
+  low. cost: M (tooling exists). Touches: tools/ only unless a hit.
+
+### H-039 [strain: flow-balance] [status: testing]
+- statement: routing lane-op + load-count reduction via mem_prime
+  generalization -- the last non-hash lane-op mass (Routing 6,249 lane-ops,
+  1,848 loads). H-026's c5_primed_gather_levels=(5,) mechanism trades
+  setup stores (store engine 98% idle) for steady-state gather work.
+  Generalize to more levels / larger tables; quantify the scratch and
+  setup-load budget honestly (G-16 closed DEMAND-side dedup; this is the
+  SUPPLY-side table transform, distinct mechanism). Also the only visible
+  path toward the -116 loads the 892 gap needs.
+- predicted_gain: -10..-40 if a second level primes profitably. cost: M.
+  Touches: mem layout prologue + gather emission (disjoint from H-038).
+
+### H-040 [strain: cross] [status: testing]
+- statement: characterize the 892 leaderboard point externally. G-21+G-20
+  close both internal levers; the lane-op arithmetic says 892 is not
+  reachable in the current program organization. Determine: which board
+  (with/without indices), whether the variant differs (problem params,
+  grading), any public writeups/repos/commits by entrants. Pure
+  research/web task, no kernel edits.
+- predicted_gain: strategic (redirects or retires the 892 target). cost: S.

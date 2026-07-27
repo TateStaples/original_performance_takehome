@@ -244,3 +244,32 @@ Seeded 2026-07-23 from the 2148->1140 campaign's measured rejections.
   leaderboard disclosure), or a compare/select-based branchy form (the one
   stated vocabulary gap) is shown viable, or depth>7 global search becomes
   computationally feasible.
+
+### G-21 Idx-recurrence-into-hash-madd fold (H-035)
+- claim: pre-scale/bias the position recurrence p <- 2p+b so existing hash
+  multiply_adds carry it for free; Idx 7,448 -> ~1,000 lane-ops, the single
+  largest 892-gap lever.
+- evidence: REJECTED on algebraic impossibility + budget shortfall.
+  * one madd's three operand slots admit only st*2+vl (carries ALL of vl's
+    runtime bits, not just parity) or vl*k+f(st) where the only parity-
+    isolating multiplier mod 2^32 is k=2^31 -- parks parity at bit31,
+    unusable as a mem-address addend; relocating it needs an odd multiple
+    of parity from vl in one op, which doesn't exist. Steady-gather floor
+    is extract(1)+madd(1)+combine(1) per round; mainline is already there
+    (only the combine's engine is negotiable, = P-14).
+  * ov==0 escape (forest based at mem[1] frees the +c slot): copying costs
+    ~256 vloads+vstores vs ~176 spare load slots; per-level relocation
+    overlaps the live forest. Also closes P-10 with a sharper reason.
+  * budget: impossible-best-case removes ~1,700-2,000 lane-ops, 4x short
+    of the 6,400 the 892 gap needs. NO Idx-only path reaches 892.
+- landed anyway (flag-gated OFF, cycle-neutral): idx_boundary_select --
+  moves 62 boundary par-combines off alu/valu to flow (-283 alu/valu slots,
+  1038->1038, bit-exact). Re-measure composed with idx_select_before_madd
+  if a future accept turns the 1030s alu/valu-bound.
+- moral: with H-036/G-20 this closes BOTH named 892 levers. Within the
+  current program organization (11-op hash x 4,096 + per-round gather), the
+  lane-op arithmetic cannot reach 892. The gap explanation must be outside:
+  different board/variant, branchy program forms (G-20's vocabulary gap),
+  or a structurally different kernel organization.
+- reopen-if: a sub-11-op hash appears (G-20 reopen), or an addressing mode
+  lands that reads mem[a+b] without materializing a+b.
