@@ -620,6 +620,7 @@ class KernelBuilder:
         idx_boundary_select: bool = False,
         parity_ring: bool | tuple[tuple[int, int], ...] = False,
         parity_ring_extras: tuple[int, ...] = (),
+        parity_ring_plan: tuple[tuple[tuple[int, int], tuple[int, int, int]], ...] = (),
         store_order: str = "group",
         reverse_newest_parity_fold: bool | Iterable[int] = (),
         newest_parity_last_fold_race: bool = True,
@@ -1311,6 +1312,8 @@ class KernelBuilder:
             assert tournament_level_count == 3, "parity_ring assumes levels 1-3 are all served"
             assert skew == (4, 3) and group_count == 32, \
                 "parity_ring's dead-register funding map is derived for the (4,3)/32-group shape"
+        assert not parity_ring_plan or parity_ring_slices, \
+            "parity_ring_plan (H-048) extends parity_ring and needs it active"
 
         def is_shallow_newest_parity_last_fold(r: int, g: int) -> bool:
             # bs_ (groups per skew block) is defined before emission runs.
@@ -2289,6 +2292,26 @@ class KernelBuilder:
                         break
                     parity_ring_map[(epoch, g)] = (
                         extras[epoch].pop(0), extras[epoch].pop(0), extras[epoch].pop(0))
+            # H-048: offline-audited window-disjoint donor plan. Each entry
+            # ((epoch, group), (b0, b1, b2)) borrows three 8-word scratch
+            # runs whose REAL accesses were verified (trace-level audit,
+            # scratchpad/audit_h048.py) to be emission-order-disjoint from
+            # the ring's access window (rounds 0-4 / 11-15 of the group),
+            # with no live range spanning it -- the same borrow-safety
+            # criterion as the structural slices above, mined word-by-word
+            # across ALL scratch classes instead of whole dead registers.
+            # Donor triples may be shared between plan entries only when
+            # the two ring windows are emission-order disjoint (ring
+            # accesses start with the P0 write, so the earlier ring acts
+            # like a donor access before the later window).
+            for (p_epoch, p_g), p_bases in parity_ring_plan:
+                key = (int(p_epoch), int(p_g))
+                assert key not in parity_ring_map, \
+                    f"parity_ring_plan entry {key} already ring-funded"
+                assert len(p_bases) == 3 and all(
+                    0 <= b and b + VLEN <= SCRATCH_SIZE for b in p_bases), \
+                    f"parity_ring_plan bases out of range for {key}"
+                parity_ring_map[key] = tuple(int(b) for b in p_bases)
 
         # --- rounds ---
         # The round body is a GENERATOR yielding at stage boundaries
@@ -2959,6 +2982,31 @@ class KernelBuilder:
                        ignore_mem_read_hazard=store_disjoint_region)
             last_store_cycle = max(last_store_cycle, c)
         scheduler.emit("flow", ("pause",), min_cycle=last_store_cycle)
+
+        # H-048: debug-only export of the allocation/ring layout for the
+        # scratch-availability audit tools (attribute assignment only; the
+        # emitted stream is untouched).
+        self._h048_layout = {
+            "parity_ring_map": dict(parity_ring_map),
+            "state_vecs": list(state_vecs) if state_vecs else None,
+            "hash_chain_vecs": list(hash_chain_vecs) if hash_chain_vecs else None,
+            "node_val_vecs": list(node_val_vecs) if node_val_vecs else None,
+            "temp_pool": list(temp_pool) if temp_pool else None,
+            "condA": list(condA) if condA else None,
+            "condB": list(condB) if condB else None,
+            "tm": list(tm) if tm else None,
+            "tmM": list(tmM) if tmM else None,
+            "val_addrs": list(val_addrs) if val_addrs else None,
+            "level_table": level_table if tournament_level_count else None,
+            "level_table_word_count": level_table_word_count if tournament_level_count else 0,
+            "tables_by_level": {L: (list(e), list(d)) for L, (e, d) in tables_by_level.items()},
+            "period": period,
+            "rounds": rounds,
+            "block_specs": [(lag, list(gr)) for lag, gr in block_specs],
+            "served": {(r, g): True for r in range(rounds) for g in range(n_groups)
+                       if is_pair_tournament_served(r, g)},
+            "scratch_next_addr": self.scratch_next_addr,
+        }
 
         self.instrs = [b for b in scheduler.bundles if b]
 

@@ -334,3 +334,106 @@ Gates: `perf_takehome.py Tests.test_kernel_cycles` CYCLES: 1034 (x2);
 `tests/submission_tests.py` 9/9 green, all CYCLES lines 1034 (x2).
 Debug vcompare hooks unchanged and exercised (test runs with value_trace +
 debug compares enabled and passes).
+
+## H-048 (2026-07-27): scratch liberation via word-level window mining — STRAIN FRONTIER 1034 -> 1032 (-2), 384 audited-safe ring words found, conversion (not supply) is now the binder
+
+Charter: mine ALL scratch classes for ring-fundable words (window-disjoint
+availability, not free-forever liveness), reshape where near-miss, dedup
+constants, measure each increment on the 1034 config. Tools:
+`scratchpad/audit_h048.py` (trace-based availability matrix + global
+greedy planner; scratchpad of this session), new dev.py kwarg
+`parity_ring_plan` (offline-audited donor triples injected into
+parity_ring_map; default `()` = bit-identical, verified programmatically
+against HEAD on both the mainline and the 1034 config).
+
+### Landed frontier (dev.py, flag-gated)
+
+    parity_ring=True l4_gmin=(8,30)
+      parity_ring_plan=(((0,5),(193,201,601)), ((0,6),(609,617,625)),
+                        ((0,15),(185,1225,1233)), ((0,16),(193,201,1297)))
+                                             -> **1032** (-2)
+
+4 extra rings (96 borrowed words: lv+0/8/16, st8-12, nv22/23/31), correct
+on seeds 1,2,3,7,42,99 + 2 unseeded + debug_compares=True (all 1032).
+Equivalent 1032 configs: e0-minus-(0,7) [6 rings], e0-(0,7)+e1_early [12
+rings] — same cycles, all-seed-validated; the 4-ring form is minimal.
+Closed-loop re-audit of the WINNER stream: all 24 rings (20 structural +
+4 plan) pass the donor-safety recheck. Full gate 9/9 green flags-off;
+mainline stays 1034 (untouched).
+
+### Availability matrix (audited 1034 build, conservative windows = rounds 0-4 / 11-15 of the group; free words per unfunded window)
+
+| window cluster | free words | dominant classes |
+|---|---|---|
+| (0,4)-(0,6)   e0 block0 leftovers | 266 | nv 120, st 80, lv 24 |
+| (0,13)-(0,15) e0 block1 leftovers | 138 | nv 72, lv 24 |
+| (0,16)-(0,23) e0 block2 (mid)     | 74  | lv 24, anon 23, nv 8 |
+| (0,24)-(0,31) e0 block3 (mid)     | 67  | lv 24, anon 24, scalars |
+| (1,0)-(1,7)   e1 block0 (mid)     | 83  | anon 32, lv 24, root_nv_vec 8 |
+| (1,8)-(1,15)  e1 block1           | 171 | anon 56, st 40, lv 24 |
+| (1,21)-(1,23) e1 block2 leftovers | 179 | anon 56, st 40, lv 24 |
+| (1,27)-(1,29) e1 block3 leftovers | 355 | st 128, nv 72, anon 64 |
+
+Key structural facts: (a) adjacent blocks' ring windows are emission-
+disjoint (wave order within a diagonal step), so lv/root_nv_vec-class
+donors REUSE across blocks — the same 3 lv vectors legally fund one ring
+in nearly every block; (b) the H-045 e1 ledger missed the (1,1)<-block0
+and per-window st/nv availabilities that exist because RINGED donors'
+births move to their L2 seed (audit is self-consistent on the parity_ring
+build); (c) the true zero is only the (0,24)-(0,31)+(1,0)-(1,7) overlap
+chain (~5-6 shared safe vectors for 16 windows).
+
+### Soundness finding (cost us one miscompare, now excluded by design)
+
+Trace-based liveness is UNSOUND for emit_any-raced operands: alternatives
+read DIFFERENT addresses (dual_fold: diff-table madd vs odd-table
+vselect; race_idx_madd: rec VECTOR madd vs rec SCALAR alu lanes; also
+one_c/two_vec/omf_vec asymmetries), and only the winning encoding's reads
+land in the trace. A plan-induced schedule shift flips races and
+materializes reads inside a window that the audit never saw: borrowing
+addr 227 (an L1/L2 odd table) for ring (1,1) produced correct=False.
+Donor candidacy is therefore restricted to STRUCTURAL classes whose reads
+are schedule-independent: st/nv registers, lv words, root_nv_vec. Any
+future scratch-borrowing work MUST apply the same exclusion.
+
+### Words found / measured conversion
+
+- Audited-safe plan capacity at (7,30) and (8,30): **16 rings = 384
+  words** (exactly the F-2 full-retention threshold) from structural
+  donors; 28 (epoch,group) pairs remain unfundable (mid-chain).
+- Constant-table dedup (job item 3): ZERO — 59 vbroadcasts, no scalar
+  source broadcast twice; tables already shared across epochs.
+- Measured at (7,30): every increment is neutral-to-NEGATIVE (e0 rings
+  +1..+4 each — WAR serialization against adjacent-block donor births on
+  the saturated ramp; e1 rings 0). Composed full-16: +5.
+- Measured with per-gmin re-sweep (P-3 slide, third confirmation): the
+  optimum moved (7,30)->(8,30) under the plan; (8,30)+e0-subset = 1033,
+  minus-one-ring variants = **1032**. The win is retention relief
+  FUNDING a serving-mix slide, not op deletion per se: (8,30) alone is
+  1037.
+- Non-monotone: singles are 1034-1037, leave-one-out sets 1032-1035 —
+  ring composition interacts through the scheduler, sweep composed only.
+
+### Distance to the H-044 model prize
+
+Word SUPPLY is no longer the binder: 384 audited-safe words exist and are
+flag-reachable today. The binder is CONVERSION — beyond ~4-6 rings the
+borrow hazards cost more than the 3-6 deleted ops/ring recover (~150
+lanes/cyc marginal rate territory). Full cond retention (~16 ideal cyc)
+still requires rings whose hazards sit OFF the critical path, i.e. joint
+selection x scheduling (H-042/N-3), exactly where the flow-saturation leg
+already points. F-2 should be restated: words are available; cycles per
+word is the research question.
+
+### Follow-ups (driver)
+
+- F-6 [mainline flip candidate]: parity_ring + l4_gmin=(8,30) + the
+  4-ring plan = 1032 (-2). Port note: the plan addresses are LAYOUT
+  CONSTANTS of the current alloc order — a flag-free port should derive
+  them from the named vectors (lv, st8-12, nv22/23/31), not hard-code.
+- F-7: re-run audit_h048.py + per-gmin planner after ANY accept that
+  changes emission order or allocation (plans are build-specific; the
+  tool re-derives in ~15s and the dev.py assert catches stale keys).
+- F-8: H-042/N-3 should treat the 12 unmeasured-positive audited rings
+  as the retention budget the scheduler must make free (hazard-aware
+  placement of ring accesses), rather than hunting more words.
