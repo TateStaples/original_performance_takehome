@@ -774,3 +774,44 @@ H-009, H-011.
     scope here (task brief scoped this to `temp_pool` only) and were
     not measured.
   - log: 2026-07-25 ported, bug-hunted, measured negative.
+
+## H-037 (2026-07-27) — load_offset for gather emission: NEGATIVE (premise false), delta 0
+
+- hypothesis: the 8 per-lane gathers of a group burn alu/valu lane-ops on
+  per-lane address arithmetic; `("load_offset", dest, addr, offset)` makes
+  the +offset lane indexing free, so a pre-offset base address vector could
+  delete that feeding arithmetic at zero load-slot cost.
+- finding: the premise misreads the ISA. In problem.py, a load slot's
+  `dest`/`addr` operands are COMPILE-TIME scratch indices (instruction
+  immediates), not runtime values: `("load", dest, addr)` reads
+  `mem[scratch[addr]]` where `addr` is a literal baked into the slot.
+  `("load_offset", dest, addr, offset)` executes
+  `scratch[dest+offset] = mem[scratch[addr+offset]]` — i.e. it is exactly
+  `("load", dest+offset, addr+offset)` with the add done at assembly time.
+  dev.py's gather emission (the per-lane loop near the idx update,
+  `("load", nv + lane, st + lane)`) already does that add in Python at
+  emission time. There is NO runtime per-lane address arithmetic to
+  delete: the only runtime ops feeding gather addresses are the idx
+  recurrence itself (madd st + parity add, or race_idx_madd's 16-slot alu
+  spelling under idx_recurrence_race) — that computes the data-dependent
+  address VALUE, is 2 valu-op-equivalents per group-round, and is H-035's
+  region. load_offset is a mini-compiler convenience opcode, not a
+  hardware address-generation feature.
+- measurement (honest close): `gather_load_offset` kwarg added to
+  build_kernel_scheduled (default OFF; build_kernel dispatch untouched),
+  emitting `("load_offset", nv, st, lane)` with identical reads/writes.
+  dev defaults: OFF 1052, ON 1052, delta +0; correctness + debug-compare
+  asserts green under the flag for all 16 rounds. Full gate with flag off:
+  green, 1038. Lane-ops saved per group-round: 0 (none exist to save).
+- load-COUNT note (the -116 for 892): load_offset offers no path — it is
+  one mem read per slot, same as load. The only load-count levers visible
+  from here remain (a) more served/primed rounds (H-026-style mem_prime
+  extensions to more levels, trading setup stores + scratch), and
+  (b) exploiting gather-address collisions within a group-round (two lanes
+  at the same node → one load feeding two lanes), which is data-dependent
+  and would need a runtime-free way to detect/exploit sharing — nothing in
+  this ISA does that (no lane-select on load results without a valu op, so
+  any sharing scheme pays back its savings in vselects).
+- status: CLOSED NEGATIVE. Flag kept in dev.py as documentation of the
+  equivalence; recommend the backlog census stop counting load_offset as
+  an "unused opcode opportunity" — it is an alias, not a capability.

@@ -616,6 +616,7 @@ class KernelBuilder:
         shallow_tournament_reverse_select_race: bool = False,
         idx_recurrence_race: bool = False,
         idx_select_before_madd: bool = False,
+        gather_load_offset: bool = False,
         store_order: str = "group",
         reverse_newest_parity_fold: bool | Iterable[int] = (),
         newest_parity_last_fold_race: bool = True,
@@ -2426,8 +2427,18 @@ class KernelBuilder:
                             madd(st, st, two_vec, offset_vec)  # 2*gaddr + 1 - fp
                             vec(sign_op, st, st, par)
                     for lane in range(VLEN):
-                        scheduler.emit("load", ("load", nv + lane, st + lane),
-                               (st + lane,), (nv + lane,), mem_read=True)
+                        # H-037 (gather_load_offset): load_offset's +offset
+                        # lane indexing happens at ASSEMBLY time (scratch
+                        # operands are instruction immediates), so this is
+                        # a pure respelling of ("load", nv+lane, st+lane) --
+                        # same slot, same reads/writes, zero ops saved. Kept
+                        # flag-gated to document the negative result.
+                        if gather_load_offset:
+                            scheduler.emit("load", ("load_offset", nv, st, lane),
+                                   (st + lane,), (nv + lane,), mem_read=True)
+                        else:
+                            scheduler.emit("load", ("load", nv + lane, st + lane),
+                                   (st + lane,), (nv + lane,), mem_read=True)
 
         def emit_stages(r: int, g: int) -> Iterator[None]:
             # Re-tag on every resume so interleaved generators keep the
