@@ -778,3 +778,95 @@ Gates (each run twice): test_kernel_cycles CYCLES 1031; submission
 tests Ran 9 OK, all CYCLES 1031. Port note stands: the pin is a
 config-specific measurement artifact — re-derive (tools/
 spelling_plan_search.py) after any emission-order change to perf.
+
+## H-051 (2026-07-27): bounded-backtrack scheduler with LB pruning — MEASURED FIRST, THEN SEARCHED: the packing/placement axis is EXHAUSTED at 1031. Greedy is (empirically) optimal for its own op stream; the 18-cycle friction band is dependency structure, not packing loss.
+
+Tool: `tools/backtrack_sched.py` (new; dev.py untouched — no flag needed
+because the answer is a proven negative, and H-049 is concurrently editing
+dev.py's emission-order machinery). Config under study: the 1031 mainline
+equivalent (`parity_ring=True, l4_gmin=(8,30), parity_ring_plan=(4 rings),
+flow_spelling_plan=((354,1),)`).
+
+### Method: exact offline constraint model of the online scheduler
+
+`capture` monkeypatches dev.ListScheduler with a subclass recording, per
+placed op, the full hazard context (engine, slot, reads, writes, mem
+flags, H-031 ignore flags, min_cycle, tag) — 20,562 ops. Processing them
+in emission order with the scheduler's own running-maxima rules yields an
+explicit precedence DAG (RAW/WAW lag 1, WAR lag 0, coarse-mem edges
+honoring store_pair + ignore flags; the final pause's
+min_cycle=last_store_cycle is greedy-DERIVED and remodeled as lag-0
+edges from all stores). Soundness: offline greedy over the DAG
+reproduces ALL 20,562 captured placements bit-exactly (1031). Any DAG- +
+slot-limit-feasible placement is a correct program; `verify` rebuilds
+bundles from placements and runs the frozen grader — identity placement:
+1031, correct:true on seeds 1/2/3/7/42/99.
+
+### Regret profile (the deliverable): where the 18 cycles are lost
+
+Bounds for THIS op stream (fixed spellings/addresses/emission order):
+valu slot count 6077 -> floor 1013; dependency-only CP 426 (pure RAW —
+425 lag-1 edges: 130 pool/anon + 285 val/nv/st hash-chain, i.e. the
+439-span figure re-derived on the concrete stream); load 946, alu 981,
+flow 786. Two-sided energetic interval bound (release est_i x deadline
+C-1-h_i, per engine): **1015** = provable floor for ANY packing of this
+stream. Actual 1031 -> open window <= 16.
+
+F(c) = (c+1) + max(remaining-slot floors, conditional-CP of the
+remaining DAG given the prefix fixed). regret(c) = F(c) - 1013; the 18
+unit jumps localize every lost cycle:
+
+| region | cycles lost | jump cycles | binder |
+|---|---|---|---|
+| setup ramp | 4 | 0, 1, 2, 5 | vbroadcasts RAW on load:const/vload (load 2/2 solid) |
+| L9/L10 seam | 1 | 538 (r3/r9-10) | hash-chain RAW (val) |
+| L7/L8 seam | 1 | 831 (r7-8/r12) | hash-chain RAW (val) |
+| r9-11 epoch seam | 5 | 913, 915, 921, 926, 932 | **mid-schedule cluster (new): groups 24-31 r9/r10 hash+fold chains staircase; RAW on val/nv/pool, valu 2/6 with alu 8-12/12 busy** |
+| drain | 7 | 1001, 1002, 1007, 1012, 1014, 1020, 1022 | r14-15 chain latency; cpLB overtakes engine LB from c=1001 |
+
+(profile cross-checked against tools/sched_profile.py at the same
+config: 109 empty valu slots over 47 gap cycles, hazard attribution
+96.6/109 RAW — the frontier is genuinely not ready, not slot-starved.)
+
+### Search coverage: all zero improvement
+
+Incumbent 1031 throughout; every trial = full DAG re-schedule (19 ms).
+- Priority list scheduling (parallel SGS, offline, knows the future):
+  tail-height 1062, est+tail (CP) 1195, reverse-emission 1045. Emission
+  order is a strong spine; global reorderings are sharply negative.
+- Discrepancy-1 (delay one op d cycles, greedy completes): windows
+  (+-8 around every jump, all engines) x d in {1,2}: 3,798 trials; same
+  windows x d in {3,5,8}: 5,697 trials; **entire stream** (all 20,562
+  ops) x d in {1,2}: 41,124 trials. Best 1031.
+- Discrepancy-2 (delay two ops jointly, radius 3 of each jump,
+  valu/load/flow, d in {1,2}^2): 84,540 trials. Best 1031.
+- Discrepancy-3 (random triples, radius 4 of jumps, valu/load/flow/alu,
+  d random in {1,2}): 34,928 trials. Best 1031.
+Total ~170k full re-schedules, zero improvements. The searches directly
+test the H-051 mechanism (backtrack = un-place an op that greedy placed
+earliest and try later slots; a delayed-op floor + greedy completion IS
+a bounded-backtrack leaf, and disc-1 over the entire stream is the
+complete first backtrack level); with 96.6/109 of gap weight RAW-bound,
+delaying competitors cannot fill gaps, and no 1-3 deviation compresses
+the seams.
+
+### Verdict + hand-offs
+
+- Bounded-backtrack/B&B over packing choices at the current op stream:
+  **no prize** (0/170k deviations improve; provable floor 1015 means the
+  axis's theoretical max is 16, and the RAW-bound gap structure says the
+  practical max is ~0). Composes with H-042 (per-site spelling exhausted
+  at 1031) and iter-4 (order/tie-break exhausted): the scheduler strain's
+  three axes are all measured-closed at this op mix.
+- The 5-cycle r9-11 epoch-seam cluster (c=913-932) is the one NEW
+  actionable target: it is the same chain-staircase mechanism as the
+  drain but mid-stream, where rounds 9-10 (L9/L10 gather rounds, long
+  post-parity chains) overlap the epoch-2 tournament rounds. Emission-
+  structure levers (H-049's axis) or chain-shortening algebra (b3-last
+  style) are the right tools; packing is not.
+- Reusable machinery in tools/backtrack_sched.py: exact capture of the
+  op stream + validated offline re-scheduler + frozen-grader verify of
+  arbitrary placements (`verify`), energetic interval bound (`bound`),
+  per-cycle regret profiler (`regret`). Any future emission-order or
+  spelling change can re-run the whole analysis in ~2 min to re-measure
+  its own residual packing slack.
