@@ -1128,3 +1128,102 @@ Queued: H-012 (floor recalibration).
   representation, kf=4 is closed at the segment scale too, for a
   different resource reason than `full_hash`'s kf=3 closure but the same
   practical conclusion: not reachable with this tooling.
+
+## H-036 (2026-07-27): alternative algebraic DECOMPOSITIONS of myhash — CLOSED NEGATIVE (analytic + enumerative)
+
+Scope: re-derivations of the hash in different op bases, explicitly NOT
+fusions of the current step sequence (that space is H-003/H-016/H-025's,
+closed). Four directions from the backlog statement, each closed below.
+No kernel change: no candidate survived to emission. ops/hash unchanged
+at 11.39 avg (11 mixing ops + nv-xor − 9/16 C5 elision); fast gate
+re-confirmed green at 1038 with zero diff to perf_takehome.py/dev.py.
+
+Structural observation that frames everything: in the current 11-op DAG
+every node costs EXACTLY 1 op from already-present values. A shared new
+intermediate w serving two nodes u,v costs |w|+2 >= 3 ops against the 2
+it would replace, so shared-subexpression REARRANGEMENT can never win;
+op removal requires either (a) a globally shorter program — closed
+negative at depth<=7 with no waypoint assumption (H-025 iters 6b/7,
+2.87T engine-A candidates + 6.9B/2.1B MITM nodes), or (b) deleting a
+node because its consumers can re-derive their outputs in 1 op without
+it. Family (b) is finite over the trace-node set and is exactly what the
+new probe enumerates.
+
+1) Cross-stage/cross-round shared subexpressions with the concrete
+   constants (family (b)): NEW TOOL tools/hash_relation_probe.py.
+   Enumerated every 1-op derivation of every node of the 2-round trace
+   DAG (25 nodes: both rounds' a1,t1,u1,a2,p,q,a3,a4,t5,w5,val plus
+   x, nv2, x2) from every other trace node: all 8 bin ops over all node
+   pairs both orders, all bin ops vs a solved free constant (add/sub
+   both orders/xor/mul-by-odd-inverse/and/or canonical solves, all 32
+   shift amounts), madd over all node triples, madd(node,node,C-solved),
+   madd(node,K-solved,C-solved), madd(node,K-solved,node). 340,023
+   candidates, N=64 structured+random samples (cross-round relations
+   forced to hold under per-sample random nv2). RESULT: 67 hits, ALL 67
+   classified inside the defining stage windows (chain ops, their local
+   inverses, sibling xor rearrangements; positive controls like
+   q = madd(p, 0x200, 0xbb372800) found as expected). ZERO long-range
+   coincidence relations. Combined with the counting argument above:
+   no decomposition over this intermediate set shortens the hash.
+
+2) Multiply distribution / constants co-designed with shifts: the four
+   multipliers ARE already the full co-design harvest (4097=1+2^12,
+   33=1+2^5, 16896=33*2^9, 9=1+2^3 — the existing 18->11 fusion).
+   Deeper distribution is blocked by the two xorshift stages: verified
+   numerically that s0 (madd) is NOT GF(2)-affine and s1/s5 (xorshifts)
+   are NOT Z-affine for these constants (50-sample falsification each),
+   so no single-algebra global form exists, and any mixed shorter form
+   is a globally shorter program (closed, (a) above). Constant
+   coincidence scan over {C0,C1,C2,C3,C4,C5,ap,aq}: all pairs under
+   shifts/cheap-multiplier/near-add/2-bit-xor relations — NONE except
+   the definitional aq = C2<<9.
+
+3) madd-canonical 2-op windows: every 2-op window re-derivation is
+   inside the probe family (madd with solved K,C from any trace node) —
+   0 hits; independently subsumed by the six per-segment closures at
+   kf<=3 (iters 10-11).
+
+4) Parity from a prefix/cheaper projection: MOOT for op count — parity
+   is already ZERO ops in mainline (H-015 table reversal). Bit trace for
+   the record: parity(val) = bit0(a4) ^ bit16(a4) ^ 1 (C5 has bit0=1,
+   bit16=0); bit0(a4) collapses linearly (kq even, kp/k4 odd) to
+   bit0(x) ^ bit19(a1) ^ const, but bit16(a4) needs the low-17 carry
+   chains of all three madd stages, and every machine op is full-width,
+   so the producing chain has the same op count as the full hash. Any
+   depth-only benefit was closed by G-8 (parity-early is
+   valu-throughput-bound). Mid-round val cannot be deferred/projected
+   away regardless: it feeds the next round's hash input exactly, and
+   final-round vals are graded exactly.
+
+Two NEW analytic closures of transform-domain families the prior
+searches did not formally cover:
+- xor-conjugation (carry val as val^D, D absorbed free by pre-xoring the
+  node-value table, generalizing H-015): xorshift stages transport
+  xor-domains at zero cost (f(b^D) = f(b) ^ D ^ (D>>s)), but madd stages
+  BLOCK them: K*(x^D)+C == K'*x+C' for all x forces K'=+-K (x=0,1) and
+  then (x^D)-x (D even) or (x^D)+x (D odd) constant in x, which holds
+  only for D=0 (D odd fails at x=2 already). So every xor-domain is
+  confined to the xorshift spans adjacent to the round boundary —
+  exactly the space c5_prexor already exploits and xr3/xr3p closed.
+- affine conjugation (carry val as K*val+C): composing affine maps with
+  the madd stages is pure constant relabeling (same op count, inside the
+  solved-constant search space already), does not transport through
+  xorshift stages, and cannot cross the ^nv round boundary. No op-count
+  degree of freedom exists in this family at all.
+
+Honest caveats: (i) the probe's vocabulary matches fusion_search's
+(no compare/select ops; a 1-bit compare output cannot carry 32-bit
+full-entropy intermediates, but select-based branchy forms are formally
+unsearched); (ii) family (a) remains open beyond depth 7 as before —
+this iteration adds no depth there, by design; (iii) cross-block sharing
+with the idx-state block is impossible beyond parity (idx values are
+small integers; the only shared quantity is the routing bit, already
+0-op).
+
+VERDICT: H-036 CLOSED NEGATIVE. The re-derivation directions either
+reduce to the already-closed shorter-global-program question or are
+proven empty here. Recommend the strain stop reopening hash op-count
+below the 892-gap pressure unless someone brings a fundamentally new
+program class (select-based forms, or a depth>7 search breakthrough);
+the remaining credible route to 892 is outside the hash op count
+(H-035 idx-state folding, load/schedule shape).
