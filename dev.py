@@ -657,6 +657,7 @@ class KernelBuilder:
         newest_parity_last_leaf_diff_tables: bool = False,
         reverse_newest_parity_fold_at_shallow_levels: bool | Iterable[int] = (),
         emit_order: str = "group",
+        emission_plan: tuple[Any, ...] = (),
         flow_consts: bool = False,
         vals_first: bool | str = False,
         tie_break: str | Iterable[str] = (),
@@ -992,6 +993,20 @@ class KernelBuilder:
           the r15 drain is chain-LATENCY-bound (interleaving cannot
           compress it; see research/strains/scheduler/STATE.md). Kept as
           negative controls / sweep dimensions.
+
+        - `emission_plan` (H-049): fully explicit emission-order override.
+          When non-empty it REPLACES the diagonal step loop: a tuple whose
+          entries are either `(r, g)` (emit that group-round contiguously)
+          or `("rr", ((r1, g1), (r2, g2), ...))` (round-robin the stage
+          generators of those group-rounds, H-021 stage-interleave at an
+          arbitrary set). Validated to cover every (round, group) exactly
+          once with each group's rounds ascending -- any such order is
+          DATAFLOW-correct by construction (the scheduler re-derives all
+          hazards from the emission stream), but ring-borrow windows
+          (`parity_ring*`) are liveness-timed, so candidate plans must
+          still be simulation-verified (tools/run_variant.py `correct`).
+          Default () = the step loop runs untouched, bit-identical.
+          Search driver: tools/emission_order_search.py.
 
         - `derive_consts` / `alu_val_addrs` / `lazy_val_loads` (H-024):
           setup load/flow-slot removal; none changes the maths.
@@ -2947,7 +2962,36 @@ class KernelBuilder:
             tail_mode = "rev" if emit_order.startswith("rev") else "stage"
             order = "group"
         build_parity_ring_map()  # H-045: after alloc_state, before any round emits
-        for step in range(n_steps):
+        if emission_plan:
+            # H-049: explicit emission-order plan (see docstring). Validate
+            # coverage + per-group round monotonicity, then emit verbatim.
+            norm: list[tuple[tuple[int, int], ...]] = []
+            for entry in emission_plan:
+                if entry and entry[0] == "rr":
+                    members = tuple((int(rr_), int(gg_)) for rr_, gg_ in entry[1])
+                else:
+                    rr_, gg_ = entry
+                    members = ((int(rr_), int(gg_)),)
+                gs_ = [gg_ for _, gg_ in members]
+                assert len(set(gs_)) == len(gs_), \
+                    "emission_plan: a group may appear once per rr entry"
+                norm.append(members)
+            next_round_ = [0] * n_groups
+            for members in norm:
+                for rr_, gg_ in members:
+                    assert 0 <= gg_ < n_groups and next_round_[gg_] == rr_, (
+                        f"emission_plan: group {gg_} expected round "
+                        f"{next_round_[gg_]}, got {rr_}")
+                    next_round_[gg_] += 1
+            assert all(nr == rounds for nr in next_round_), \
+                "emission_plan must cover every (round, group) exactly once"
+            for members in norm:
+                if len(members) == 1:
+                    emit_group_round(*members[0])
+                else:
+                    round_robin([emit_stages(rr_, gg_) for rr_, gg_ in members])
+        else:
+          for step in range(n_steps):
             waves: list[tuple[int, Sequence[int]]] = []  # (round, group-range) active at this diagonal step
             for lag, group_range in block_specs:
                 r = step - lag
