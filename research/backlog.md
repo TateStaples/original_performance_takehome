@@ -1233,7 +1233,7 @@ correct, measured worse at every configuration tried]
   running H-049 agent (beam move set + optional post-pass) 2026-07-27.
 - analysis doc: scratchpad external_1018_analysis.md (session 5cfbd141).
 
-### H-051 [strain: scheduler] [status: testing] (user-directed 2026-07-27)
+### H-051 [strain: scheduler] [status: closed negative -> graveyard G-25 (packing axis proven exhausted: interval LB 1015, 170k trials never beat greedy 1031; regret profile localizes all 18 cycles; NEW r9-11 epoch seam routed to H-049)]
 - statement: bounded-backtrack (branch-and-bound) scheduler: schedule
   forward maintaining an ADMISSIBLE lower bound on remaining cycles
   (per-engine remaining-slots/limits + dependency span from the current

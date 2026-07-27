@@ -360,3 +360,28 @@ Seeded 2026-07-23 from the 2148->1140 campaign's measured rejections.
   <11-op form or a depth-8+ search breakthrough.
 - housekeeping: H-025 iter-12 uncommitted leftovers preserved at
   scratchpad h025_iter12_leftover_uncommitted.diff.
+
+### G-25 The packing/placement axis at the current op stream (H-051)
+- claim (user-directed): bounded-backtrack B&B with the floor model as an
+  admissible bound could recover cycles the greedy packer loses.
+- evidence: tools/backtrack_sched.py — exact op-stream capture (20,562
+  ops + full hazard context), precedence DAG whose offline greedy
+  reproduces all placements bit-exactly (1031), frozen-grader-verified
+  reconstruction path. Provable TWO-SIDED interval bound: 1015 for ANY
+  packing of this stream (valu-slot bound 1013, CP 426, energetic 1015).
+  ~170k full re-schedules at 19ms each: exhaustive discrepancy-1 (d 1-2)
+  over the FULL stream, pairs radius-3 at every regret jump, random
+  triples, priority-list variants — best found = greedy's own 1031.
+- REGRET PROFILE (the keeper): the 18 cycles over the valu floor are 18
+  localized unit jumps: ramp 4 (vbroadcast RAW on setup loads), seam 1
+  @538, seam 1 @831, r9-11 EPOCH SEAM 5 (c=913-932, groups 24-31 r9/r10
+  hash+fold RAW chains, valu 2/6 while alu 8-12/12 — a mid-stream
+  chain-staircase, NEW), drain 7 (cpLB overtakes engine bound at c=1001).
+  Blocker weight 96.6/109 empty-valu-slot events are RAW: the frontier
+  is not ready, not slot-starved.
+- moral: with H-042 (spelling) and iter-4 (order/tie-breaks), all three
+  scheduler axes are measured-closed at this op mix. The friction is
+  DEPENDENCY STRUCTURE. The r9-11 seam (5 cyc) is an emission-structure
+  or chain-shortening target (H-049's axis), not a packing one.
+- reopen-if: the op stream changes materially (H-049 order win, H-047
+  restructure) — the tool re-measures residual packing slack in ~2 min.
