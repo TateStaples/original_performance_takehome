@@ -972,7 +972,7 @@ correct, measured worse at every configuration tried]
 - guard: every candidate must be bit-exact on all 2^32 inputs or carry a
   domain argument (values are arbitrary 32-bit words — no input structure).
 
-### H-037 [strain: flow-balance] [status: testing]
+### H-037 [strain: flow-balance] [status: closed negative -> graveyard G-19 (premise false: load_offset is a compile-time alias of load)]
 - statement: load_offset is the ONLY unused load opcode (census 2026-07-27).
   ("load_offset", dest, addr, offset) reads mem[scratch[addr+offset]] into
   scratch[dest+offset] — per-lane gather where the +offset indexing is free.

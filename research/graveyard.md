@@ -198,3 +198,20 @@ Seeded 2026-07-23 from the 2148->1140 campaign's measured rejections.
   with free slots INSIDE cycles 100-950, AND >=64 contiguous scratch words
   free (vload variant) or >=256 (scalar variant), AND alu gains >=8%
   headroom for the vload transpose.
+
+### G-19 load_offset gather respelling (H-037)
+- claim: ("load_offset", dest, addr, offset) could delete per-lane
+  gather-address arithmetic by making the +offset lane indexing free.
+- evidence: premise false. In problem.py the load slot's dest/addr operands
+  are instruction immediates (literal scratch indices baked in at assembly),
+  so load_offset executes bit-for-bit as ("load", dest+offset, addr+offset)
+  -- a compile-time alias, not a hardware capability. dev.py's gather loop
+  already folds that add in Python at emission. The only runtime ops feeding
+  gather addresses are the idx recurrence itself (H-035's region). Measured:
+  dev.py flag ON/OFF both 1052, delta exactly 0; full gate green at 1038.
+  Flag-gated respelling (gather_load_offset, default OFF) kept in dev.py as
+  documentation of the equivalence.
+- moral: audit "unused opcode" census hits against the simulator's operand
+  semantics before hypothesizing -- immediates vs scratch-indirection decides
+  whether an opcode is a capability or an alias.
+- reopen-if: never (equivalence is exact, not empirical).

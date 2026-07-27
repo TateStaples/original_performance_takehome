@@ -1,0 +1,52 @@
+WINNER 1038 {'c5_primed_gather_levels': (5,), 'store_pair': True}
+WINNER 1039 {'c5_primed_gather_levels': (5,), 'store_pair': False}
+WINNER 1041 {'c5_primed_gather_levels': (5, 6), 'store_pair': True}
+WINNER 1042 {'c5_primed_gather_levels': (5, 6), 'store_pair': False}
+WINNER 1041 {'c5_primed_gather_levels': (6,), 'store_pair': True}
+WINNER 1042 {'c5_primed_gather_levels': (6,), 'store_pair': False}
+WINNER 1045 {'reverse_newest_parity_fold': (), 'newest_parity_last_leaf_diff_tables': True}
+WINNER 1045 {'reverse_newest_parity_fold': (), 'newest_parity_last_leaf_diff_tables': False}
+WINNER 1038 {'reverse_newest_parity_fold': (15,), 'newest_parity_last_leaf_diff_tables': True}
+WINNER 1048 {'l4_gmin': (8, 27)}
+WINNER 1047 {'l4_gmin': (8, 28)}
+WINNER 1044 {'l4_gmin': (8, 29)}
+WINNER 1040 {'l4_gmin': (8, 30)}
+WINNER 1043 {'l4_gmin': (8, 31)}
+WINNER 1047 {'l4_gmin': (8, 32)}
+WINNER 1046 {'l4_gmin': (9, 27)}
+WINNER 1045 {'l4_gmin': (9, 28)}
+WINNER 1042 {'l4_gmin': (9, 29)}
+WINNER 1038 {'l4_gmin': (9, 30)}
+WINNER 1041 {'l4_gmin': (9, 31)}
+WINNER 1045 {'l4_gmin': (9, 32)}
+WINNER 1048 {'l4_gmin': (10, 27)}
+WINNER 1047 {'l4_gmin': (10, 28)}
+WINNER 1044 {'l4_gmin': (10, 29)}
+WINNER 1040 {'l4_gmin': (10, 30)}
+WINNER 1043 {'l4_gmin': (10, 31)}
+WINNER 1047 {'l4_gmin': (10, 32)}
+WINNER 1052 {'l4_gmin': (11, 27)}
+WINNER 1051 {'l4_gmin': (11, 28)}
+WINNER 1048 {'l4_gmin': (11, 29)}
+WINNER 1044 {'l4_gmin': (11, 30)}
+WINNER 1047 {'l4_gmin': (11, 31)}
+WINNER 1051 {'l4_gmin': (11, 32)}
+WINNER 1052 {'l4_gmin': (12, 29)}
+WINNER 1048 {'l4_gmin': (12, 30)}
+WINNER 1051 {'l4_gmin': (12, 31)}
+WINNER 1052 {'l4_gmin': (13, 30)}
+WINNER 1048 {'auto_raced_first_fold_levels': (1, 2), 'l4_gmin': (12, 30)}
+WINNER 1040 {'auto_raced_first_fold_levels': (1, 2), 'l4_gmin': (10, 30)}
+WINNER 1051 {'auto_raced_first_fold_levels': (2,), 'l4_gmin': (12, 30)}
+WINNER 1044 {'auto_raced_first_fold_levels': (2,), 'l4_gmin': (10, 30)}
+WINNER 1050 {'temp_and_cond_pool_sizes': (14, 4)}
+WINNER 1043 {'temp_and_cond_pool_sizes': (15, 4)}
+WINNER 1051 {'temp_and_cond_pool_sizes': (16, 3)}
+WINNER 1038 {'temp_and_cond_pool_sizes': (16, 4)}
+WINNER 1044 {'pair_tournament_first_fold_race': 0}
+WINNER 1041 {'pair_tournament_first_fold_race': 1}
+WINNER 1042 {'pair_tournament_first_fold_race': 2}
+WINNER 1038 {'pair_tournament_first_fold_race': 3}
+WINNER 1038 {'skew': (4, 3)}
+WINNER 1049 {'skew': (8, 2)}
+sweep: 119 new runs, 51 beat baseline, 9s

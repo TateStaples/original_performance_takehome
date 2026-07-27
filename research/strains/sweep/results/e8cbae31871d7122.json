@@ -1,0 +1,1 @@
+{"config": {"c5_primed_gather_levels": "()", "store_pair": "False"}, "cycles": -1, "correct": false, "baseline": 1053, "error": "AssertionError('idx_select needs omf1_vec, which mem_prime creates')"}

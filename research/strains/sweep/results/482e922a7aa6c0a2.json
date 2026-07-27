@@ -1,0 +1,1 @@
+{"config": {"reverse_newest_parity_fold": "(15,)", "newest_parity_last_leaf_diff_tables": "True"}, "cycles": 1038, "correct": true, "baseline": 1053}
