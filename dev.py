@@ -123,6 +123,16 @@ class ListScheduler:
         # unaffected either way.
         self.trace: list[tuple[Any, ...]] | None = None
         self.tag: tuple[int, int] | None = None
+        # H-042 (joint selection x scheduling): offline-searched spelling
+        # plan for emit_any race sites that carry a pure-flow encoding.
+        # Sites are numbered in emission order counting ONLY flow-containing
+        # races (dual_fold / race_sel / race_leaf / race_copy) -- that
+        # subsequence is emission-stable across plan changes, unlike the
+        # schedule-dependent _sched_vec alu/valu races. flow_site_plan maps
+        # site index -> encoding index to place UNCONDITIONALLY (skipping
+        # the retire-time race); empty dict = bit-identical greedy.
+        self.flow_site_idx = 0
+        self.flow_site_plan: dict[int, int] = {}
 
     def ready(self, reads: Iterable[int] = (), writes: Iterable[int] = (), mem_read: bool = False, mem_write: bool = False, min_cycle: int = 0, ignore_mem_read_hazard: bool = False, ignore_mem_write_hazard: bool = False) -> int:
         cycle = min_cycle
@@ -220,6 +230,14 @@ class ListScheduler:
         route through it, and any op with several equivalent spellings can
         race the same way.
         """
+        encodings = list(encodings)
+        if len(encodings) > 1 and any(
+            all(e == "flow" for e, *_ in enc) for enc in encodings
+        ):
+            forced = self.flow_site_plan.get(self.flow_site_idx)
+            self.flow_site_idx += 1
+            if forced is not None:
+                encodings = [encodings[forced]]
         best: tuple[int, Iterable[tuple[Any, ...]], list[int]] | None = None
         for encoding in encodings:
             trial_occupancy: dict[Engine, dict[int, int]] = {}
@@ -621,6 +639,7 @@ class KernelBuilder:
         parity_ring: bool | tuple[tuple[int, int], ...] = False,
         parity_ring_extras: tuple[int, ...] = (),
         parity_ring_plan: tuple[tuple[tuple[int, int], tuple[int, int, int]], ...] = (),
+        flow_spelling_plan: tuple[tuple[int, int], ...] = (),
         store_order: str = "group",
         reverse_newest_parity_fold: bool | Iterable[int] = (),
         newest_parity_last_fold_race: bool = True,
@@ -1384,6 +1403,9 @@ class KernelBuilder:
 
         scheduler = ListScheduler()
         scheduler.trace = getattr(self, "sched_trace", None)
+        # H-042: offline-searched per-site spelling plan (see ListScheduler
+        # field docs). Empty tuple = bit-identical default greedy racing.
+        scheduler.flow_site_plan = dict(flow_spelling_plan)
         # H-028 (store_pair): let mem writes pair up within a cycle -- the
         # scheduler's coarse one-location mem model otherwise serializes
         # the 32 final vstores at 1/cycle on the 2-wide store engine, and
@@ -1622,11 +1644,13 @@ class KernelBuilder:
                 [dict(c) for c in scheduler.engine_slot_counts],
                 dict(scheduler.last_write), dict(scheduler.last_read),
                 scheduler.last_mem_read_cycle, scheduler.last_mem_write_cycle, dict(scheduler.first_free_cycle_hint),
+                scheduler.flow_site_idx,
             )
 
         def sched_install(snap: tuple[Any, ...]) -> None:
             (scheduler.bundles, scheduler.engine_slot_counts, scheduler.last_write, scheduler.last_read,
-             scheduler.last_mem_read_cycle, scheduler.last_mem_write_cycle, scheduler.first_free_cycle_hint) = snap
+             scheduler.last_mem_read_cycle, scheduler.last_mem_write_cycle, scheduler.first_free_cycle_hint,
+             scheduler.flow_site_idx) = snap
 
         # --- header (inp_indices is never read: only values are graded) ---
         for name, hidx in (("forest_values_p", 4), ("inp_values_p", 6)):
