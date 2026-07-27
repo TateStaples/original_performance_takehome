@@ -882,3 +882,159 @@ H-009, H-011.
   as the measured negative control + the region-hazard machinery (may be
   reusable if a future accept opens mid-window load slack, per G-16's
   reopen-if).
+
+## H-041 (iter 12, 2026-07-27): gather->select-tree conversion, measured against the corsix 7.5:2:1 frame — REJECTED at the current op census; conversion is the LAST lever, not the next one
+
+Charter: the H-040 forensics said the 940-cycle with-idx frontier converts
+">280 gathers" to selection trees and balances valu:load:flow 7.5:2:1 in
+every cycle. Measure our per-cycle mix + gather census, cost each level's
+conversion honestly, prototype the cheapest promising one. All numbers on
+the 1038 mainline (BASE_KWARGS), tool: `tools/occupancy_hist.py` (landed
+this iteration).
+
+### Measurement 1 — per-cycle occupancy of the 1038 build
+Total slots (util %, per-engine cycle floor slots/limit):
+| engine | slots | util | floor |
+|---|---|---|---|
+| alu   | 11,881 | 95.4% | 990 |
+| valu  |  6,119 | 98.2% | **1020** |
+| load  |  1,900 | 91.5% | 950 |
+| flow  |    797 | 76.8% | 797 |
+| store |     38 |  1.8% | 19 |
+
+Saturated-combo histogram: 666/1038 cycles have alu+valu+load+flow ALL
+full; 203 more alu+valu+load full; only 6 cycles have NO full engine.
+Windowed free slots:
+| window | alu free | valu free | load free | flow free |
+|---|---|---|---|---|
+| 0-100 (ramp)    |  67 | 24 | 90 | 25 |
+| 100-950 (steady)| 296 | 38 | **4** | 197 |
+| 950-1038 (drain)| 212 | 47 | 82 | 19 |
+
+The steady window is CO-saturated: load 1696/1700 (99.8%) and valu
+5062/5100 (99.3%) simultaneously. Conversion currency: 227 cycles are
+load-full-with-flow-free, but only **37** are load-full-with-valu-free
+(16 both). Friction (1038 - 1020 valu floor = 18 cyc) decomposes as
+ramp ~4 (24 valu-free slots /6), steady ~6 (38/6), drain ~8 (47/6).
+
+### Measurement 2 — gather census by target tree level
+(gathers for round r+1 are emitted under round r's trace tag)
+| target level | rounds | group-rounds gathering | load slots |
+|---|---|---|---|
+| L4 | r4 (epoch0, g<9: 9 grp) + r15 (epoch1, g<30: 30 grp) | 39 | **312** |
+| L5..L10 | r5..r10 | 32 each | 256 each = 1,536 |
+| setup | — | — | 52 |
+| total | | | 1,900 |
+
+Reconciliation with corsix's ">280 gathers can be gainfully replaced":
+our remaining unserved L4 = 312 loads ~= his ">280". His conversion set
+corresponds to FULL L1-L4 service; we already serve L1-L3 fully plus
+25/64 L4 group-rounds. We are 39 group-rounds short of his stated bound
+— and every one of those 39 is measured negative at our mix (below).
+His claim was made at an organization where load was the oversubscribed
+engine (naive 4096 load cells); ours crossed to compute-bound long ago.
+
+### Measurement 3 — the L4 conversion margin is at strict equilibrium on BOTH axes
+(a) Count axis (threshold re-sweep at 1038, all correct=true):
+(7,30)=1046 (8,30)=1040 **(9,30)=1038** (10,30)=1040 (11,30)=1044;
+(9,28)=1045 (9,29)=1042 (9,30)=1038 (9,31)=1041. Monotone regression in
+both directions from the mainline point — serving MORE groups (more
+select-tree) and FEWER both lose. G-9/H-008's direction re-confirmed a
+second time at 1038.
+(b) Composition axis (NEW — first set-form l4_gmin sweep ever recorded;
+the kwarg has accepted arbitrary group sets since the external-repo port
+but every prior sweep used prefixes). Epoch-0 at |S|=23: baseline
+unserve{0..8}=1038; unserve{0..7,15}=1039; unserve{0..6,8,9}=1040;
+unserve{1..9}=1041; unserve{0..7}+{16|24|31}=1042; unserve evens{0..16}
+=1053; unserve{25..31,0,1}=1079. Epoch-1 at |S|=2: {30,31}={29,31}=
+{28,31}={29,30}=1038 (tie plateau near the tail), {16,31}=1039,
+{24,31}=1040; sizes 1/3 all worse (1041/1042). NOTE: {0,31} and {0,1}
+CRASH (IndexError) — the known idx_select/two_minus_fp_vec fallback
+hazard generalizes to set-form epoch-1 specs that serve early groups;
+any future set sweep must check `correct` per point. Verdict: the
+serve-latest-groups composition the threshold already encodes is optimal;
+per-site (per-group) instruction selection has NO headroom at L4. The
+mechanism is visible in the occupancy data: unserved-group gathers land
+in the ramp where load has 90 free slots; served-group folds land where
+flow/valu still have local slack; swapping composition moves gathers
+into the load-full steady window (worst case unserve{25..31,0,1}: +41).
+
+### Cost model — why L5+ conversion cannot pay at this census
+Serving one L5 group-round from tables: 2^4=16 first-folds (madd w/
+diff tables: 1 valu each, or vselect: 1 flow) + 15 combine folds (flow
+vselect, or 2-op valu sub+madd) = 31 ops, vs 8 load slots + ~1 valu idx
+op removed. Three independent kill conditions, each sufficient:
+1. **Scratch**: tables need 32 broadcast vectors = 256 words (evens+
+   diffs form: 16+16 vectors, same 256). Free today: ~3 words. Directly
+   measured this iteration: even ONE more 8-word table OOMs — 
+   `auto_raced_first_fold_levels=(1,2,3)`, `pair_tournament_first_fold_race=4`,
+   and `temp_and_cond_pool_sizes=(17,4)` all die "Out of scratch space".
+   Mid-kernel dead registers don't exist at round 5 (G-18: st/nv all
+   live; the b3l dead-reg pool only opens at the FINAL round).
+2. **Engine arithmetic**: the schedule's binder is valu (floor 1020 vs
+   1038 actual). Conversion strictly ADDS compute (+15 valu +15 flow
+   per group-round balanced, or +31 flow all-flow) to REMOVE load slots
+   from an engine whose floor (950) is 70 cycles BELOW the binder.
+   All-flow placement is capped by total flow slack ~223 slots at 1020
+   cycles -> <=7 group-rounds (-56 loads, load floor 922) with ZERO
+   cycle gain, because valu still floors at 1020.
+3. **Window placement**: mid-window flow free = 197 slots spread thin
+   (win 200-250 and 600-650 have 0); L5 folds must land in round-5's
+   emission neighborhood, where load-full-valu-free cycles number 37
+   schedule-wide. There is no local pocket to hide 31 ops/group-round.
+L6+ double the table+op cost for the same 8-load gain (G-16's 2x ladder)
+— strictly dominated by L5, which is already dead three ways.
+
+### Cost-model conclusion (the joint condition, quantified)
+Gather->select conversion pays only when the load floor BINDS. Ordering
+of floors today: valu 1020 > alu 990 > load 950 > flow 797. To make load
+bind, other levers must first remove ~400 valu slots AND ~600 alu slots
+(H-025 CEGIS is the only open op-removal lever). Only BELOW ~950 cycles
+does the frontier's lever activate for us, and then cheapest-first:
+the 39 remaining L4 group-rounds (15 ops / 8 loads each), then L5
+(31 ops / 8 loads) — and each conversion also needs the scratch problem
+solved (>=128-256 words freed, or the table form rethought). The corsix
+7.5:2:1 prescription describes our steady window ALREADY (valu 6.0/6,
+alu 12/12 ~ 1.5 valu-equiv, load 2/2, flow 0.8/1 = effective
+7.5:2:0.8): we did not miss the balance — we lack his op count. H-040's
+levers must be read in his order: (a) shrink the graph FIRST, (b) then
+convert gathers to fill the freed compute. (b) without (a) is measured
+negative here on every axis.
+
+### Prototype measured (per charter step 3)
+The cheapest promising conversion was per-site selection via set-form
+l4_gmin — zero new kernel code, existing kwarg. Measured exhaustively
+above: best alternative composition ties 1038, no point beats mainline.
+No L5 prototype was buildable (scratch-infeasible before op-costing —
+kill condition 1 is measured, not modeled). No new kwargs added; default
+stream untouched by construction; fast gate 1038 OK, full gate 9/9 green.
+
+### Landed
+- `tools/occupancy_hist.py`: per-cycle occupancy histogram, saturated-
+  combo census, windowed free-slot table, per-round gather census —
+  reusable for any variant via `--set`.
+
+### Verdict
+REJECT H-041 at the current organization (honest negative). Reopen-if:
+(a) total valu slots < ~5,700 AND alu < ~11,400 (load floor becomes
+binding), AND (b) >=128 contiguous scratch words freed (L5 tables) or
+the 39 L4 group-rounds re-swept first (they need zero new scratch).
+The l4_gmin threshold will slide there via the standing sweep on its own
+(P-3 pattern) — that sliding IS the conversion lever engaging.
+
+### Follow-ups
+- For H-042 (beam packing): the occupancy data says DO NOT target the
+  steady window — it is 99.3-99.8% packed (38 valu-free slots over 850
+  cycles; recoverable <=6 cyc). The friction lives at the boundaries:
+  ramp 0-100 (24 valu-free, 67 alu-free, 25 flow-free -> ~4 cyc) and
+  drain 950-1038 (47 valu-free, 19 flow-free -> ~8 cyc). Beam over
+  packing choices should score RAMP-ENTRY and DRAIN-EXIT bundles
+  (first/last ~100 cycles), where alternative engine spellings actually
+  have empty slots to differ on; wallace's "first 25 cycles" beam is
+  consistent with exactly this.
+- The epoch-1 tie plateau ({29,31}/{28,31}/{29,30} all = 1038) is free
+  composition slack: if a future change (e.g. b3l pool pressure) wants a
+  different pair of final-round served groups, it costs nothing today.
+- Driver: file the set-form crash hazard ({0,31},{0,1} IndexError under
+  idx_select) against the existing two_minus_fp_vec fallback note in
+  backlog (same root cause family, now reachable via set specs).
