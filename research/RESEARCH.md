@@ -7,20 +7,35 @@
 
 | cycles | commit | config |
 |---|---|---|
-| 1053 | (iter-6) | prev + `mem_prime=(5,), store_pair=True, b3_last=(15,), b3l_diffs=True, l4_gmin=(12,30)` |
+| 1038 | 3174858 | H-031 mem-hazard fix + H-030 tie-break + H-029 idx_select on the 1053 stack |
 
-## Floors (calibrated 2026-07-23, see tools/diagnose_kernel.py)
+## Floors (recalibrated 2026-07-27 at 1038, see tools/diagnose_kernel.py + tools/export_dashboard.py)
 
-- Op-mix floor: valu 6262/6 = ~1044 cyc-equiv at 1070 actual. CRITICAL
-  (H-006 profile): cycles ~100-950 are TRIPLE-saturated (load+valu+alu
-  ~100%); aggregate slack (alu 93.9%, load 89.8%) is setup/drain artifact.
-  Only PROPORTIONAL multi-engine op removal (hash: valu+alu together) moves
-  the middle; scheduling slack lives in the ~120-cycle drain tail.
-- Flow-offload ceiling: floor -> ~962 if routing/idx arithmetic moves to flow (29.6% used)
-- Load floor: 1,936 gathers / 2 per cyc = 968 (load 87.4% busy)
-- Hash-only absolute floor: 49,152 lane-ops / 60 per cyc = 819
-- Scratch: 1535/1536 words used at pool_sizes=(17,4); 32 words freeable at
-  ZERO cycle cost via pool_sizes=(17,3) (H-002 side finding, verified 1140).
+- **Total compute floor: 60,841 alu+valu lane-ops / 60 per cyc = 1,015.**
+  We are 23 cycles above it — scheduling slack is nearly exhausted; only op
+  REMOVAL moves the number. Purpose split (lane-ops): Hash 46,656 / Idx
+  7,448 / Routing 6,249 / Setup 488.
+- Per-engine: valu 6,125/6 = 1,021 (binding, 98.3% util); alu 11,841/12 =
+  987; load 1,900/2 = 950 (2/2 for 850 consecutive cycles in 100-950,
+  176 free slots all in setup+drain, structurally unreachable).
+- Hash floors: alu 10,584/12 = **882 (hash-internal binding engine)**; valu
+  4,509/6 = 752; combined 46,656/60 = 778 (was 819 — hash shed 2,496
+  lane-ops since 2026-07-23). Within the hash, alu binds; globally, valu
+  binds. Rebalancing prize between them = 104 cyc, but both squeeze.
+- Latency is NOT the wall: dependency-only span (no slot limits) = 439
+  cycles vs 1,038 actual. Gathers wait mean 25.5 cyc for SLOTS, not
+  addresses (13/1,851 placed at dep-ready).
+- Scratch: 1533/1536 words used (3 free).
+- **Leaderboard target analysis (2026-07-27): 892 confirmed achievable by
+  someone (vliw-challenge.fly.dev).** 892 is 123 cyc BELOW our op-count
+  floor -> requires removing ~6,389 lane-ops (10.5% of compute) even with
+  flow saturated, plus loads 1,900 -> <=1,784. If hash is held fixed that
+  is 45% of all non-hash arithmetic. Idx alone is 7,448 lane-ops — folding
+  the position recurrence into existing hash madds nearly closes the gap by
+  itself. Alternatively a hash form ~1.56 ops/hash shorter closes it
+  exactly (suspiciously clean — H-016 closed FUSIONS of the current form,
+  never alternative decompositions). Caveat: the site has two boards
+  (with/without final-idx writeback); 892's board is unverified.
 
 ## Strain roster
 

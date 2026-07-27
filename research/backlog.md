@@ -936,3 +936,51 @@ correct, measured worse at every configuration tried]
   `research/strains/scheduler/STATE.md`'s H-033 section.
 - log: 2026-07-25 opened (user-authorized large effort); same session,
   implemented, verified correct, measured and rejected.
+
+### H-035 [strain: op-reduction] [status: testing]
+- statement: fold the position/idx recurrence into the hash's existing
+  multiply_add slots. Idx = 7,448 lane-ops (~14.5/group-round) at 1038; the
+  recurrence p <- 2p + b and addr = base_d + p are affine, and the hash
+  already issues 2,950 madds whose a*b+c shape can carry an extra affine
+  term with the right operand arrangement (constants pre-scaled so the
+  hash's own multiply doubles p for free, position carried in a biased/
+  scaled domain like c5_prexor did for values). Driving Idx 7,448 -> ~1,000
+  yields ~6,400 lane-ops = the entire measured gap to the 892 leaderboard
+  point (see RESEARCH.md floors, 2026-07-27). The "gather-address madd
+  absorbs it" note (H-002 area) sketched this; the 892 analysis promotes it
+  from nice-to-have to the single largest open lever.
+- predicted_gain: up to -100 cyc composed (floor 1,015 -> ~910); even 1/3
+  of it is the biggest available accept. cost: L. depends: none.
+  Touches: idx-state block (st/va recurrence) + hash madd operand tables.
+- reopen-context: H-029 (idx_select) showed the recurrence is malleable;
+  c5_prexor (H-015) proved the carry-work-in-a-transformed-domain trick.
+
+### H-036 [strain: op-reduction] [status: testing]
+- statement: alternative algebraic DECOMPOSITIONS of myhash (not fusions).
+  H-016/H-025 closed fusion/MITM/CEGIS over the CURRENT step sequence
+  (2.36T candidates, kf<=3 closed, kf=4 CPU-walled) but never searched
+  re-derivations: replace stage subsequences with different op bases
+  (e.g. exploit that only val%2 feeds routing; multiply distribution over
+  the xor-shift structure; shared subexpressions ACROSS the 6 stages given
+  known constants; valu-madd-canonical forms that turn 2-op stages into
+  1 madd). Target: -1.5 ops/hash average = -6,144 lane-ops ~= the 892 gap.
+  Justification for reopening a closed-adjacent area: 892 exists on the
+  leaderboard, and 46,656 of 60,841 lane-ops are hash — no non-hash-only
+  path reaches 892 unless Idx folds nearly to zero (H-035).
+- predicted_gain: -1 op/hash = -68 cyc on the floor. cost: L (search
+  tooling exists from H-016/H-025). depends: none. Touches: hash block only.
+- guard: every candidate must be bit-exact on all 2^32 inputs or carry a
+  domain argument (values are arbitrary 32-bit words — no input structure).
+
+### H-037 [strain: flow-balance] [status: testing]
+- statement: load_offset is the ONLY unused load opcode (census 2026-07-27).
+  ("load_offset", dest, addr, offset) reads mem[scratch[addr+offset]] into
+  scratch[dest+offset] — per-lane gather where the +offset indexing is free.
+  Check whether the 8 per-lane gathers of a group can drop their per-lane
+  address arithmetic (the va/st address adds on alu/valu) by keeping a base
+  vector whose lanes are pre-offset, saving addr-setup lane-ops at ZERO
+  load-slot cost. Same slot count, fewer address ops; also screen vs the
+  -116 loads needed for 892 (this does not reduce loads, only their
+  feeding arithmetic).
+- predicted_gain: small, -5..-15; cheap to close. cost: S. depends: none.
+  Touches: gather-address emission only.

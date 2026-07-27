@@ -169,3 +169,32 @@ Seeded 2026-07-23 from the 2148->1140 campaign's measured rejections.
 - reopen-if: >=64 scratch words free for leaf-diff tables (then re-cost:
   likely still valu-heavier), or mid-kernel valu <90% with r15 the strict
   binder.
+
+### G-18 Pair-preload of both children + single vselect per level (H-035-pre)
+- statement: speculatively load tree[2i+1] and tree[2i+2] a round early so
+  the parity resolves each level with ONE vselect instead of a 2^d-1 fold
+  tree; stagger the speculative loads across levels to spread load demand.
+- evidence (measured at mainline 1038, 9/9 green; agent, 2026-07-27):
+  * lane-aligned vselect arms force 2 scalar gathers/walker: 217 served
+    group-rounds x 16 = +3,472 load slots vs 176 free schedule-wide and
+    ZERO free across cycles 100-950 (load 2/2 for 850 consecutive cycles).
+    Load floor 950 -> 2,686 (+1,648) to shed 886 vec-ops (valu floor
+    1021 -> ~886). Cheapest slice (25 L4-served group-rounds) is still
+    +400 loads -> floor 1,150, and is strictly dominated by lowering
+    l4_gmin (plain gather = 8 loads, not 16, for the same 20.8 ops).
+  * vload variant IS possible (siblings 2i+1/2i+2 are contiguous -- a gap
+    in G-16's walker-to-walker contiguity measurement) at 8 load slots/
+    group-round, but lands transposed: +16 alu moves/group-round (=3,472
+    vs 575 free alu slots, alu floor -> 1,276) and >=64 CONTIGUOUS free
+    scratch words when 3 exist (1533/1536).
+  * pipelining half: placement-trace replay shows 1,851 gathers accrue
+    47,268 queue-cycles (mean 25.5) and only 13 (0.7%) are placed at their
+    dependency-ready cycle -- loads wait for SLOTS, not addresses, so
+    earlier address availability moves nothing (confirms G-11 at 1038;
+    independently reproduced to the digit by tools/export_dashboard.py).
+  * the latency payoff (1 op post-parity) is already realized at zero load
+    cost by H-023/H-027's newest-parity-last folds.
+- reopen-if: G-3's conditions, sharpened -- load util drops below ~75%
+  with free slots INSIDE cycles 100-950, AND >=64 contiguous scratch words
+  free (vload variant) or >=256 (scalar variant), AND alu gains >=8%
+  headroom for the vload transpose.
