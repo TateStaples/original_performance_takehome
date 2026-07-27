@@ -996,7 +996,7 @@ correct, measured worse at every configuration tried]
 - predicted_gain: -1 op/hash = -68 floor cyc if anything exists; P(hit)
   low. cost: M (tooling exists). Touches: tools/ only unless a hit.
 
-### H-039 [strain: flow-balance] [status: testing]
+### H-039 [strain: flow-balance] [status: rejected -> graveyard G-22 (crossover behind L5; corrects H-026 mechanism; the "-116 loads" claim below is RETIRED — no supply-side mechanism exists; byproduct: front 0-60 load window reachable via dead-reg staging)]
 - statement: routing lane-op + load-count reduction via mem_prime
   generalization -- the last non-hash lane-op mass (Routing 6,249 lane-ops,
   1,848 loads). H-026's c5_primed_gather_levels=(5,) mechanism trades

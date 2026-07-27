@@ -273,3 +273,33 @@ Seeded 2026-07-23 from the 2148->1140 campaign's measured rejections.
   or a structurally different kernel organization.
 - reopen-if: a sub-11-op hash appears (G-20 reopen), or an addressing mode
   lands that reads mem[a+b] without materializing a+b.
+
+### G-22 mem_prime generalization beyond L5 + the -116-loads supply side (H-039)
+- claim: generalize H-026's primed gather tables to more levels to cut
+  Routing lane-ops and load count (the "-116 loads for 892" leg).
+- evidence: REJECTED at every configuration. (5,6): best 1039 (+1) even
+  with region-exact hazards + dead-reg staging + placement floors;
+  (5,6,7): 1044; (5,6,7,8): 1065. Lane-ops DO drop ((5,6): -144) but come
+  off slack engines while wave costs displace the critical path. Reverse
+  control: dropping (5,) = 1057, so L5 stays load-bearing. MECHANISM
+  CORRECTION for H-026's L6 note: the "coarse mem model serializes
+  priming into first gathers" explanation is FALSE (priming retires ~59,
+  first affected gathers 135/167); the real ledger is (a) compute-
+  saturated front (valu 6/6, alu 12/12 from cycle ~9) makes each wave's
+  ^C5 displace round compute ~1:1, (b) free load slots exist only in the
+  dependency-dead 0-60 front (~90) and the useless drain, (c) elided
+  lane-xors sit in the load-bound 135-950 window where compute relief
+  shortens nothing. Cost doubles per level, gain constant — crossover is
+  already behind L5. Supply side of -116 loads: priming ADDS loads; with
+  G-16 (demand), G-18 (speculation), G-21 (relocation) the load-count leg
+  is closed inside the current organization (consistent with H-040: 892
+  is the no-indices board; select-tree conversion, not fewer loads, is
+  the frontier lever).
+- landed (default OFF, negative controls): mem_prime_region_hazards,
+  mem_prime_dead_reg_staging, mem_prime_min_cycles. The region-hazard
+  machinery is reusable if mid-window load slack ever opens.
+- byproduct worth keeping: the front 0-60 dependency-dead load window
+  (~90 slots) is REACHABLE via dead-reg staging — useful to any future
+  hypothesis needing setup-time mem traffic (e.g. H-041 select-tree prep).
+- reopen-if: an accept opens load slack inside cycles 100-950, or the
+  organization changes so the front is no longer compute-saturated.
