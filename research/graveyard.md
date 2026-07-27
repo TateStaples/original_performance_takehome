@@ -303,3 +303,39 @@ Seeded 2026-07-23 from the 2148->1140 campaign's measured rejections.
   hypothesis needing setup-time mem traffic (e.g. H-041 select-tree prep).
 - reopen-if: an accept opens load slack inside cycles 100-950, or the
   organization changes so the front is no longer compute-saturated.
+
+### G-23 Gather->select-tree conversion at the current op census (H-041)
+- claim: corsix's frontier organization (>280 gathers replaced by select
+  trees, valu:load:flow 7.5:2:1 per cycle) could convert here directly.
+- evidence: REJECTED at the current census, three independent ways
+  (tools/occupancy_hist.py landed; full tables in flow-balance/STATE.md).
+  * we ALREADY run his balance in the steady window (valu 6.0/6, alu
+    12/12, load 2/2, flow 0.8/1); 666/1038 cycles have all four engines
+    full. Cycle floors: valu 1020 (binder), alu 990, load 950, flow 797.
+    Friction to the valu floor is only 18 cycles (ramp 4, steady 6,
+    drain 8).
+  * gathers by level: L4 312 remaining (39 unserved group-rounds), L5-L10
+    256 each. Corsix's ">280" ~= our remaining L4 set; every unserved
+    group-round is measured negative at our mix (l4_gmin count sweep
+    monotone around (9,30); first-ever set-form composition sweep: 14
+    alternatives tie or lose).
+  * L5 dead 3 ways: scratch (needs 256 words, ~3 free, even one 8-word
+    table OOMs), engine arithmetic (31 ops vs 8 loads on a valu-bound
+    schedule 70 cyc above the load floor), window (37 load-full-valu-free
+    cycles schedule-wide).
+- THE JOINT CONDITION (the real finding): conversion activates only below
+  ~950 cycles, i.e. AFTER ~400 valu + ~600 alu slots are removed. Corsix's
+  levers run in his order — shrink the graph first, THEN convert gathers
+  into the freed compute. (b) without (a) loses on every axis. Where his
+  ~400-valu-slot reduction comes from is NOT yet explained by anything
+  open here (hash closed G-20, idx closed G-21, routing at floor) —
+  deep-reading the frontier writeups for the graph-shrink mechanism is
+  the successor task (H-043).
+- byproducts: epoch-1 served-pair composition is a free plateau
+  ({29,31}/{28,31}/{29,30} tie 1038); set-form l4_gmin specs {0,31}/{0,1}
+  CRASH (IndexError, the known idx_select/two_minus_fp_vec fallback
+  hazard) — future set sweeps must check `correct` per point.
+- reopen-if: any accept lands the schedule below ~950-990, or 256+
+  scratch words free up, or an op-mix change makes valu no longer the
+  binder. The 39 L4 group-rounds reactivate FIRST (15 ops/8 loads, zero
+  new scratch — the standing l4_gmin sweep slides there on its own).

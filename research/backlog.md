@@ -1017,7 +1017,7 @@ correct, measured worse at every configuration tried]
   research/web task, no kernel edits.
 - predicted_gain: strategic (redirects or retires the 892 target). cost: S.
 
-### H-041 [strain: flow-balance] [status: open]
+### H-041 [strain: flow-balance] [status: rejected -> graveyard G-23 (we already run the frontier balance; conversion activates only below ~950 after ~400 valu + ~600 alu removal; L5 dead 3 ways; occupancy tool landed)]
 - statement: convert more gather levels to selection trees over preloaded
   node values, with the engine mix rebalanced JOINTLY (corsix, 971 with-idx:
   ">280 gathers can be gainfully replaced", then valu:load:flow held at
@@ -1031,7 +1031,7 @@ correct, measured worse at every configuration tried]
   named primary lever. cost: L. Touches: tournament/gather emission + mix.
 - source: H-040 (strains/cross/STATE.md), corsix writeup.
 
-### H-042 [strain: scheduler] [status: open]
+### H-042 [strain: scheduler] [status: PARKED (user directive 2026-07-27: algo-side research first — fitting/allocation deferred; also H-041 occupancy data caps beam recovery at ~12 cyc, ramp 0-100 ~4 + drain 950-1038 ~8, steady window 99.3-99.8% packed and NOT beamable)]
 - statement: replace greedy bundle packing with a small beam/anneal search
   over candidate bundles (wallace, austinwallace.ca/kernel: beam width 2,
   3 candidates over the first 25 cycles already paid at 1,137). Our
@@ -1045,3 +1045,41 @@ correct, measured worse at every configuration tried]
   cost: M-L. Touches: scheduler only.
 - source: H-040, wallace writeup. reopen-context: supersedes G-15's
   "rebalancing exhausted" ONLY in the joint selection+scheduling sense.
+
+### P-17 [note] set-form l4_gmin crash hazard
+- set specs {0,31}/{0,1} crash (IndexError) via the known idx_select/
+  two_minus_fp_vec fallback hazard, now reachable through set-form sweeps.
+  Future set sweeps must check `correct` per point. Fix only if set-form
+  compositions ever become a live lever (today they tie at best, G-23).
+
+### H-043 [strain: algo] [status: testing]
+- statement: deep-read the frontier writeups and extract the GRAPH-SHRINK
+  mechanisms item-by-item: corsix.org/content/anthropics-compiler-challenge
+  (971/994) and austinwallace.ca/kernel (1,137/1,152), plus any linked
+  code/repos. G-23 quantified that the frontier removed ~400 valu + ~600
+  alu slots relative to us BEFORE gather conversion pays — and nothing
+  open here explains where that reduction comes from (hash closed G-20,
+  idx closed G-21, routing at floor). Map every disclosed technique onto
+  our ledger: already-done / closed-negative-here (cite G-id; flag any
+  claim that contradicts a closure — that closure is then suspect) /
+  genuinely new. Rank the new ones by ideal-machine gain.
+- predicted_gain: strategic; the gap is 98 cyc and unexplained. cost: S-M.
+- source: G-23's successor-task clause; user directive (algo-first).
+
+### H-044 [strain: algo] [status: testing]
+- statement: IDEALIZED-MACHINE cost model (user directive 2026-07-27:
+  assume INFINITE SCRATCH + PERFECT SLOT ALLOCATION; algorithm research
+  first, fitting later). Build the model + tool: for a candidate
+  algorithm (op multiset + dependency structure), ideal cycles =
+  max(ceil(alu_slots/12 + valu_slots/6 combined optimally), load/2,
+  store/2, flow/1, dependency span). Then SOLVE the serving-strategy
+  question per tree level under infinite scratch: full-forest preload
+  (2047 words) makes gathers optional everywhere; selects can also be
+  valu madds (b + cond*(a-b)) not just flow vselects — find the min-cost
+  mix (gather vs select-tree vs madd-select vs primed tables) per level,
+  and the resulting global ideal floor. Deliverable: the ideal floor of
+  (a) our current algorithm, (b) the best serving mix, (c) sensitivity —
+  which op-count reductions actually move the ideal floor (so algo
+  research can target ONLY those).
+- predicted_gain: strategic compass for all subsequent algo work.
+  cost: M. Touches: tools/ only (new file), no kernel changes.

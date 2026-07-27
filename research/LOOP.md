@@ -5,6 +5,17 @@ wake signal); a ScheduleWakeup heartbeat (+1s) is the fallback. If resuming
 from a compacted/fresh context: read this file + RESEARCH.md + backlog.md, then
 continue from whatever step the state implies.
 
+0. **RESEARCH MODE (user directive 2026-07-27): ALGO-FIRST under an
+   idealized machine.** Evaluate hypotheses assuming INFINITE SCRATCH and
+   PERFECT SLOT ALLOCATION: what matters is the op multiset (per-engine
+   slot counts), the dependency span, and the resulting ideal floor
+   (see H-044 tool) — NOT whether a change fits the current 1038 schedule,
+   scratch budget, or greedy packer. Fitting/allocation work (beam packing,
+   scratch juggling, schedule tie-breaks) is PARKED until the algo side is
+   resolved; a hypothesis that loses on the real machine but wins on the
+   ideal one is a KEEP (flag-gated), not a reject — record its ideal-floor
+   delta. Rationale: G-23 showed we already run the frontier's slot
+   balance; the 98-cyc gap to 940 is algorithmic.
 1. **Re-arm heartbeat**: ScheduleWakeup +1s ("research-loop heartbeat").
 2. **Sync & orient**: `git pull`; read `research/RESEARCH.md`, `research/backlog.md`.
 3. **Harvest sweep**: check `research/strains/sweep/results/*.json` for configs
