@@ -1203,3 +1203,19 @@ correct, measured worse at every configuration tried]
 - verdict: residual flow prize (~55 modeled cyc) is EMISSION-ORDER-shaped:
   requires beam/interleave over emission order (F-11) or the H-047
   restructure. Per-site selection under fixed order is done.
+
+### H-049 [strain: scheduler] [status: testing] (H-042's F-11 successor)
+- statement: EMISSION-ORDER search. H-042 proved per-site selection under
+  fixed emission order is exhausted at 1031 and the residual modeled flow
+  prize (~55 cyc) is emission-order-shaped: flow bubbles occur exactly
+  when no select is ready (structural cadence anti-correlation, 0/155
+  sites with a bubble within retire-delta<=3). Attack the ORDER: beam /
+  interleave search over group-round emission sequence (wallace precedent:
+  beam width 2 over the ramp paid at his scale), using H-042's
+  instrumentation (spelling_plan_search's 0.1s/build exact objective) as
+  the evaluation loop, with spelling plans re-derived per candidate order.
+  Targets from occupancy: ramp 0-100 (~4 cyc), drain 950-1031 (~8 cyc),
+  and cadence-shifting interleaves that de-synchronize round boundaries
+  from flow-bubble windows in the steady state.
+- predicted_gain: unknown; bounded above by ~55 modeled; ramp+drain ~12
+  measured-recoverable. cost: XL. depends: H-042 tooling (landed).
