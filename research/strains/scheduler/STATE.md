@@ -870,3 +870,132 @@ the seams.
   per-cycle regret profiler (`regret`). Any future emission-order or
   spelling change can re-run the whole analysis in ~2 min to re-measure
   its own residual packing slack.
+
+## H-049 (2026-07-27): emission-order search (H-042's F-11 successor) —
+## STRAIN FRONTIER 1031 -> 1023 (-8), order space mapped, structured
+## families all closed, windowed local search is the payer
+
+Charter: H-042 proved per-site spelling under the FIXED emission order is
+exhausted at 1031 and the residual modeled flow prize is emission-order-
+shaped. Attack the order itself: the interleave of group-round emissions
+presented to the greedy scheduler.
+
+### Mechanism landed (dev.py, kwarg `emission_plan`, default () = bit-identical)
+
+`build_kernel_scheduled` gained `emission_plan`: when non-empty it
+REPLACES the diagonal step loop with an explicit sequence of entries,
+each `(r, g)` (emit that group-round contiguously) or
+`("rr", ((r1,g1),(r2,g2),...))` (round-robin those group-rounds' stage
+generators at the H-021 pool-dead yield points). Validated to cover every
+(round, group) exactly once with per-group rounds ascending — any such
+order is DATAFLOW-correct by construction (the scheduler re-derives all
+hazards from the stream), but parity_ring borrow windows are
+liveness-TIMED, so every candidate is simulation-verified
+(run_variant.measure, ~0.17 s/eval: build + frozen grader + correctness).
+Default off verified programmatically bit-identical vs HEAD on both the
+mainline (1038 dev BASE) and the 1031 frontier config; an explicit
+default-order plan also reproduces the default stream bit-for-bit.
+Driver: tools/emission_order_search.py (phase1 structured families +
+windowed local search, multiprocessing, JSONL checkpoints + per-best
+plan dumps). All searches on the frontier config MINUS
+flow_spelling_plan (site numbering is order-specific), greedy = 1032.
+
+### Order-space map: every structured family closed at or above 1032
+
+phase1 (57 evals, one axis at a time + pairwise composition of ties):
+| family | best | note |
+|---|---|---|
+| baseline (4,3)-skew default order | 1032 | |
+| wave_order rev / rot:1 / rot:2 | 1070-1075 | 2 of 3 INCORRECT (ring windows) |
+| group_order rev / rot:1..4 | 1043-1060 | correct, all worse |
+| zip (group-granular cross-wave interleave) | 1043-1053 | INCORRECT both forms |
+| stage_rr tail 1/2/3 (stage round-robin drain) | 1032/1036/1037 | tie at 1 step |
+| stage_rr ramp 1/2/3 | 1033-1037 | |
+| stage_rr all steps (per-step / per-wave) | 1159 / 1058 | G-5 re-confirmed |
+| tail_df 1/2/3/4/5 (depth-first drain) | 1032/1032/1067/1063/1108 | |
+| lag perturbations (11 shapes) | 1038 best | most worse or incorrect |
+| 8 blocks stagger 1/2 | 1100 (incorrect) / 1040 | |
+| 13 uneven blocks stagger 2 (external-repo shape) | 1096 | correct, -56 worse |
+| 2 blocks | incorrect | |
+| pairwise compositions of ties | >= 1032 | |
+
+The (4,3) diagonal is locally optimal at every structured granularity;
+aggressive reorders (wave rev, zip, 2-block) BREAK ring-borrow
+correctness — the sim check is load-bearing, not paranoia.
+
+### The payer: windowed single-entry local search (+ sideways plateau walk)
+
+Move set: pop one entry, reinsert +-{1,2,4,8} positions (validity-checked),
+windows by position (ramp = first 120 entries, drain = last 120, all) or
+by round (`r:LO-HI`); accept strictly-better, walk sideways at p=0.7.
+| round | window | budget | evals | result |
+|---|---|---|---|---|
+| 1 | ramp+drain | 1500 s | 60.5k | 1032 -> 1026 (6 paying moves: 3 drain-side r12-14 block-3 reorders, 3 ramp moves) |
+| 2 | all | 1500 s | ~58k | 1026 -> 1024 (2 moves, both ramp region) |
+| 3 | ramp+drain | 1800 s | ~70k | 1024 -> 1023 (1 ramp move) |
+| 4 | r:8-12 (H-051 epoch-seam intel) | 1200 s | 55k | ZERO improvement |
+| rr micro | stage-granular merges (pairs/triples), ramp+drain | 467 cands | | ZERO winners |
+
+The paying moves are small, discrete, and confined to H-041's soft
+windows (ramp c0-100, drain/steady seam r12-15); the walk between
+descents accumulates hundreds of sideways displacements (434/512 entries
+differ positionally from default) but the cycle-relevant content is the
+~9 descents. Round 4 is the important negative: the r9-11 epoch seam
+(H-051's 5-cycle regret cluster, c=913-932) did NOT yield to 55k
+whole-entry order moves targeted exactly at rounds 8-12 — that seam's
+staircase is chain-bound at this order granularity, same class as the
+drain CP.
+
+### Composition results (the surprise: order absorbs the spelling prize)
+
+- flow_spelling_plan re-search (greedy sweep, flow + aux moves — aux =
+  forcing _sched_vec valu/alu splits, i.e. the offline form of the
+  external repo's SCHED_FLEX_ALU deferred binding) on the 1026, 1024 AND
+  1023 orders: fixpoint at ZERO flips, plan (). H-042's 1-flip win is
+  subsumed; per-site selection (including dynamic valu->alu class) has
+  no residual on searched orders. Conversely the old ((354,1),) pin is
+  order-specific and was dropped.
+- l4_gmin re-sweep (7..9 x 29..31) at 1026, 1024, 1023: (8,30) optimal
+  every time, margins 3-9 cycles — the P-3 slide did NOT fire (relief
+  lands in ramp/drain, not the steady L4-serving window).
+
+### Frontier + verification
+
+**New strain frontier: 1023** = parity_ring=True, l4_gmin=(8,30),
+4-ring parity_ring_plan (unchanged), flow_spelling_plan=(),
+emission_plan = tools/h049_best_plan.json (512-entry committed artifact).
+Verified: seeds {unseeded,1,2,3,7,42,99} all 1023 correct;
+debug_compares=True 1023 correct; flags-off full gate 9/9 green at 1031
+(perf_takehome.py untouched). Occupancy (100-cyc windows) vs default
+order: ramp load slots pulled forward (108 -> 118 in c0-99), mid-stream
+alu packing up (~1144 -> 1192 in c800-899), drain 32 -> 24 rows past
+c1000 — the 8 cycles come 3 from drain-side seams, ~5 from ramp/seam
+compaction, ~0 from the steady window.
+
+### Verdict vs the ~55-cyc modeled prize
+
+Realized: 8 cycles (1031 -> 1023), roughly the full H-041/G-23
+"ramp+drain measured-recoverable ~12" minus the order-resistant epoch
+seam (5) and residual ramp CP (H-051 profile: ramp 4, seams 2, epoch
+seam 5, drain 7 at 1031). The steady-state ~40-cycle remainder of the
+modeled flow prize did not move under ANY order family — with H-042
+(spelling exhausted) and H-051 (packing exhausted, LB 1015) this
+triangulates: below ~1023 needs op-count/chain changes (algo strain),
+not placement, selection, or order.
+
+### Follow-ups (driver)
+
+- F-12: mainline port decision — perf_takehome.py has no emission_plan
+  machinery; porting means either the kwarg (flag-free constant plan
+  baked as a module literal) or re-expressing the ~9 load-bearing moves
+  as local reorder rules in the step loop. The committed artifact +
+  emission_order_search.py reproduce 1023 on dev for whoever ports.
+- F-13: restart-portfolio walks (new RNG seeds) still pay slowly
+  (~1-2 cyc / 25 min round, not yet flat); cheap background continuation.
+- F-14: re-run tools/backtrack_sched.py (H-051, on main) against the
+  1023 build to re-localize the residual ~8 friction cycles before
+  anyone re-opens an order/packing axis.
+- Plans are config-specific measurement artifacts (same class as
+  parity_ring_plan): re-derive via emission_order_search.py after ANY
+  flag/algo change; spelling re-search after any order change (both
+  cheap, ~25 min / ~7 min).
