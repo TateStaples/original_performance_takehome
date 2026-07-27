@@ -761,3 +761,20 @@ per-site selection. That is the honest next scope for the remaining
   unstarted: move set = round_robin interleave order + generator
   boundaries in the ramp/drain windows only; per-site selection should
   ride ON TOP of it (compose the plan search after each reorder).
+
+## F-9 (2026-07-27): H-042 win ported to flag-free mainline — perf_takehome.py 1032 -> 1031
+
+Ported `flow_spelling_plan=((354,1),)` to perf_takehome.py. Site 354
+identified semantically (stack-instrumented dev build, frontier config):
+the FIRST of the two level-2 first-fold `dual_fold` races of
+(round 13, group 29), unringed L==2 branch. Perf's race-site stream
+re-numbered with dev's keying rule: zero drift — perf's flow-site 354
+is the same semantic site, and forcing it to encoding 1 (valu madd)
+reproduced 1031 before any edit. Landed flag-free house-style: at the
+unringed L==2 branch, `(multiply_add if (round, g) == (13, 29) else
+first_fold)` on the first fold — `multiply_add` is placement-identical
+to dual_fold's valu encoding (same op/reads/writes via scheduler.emit).
+Gates (each run twice): test_kernel_cycles CYCLES 1031; submission
+tests Ran 9 OK, all CYCLES 1031. Port note stands: the pin is a
+config-specific measurement artifact — re-derive (tools/
+spelling_plan_search.py) after any emission-order change to perf.

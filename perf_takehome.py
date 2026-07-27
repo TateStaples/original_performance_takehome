@@ -1266,7 +1266,19 @@ class KernelBuilder:
                     # nv=b1 (raw parity), st=b0 (single bit); b0 copy (st folds b1 next) = pure vselect(c,a,a,a) on idle flow engine.
                     vsel(condB[j], st, st, st)
                     fold_position(st, nv)                    # fold b1: st = b0b1
-                    first_fold(temp_pool[s], nv, diffs[0], evens[0])
+                    # H-042 spelling plan: an offline joint selection x
+                    # scheduling search (greedy sweep + plateau walk over
+                    # per-site encoding forcings, exact rebuild objective)
+                    # found exactly one paying flip for this config: pin THIS
+                    # first-fold of (round 13, group 29) -- flow-race site 354
+                    # in emission order, in the drain-adjacent soft window --
+                    # to its valu madd spelling instead of racing it. Greedy
+                    # emit_any is myopic: it takes the flow slot that a later,
+                    # tighter op needs; returning it re-routes the downstream
+                    # races (-1 cycle). The two spellings are equivalent
+                    # (cond is raw 0/1 parity), so only cycles move.
+                    (multiply_add if (round, g) == (13, 29) else first_fold)(
+                        temp_pool[s], nv, diffs[0], evens[0])
                     first_fold(tm[j], nv, diffs[1], evens[1])
                     vsel(nv, condB[j], tm[j], temp_pool[s])
                 elif ring is not None:  # L == 3
