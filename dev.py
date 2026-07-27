@@ -619,6 +619,7 @@ class KernelBuilder:
         gather_load_offset: bool = False,
         idx_boundary_select: bool = False,
         parity_ring: bool | tuple[tuple[int, int], ...] = False,
+        parity_ring_extras: tuple[int, ...] = (),
         store_order: str = "group",
         reverse_newest_parity_fold: bool | Iterable[int] = (),
         newest_parity_last_fold_race: bool = True,
@@ -2225,6 +2226,7 @@ class KernelBuilder:
                 return
             assert state_vecs is not None and node_val_vecs is not None and hash_chain_vecs is not None
             bs8 = group_count // 4  # 8 at the asserted shape
+            ring_leftover: dict[int, list[int]] = {0: [], 1: []}
 
             def donors_of(block: int, with_vals: bool) -> list[int]:
                 gs = range(block * bs8, (block + 1) * bs8)
@@ -2252,8 +2254,41 @@ class KernelBuilder:
                                      4 if epoch == 0 else rounds - 1, g), g))
                 for g in targets:
                     if len(donors) < 3:
-                        break
+                        ring_leftover[epoch].append(g)
+                        continue
                     parity_ring_map[(epoch, g)] = (donors.pop(0), donors.pop(0), donors.pop(0))
+            # Epoch-level extra donors for the groups the block pools could
+            # not fund (st+nv of one donor block = 16 vectors = 5 rings):
+            #   lv[0..23] (3 vectors): setup-dead once the broadcast tables
+            #   and mem_prime staging (both emitted before any round) have
+            #   read it; usable in BOTH epochs (e0 ring reads end at slot 7,
+            #   e1 ring writes start at slot 17). Unavailable when
+            #   idx_boundary_select's arm vectors live there. The b3l dffold
+            #   fallback's r15 leaf temps also ride lv, but only ever write
+            #   AFTER the last ring read in emission order (slot 24).
+            #   root_nv_vec (1 vector): e1 only -- its last read is block
+            #   3's round-0 fold (slot 9), after every e0 ring access but
+            #   before none of e1's (first e1 ring write is slot 17).
+            #   Requires c5_prexor (the r11 root rounds fold the PRIMED
+            #   root, so root_nv_vec really is dead after slot 9).
+            extras: dict[int, list[int]] = {0: [], 1: []}
+            if not idx_boundary_select:
+                lv3 = [level_table + k * VLEN for k in range(3)]
+                extras[0] += list(lv3)
+                extras[1] += list(lv3)
+            if c5_prexored_value_domain:
+                extras[1].append(root_node_val_vec)
+            for epoch in (0, 1):
+                if epoch not in parity_ring_extras:
+                    extras[epoch] = []
+            for epoch in (0, 1):
+                for g in sorted(ring_leftover[epoch],
+                                key=lambda g: (not is_pair_tournament_served(
+                                    4 if epoch == 0 else rounds - 1, g), g)):
+                    if len(extras[epoch]) < 3:
+                        break
+                    parity_ring_map[(epoch, g)] = (
+                        extras[epoch].pop(0), extras[epoch].pop(0), extras[epoch].pop(0))
 
         # --- rounds ---
         # The round body is a GENERATOR yielding at stage boundaries
