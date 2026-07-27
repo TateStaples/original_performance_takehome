@@ -617,6 +617,7 @@ class KernelBuilder:
         idx_recurrence_race: bool = False,
         idx_select_before_madd: bool = False,
         gather_load_offset: bool = False,
+        idx_boundary_select: bool = False,
         store_order: str = "group",
         reverse_newest_parity_fold: bool | Iterable[int] = (),
         newest_parity_last_fold_race: bool = True,
@@ -832,6 +833,28 @@ class KernelBuilder:
           the boundary-crossing branch (c5_prexored_value_domain's key-indexed gaddr_reconstruction_vecs)
           is left alone since exploiting the same trick there would need
           new persistent scratch this kernel doesn't have (1533/1536 used).
+          `idx_boundary_select` (H-035) closes exactly that leftover: the
+          epoch-exit boundary conversion `madd(st,st,negtwo,rec_vecs[key]);
+          vec(-/+, st, st, par)` becomes `vsel(par, par, rec-/+1, rec);
+          madd(st, st, negtwo, par)` -- the same select-vs-add reshaping,
+          for the boundary keys. The rec-/+1 arm vectors have no free
+          persistent scratch either, so they ride the setup-dead
+          level_table words lv[0..15] (one `vec` off the existing rec
+          vector each, placed in the setup lull), the same hosting trick
+          omf1_vec uses for lv[24..31]. Like idx_select, this is engine
+          eligibility (valu/alu -> flow), NOT an op-count cut: H-035's
+          analysis (see research/strains/op-reduction/STATE.md) shows the
+          idx recurrence cannot fold into the hash madds at all -- any
+          madd operand arrangement that isolates bit0 of the hashed value
+          multiplies by 2^31, which destroys the position/address bits it
+          is supposed to be biasing. Safe only while nothing else writes
+          lv post-setup: the b3l_diffs round-15 dffold FALLBACK reclaims
+          lv[0..31] as fold temps, so (exactly like idx_select vs
+          omf1_vec) builds where that fallback fires are rejected with a
+          loud assert instead of risking a stream-order corruption.
+          Requires c5_prexored_value_domain + the full-width lv scratch;
+          mutually exclusive with idx_recurrence_race at boundary sites
+          (idx_boundary_select takes priority when both are set).
 
         - `reverse_newest_parity_fold` (H-023): reverse the served-level-4 tournament fold
           order so the NEWEST parity (b3 = the raw parity riding `nv`,
@@ -1003,6 +1026,7 @@ class KernelBuilder:
                 shallow_tournament_reverse_select_race=shallow_tournament_reverse_select_race,
                 idx_recurrence_race=idx_recurrence_race,
                 idx_select_before_madd=idx_select_before_madd,
+                idx_boundary_select=idx_boundary_select,
                 store_order=store_order,
                 reverse_newest_parity_fold=reverse_newest_parity_fold,
                 newest_parity_last_fold_race=newest_parity_last_fold_race,
@@ -1040,6 +1064,7 @@ class KernelBuilder:
                 shallow_tournament_reverse_select_race=shallow_tournament_reverse_select_race,
                 idx_recurrence_race=idx_recurrence_race,
                 idx_select_before_madd=idx_select_before_madd,
+                idx_boundary_select=idx_boundary_select,
                 store_order=store_order,
                 reverse_newest_parity_fold=reverse_newest_parity_fold,
                 newest_parity_last_fold_race=newest_parity_last_fold_race,
@@ -1903,6 +1928,30 @@ class KernelBuilder:
                     scheduler.emit("store", ("vstore", level_table_addr, stage),
                            (level_table_addr,) + self._v(stage), (), mem_write=True)
 
+        # H-035 (idx_boundary_select): rec +/- 1 select-arm vectors for the
+        # epoch-exit boundary conversions, hosted in the setup-dead
+        # level_table words lv[0..15] (emitted AFTER the mem_prime staging
+        # waves above, so stream order leaves the arm values in place; the
+        # scheduler's per-address WAR tracking orders the writes after the
+        # broadcast-table/staging reads). One elementwise vec off the
+        # already-broadcast rec vector per distinct (key, sign) variant.
+        boundary_arm_vecs: dict[tuple[int, str], int] = {}
+        if idx_boundary_select:
+            assert c5_prexored_value_domain, "idx_boundary_select targets the c5_prexor boundary branch"
+            assert pair_tournament_level_mem_primed, \
+                "idx_boundary_select's arm vectors ride the full-width lv scratch"
+            boundary_arm_variants = sorted(
+                {(gather_recovery_offset(r, g), "-" if is_c5_xor_elided(r, g) else "+")
+                 for r, g in gaddr_reconstruction_exits})
+            assert len(boundary_arm_variants) <= 2, \
+                "idx_boundary_select arms ride lv[0..15] (lv[16..23] is mem_prime staging headroom, lv[24..31] is omf1_vec)"
+            for arm_i, (arm_key, arm_sgn) in enumerate(boundary_arm_variants):
+                arm = level_table + arm_i * VLEN
+                # par=1 exit lands at rec-1 (elided/inverted parity) or
+                # rec+1 (true parity); par=0 keeps rec itself.
+                vec(arm_sgn, arm, gaddr_reconstruction_vecs[arm_key], one_vec)
+                boundary_arm_vecs[(arm_key, arm_sgn)] = arm
+
         newest_parity_last_leaf_diffs_e: list[int] | None
         newest_parity_last_leaf_diffs_d: list[int] | None
         newest_parity_last_dead_reg_pool: list[int] | None
@@ -2379,14 +2428,24 @@ class KernelBuilder:
                             # st is the complement position; par inverted
                             # iff this round elided (see rec_off).
                             key = gather_recovery_offset(r, g)
-                            if idx_recurrence_race:
+                            sgn = "-" if is_c5_xor_elided(r, g) else "+"
+                            if idx_boundary_select:
+                                # H-035: rec -/+ par for 0/1 par is a 2-way
+                                # choice between rec and the precomputed
+                                # rec-/+1 arm (lv-hosted) -- flow-eligible
+                                # where the variable add/sub form is not.
+                                vsel(par, par, boundary_arm_vecs[(key, sgn)],
+                                     gaddr_reconstruction_vecs[key])
+                                madd(st, st, negtwo_vec, par)
+                            elif idx_recurrence_race:
                                 race_idx_madd(
                                     st, negtwo_vec, gaddr_reconstruction_vecs[key],
                                     lambda i: ("-", st + i,
                                                gaddr_reconstruction_scalars[key], st + i))
+                                vec(sgn, st, st, par)
                             else:
                                 madd(st, st, negtwo_vec, gaddr_reconstruction_vecs[key])
-                            vec("-" if is_c5_xor_elided(r, g) else "+", st, st, par)
+                                vec(sgn, st, st, par)
                         else:
                             if idx_recurrence_race:
                                 race_idx_madd(
@@ -2548,6 +2607,14 @@ class KernelBuilder:
             "l4_gmin round-15 threshold (validated safe from ~15 up), or "
             "reduce L4 service at round 15, until the private-register "
             "path funds every served group instead of falling back."
+        )
+        assert not (idx_boundary_select and two_minus_fp_vec_clobbered), (
+            "idx_boundary_select's rec+/-1 arm vectors ride lv[0..15], which "
+            "this config's b3l_diffs round-15 dffold fallback just reclaimed "
+            "as transient fold temps -- later-stream boundary exits would "
+            "read garbage arms. Same fix as idx_select: raise the l4_gmin "
+            "round-15 threshold until the private-register path funds every "
+            "served group."
         )
 
         # --- store final values; second pause after everything ---

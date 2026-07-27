@@ -1227,3 +1227,108 @@ below the 892-gap pressure unless someone brings a fundamentally new
 program class (select-based forms, or a depth>7 search breakthrough);
 the remaining credible route to 892 is outside the hash op count
 (H-035 idx-state folding, load/schedule shape).
+
+## H-035 (2026-07-27): fold the idx recurrence into hash multiply_adds — REJECT
+
+- hypothesis (from the 892-leaderboard gap analysis): the affine recurrence
+  p <- 2p + b / addr = base + p should ride the hash's existing 2,950 madd
+  slots for free with pre-scaled/biased operand tables (the c5_prexor
+  transformed-domain trick applied to position), driving Idx 7,448 ->
+  ~1,000 lane-ops (~-100 cyc composed).
+- verdict: **REJECT — the fold is algebraically impossible on this ISA,
+  and the removable-op budget is ~4x smaller than the hypothesis needs.**
+  A companion micro-lever (idx_boundary_select, the P-14 follow-up the
+  code explicitly left open) was implemented, verified bit-exact, and
+  measured **cycle-neutral: 1038 -> 1038** at the mainline config.
+
+### Why the fold cannot exist (closure argument, mod-2^32 madd)
+- The steady-gather update is st' = 2*st + ov + par with par = bit0(vl),
+  vl the full 32-bit hashed value (load-bearing: intermediate hashes chain
+  into the next round and the final stores, so vl cannot carry position in
+  any of its bits — its 32 bits are all spoken for).
+- One `multiply_add(a,b,c)` has three operand slots. To fold st, vl, and a
+  constant into ONE op the only assignments are:
+  * st*two + vl = 2st + vl — carries ALL of vl's bits, not just bit0;
+    the error 2*(vl>>1) is runtime-dependent, no layout fixes it.
+  * vl*k + f(st): the only k for which vl*k mod 2^32 depends solely on
+    bit0(vl) is k = 2^31 (vl*2^31 = par<<31). The parity then sits at
+    bit31 — unusable as an address addend (mem indices are exact), and
+    any odd (invertible) scale A applied to st to relocate the parity
+    would need A*par from vl in one op, which only exists for the even
+    A = 2^31, which destroys st's bits (st*2^31 keeps only bit0 of st).
+    Self-consistent scaled/biased domains w = A*st + B all reduce to
+    this same dead end.
+  * The bit31 bias DOES self-destruct on doubling (2*(x + par<<31) = 2x
+    mod 2^32), but the round that carries it needs the true address for
+    its own gather, so nothing is gained.
+- Therefore per steady-gather transition the floor is: 1 op parity
+  extraction (& 1 / % 2 — no shorter form) + 1 recurrence madd + 1
+  combine, where only the combine's ENGINE is negotiable (P-14/H-029's
+  vselect moves it to flow because ov+/-par for 0/1 par is a choice
+  between two precomputed constants). Tournament transitions are already
+  at 1 madd (parity shared with the fold conds under parity_conds).
+  Mainline is already AT this floor everywhere except engine placement.
+- ov = 0 (which would free the madd's +c slot for par and genuinely drop
+  the combine) requires the forest based at mem[1] (1-indexed heap with
+  base folded away — the missing piece of P-10's premise). Checked and
+  closed: copying the forest needs ~256 vloads + 256 vstores against only
+  ~176 spare load slots at 1038 (load engine 91.5% busy) — the copy costs
+  more than the ~160-192 valu slots it could save; per-level relocation
+  (B_{L+1} = 2*B_L) needs free mem regions that overlap the live forest
+  and mem is sized without slack. P-10's "likely rejected" can be marked
+  CLOSED with this sharper reason: the 2-term problem is only escapable
+  by a memory-layout change the machine budget cannot pay for.
+
+### Budget refutation
+- Idx at 1038 = 7,448 lane-ops = ~2 vec-ops per transition (448
+  transitions x 8 lanes; tournament 1-2 ops, gather/boundary 3 ops).
+- Even the impossible best case (every 3-op transition to 2 ops:
+  ~192 steady + ~62 boundary sites) removes ~1,700-2,000 lane-ops, i.e.
+  a valu-floor drop of <= ~5 cycles-equivalent per engine-mix — nowhere
+  near the hypothesized 6,400. **No Idx-only path reaches 892**; the gap
+  must be hash decompositions (H-036) or loads (-116 needed, H-037).
+
+### Implemented + measured: idx_boundary_select (new kwarg, default off)
+- dev.py `build_kernel_scheduled(idx_boundary_select=...)`: the epoch-exit
+  boundary conversion `madd(st,st,negtwo,rec_vecs[key]); vec(-/+,st,st,par)`
+  becomes `vsel(par,par,rec-/+1,rec); madd(st,st,negtwo,par)` — the same
+  select-vs-add reshaping P-14 landed for the steady-gather branch,
+  covering the branch the P-14 implementation note explicitly left open.
+  The rec-/+1 arm vectors ride setup-dead lv[0..15] (same hosting trick as
+  omf1_vec at lv[24..31]; zero new scratch, one setup vec each), with a
+  loud build-time assert mirroring idx_select's against the b3l_diffs
+  round-15 dffold fallback reclaiming lv (stream-order corruption guard).
+  62 sites at mainline shape: 12 (r=3 exits, g<12) + 20 (r=4, g>=12) +
+  30 (r=14 epoch-2 exits, g<30); keys {(30,"-"), (62,"-")}.
+- measurements (tools/run_variant.py, frozen grader, BASE_KWARGS = the
+  1038 mainline config):
+  * flag off: 1038 correct; flag on: **1038 correct** (also seeds 1/7/42
+    and debug_compares=True — all bit-exact).
+  * engine census at 1038/1038: alu 11881 -> 11617 (-264), valu 6119 ->
+    6100 (-19), flow 797 -> 845 (+48), load/store unchanged. Mechanism
+    confirmed (par-combines left alu/valu for flow) — wall-clock is
+    simply not bound by those slots.
+  * l4_gmin retune sweep (P-3 pattern), 7x5 grid a in 5..12 x b in
+    28..32, flag on: best remains (9,30) = 1038; smooth bowl, no new
+    optimum. Secondary sweeps (tie_break variants, pool sizes,
+    pair_tournament_first_fold_race, idx_recurrence_race off, skew (4,4)/
+    (8,2)): all >= 1038.
+  * dev.py's own dispatch config (1052): + flag = 1052 (neutral there
+    too). dev.py default path byte-identical with flag off (1052; full
+    gate `tests/submission_tests.py` 9/9 OK, mainline 1038 untouched).
+- disposition: kept flag-gated as a NEGATIVE CONTROL / composition
+  candidate (it lowers alu/valu occupancy for free, so a future accept
+  that becomes alu- or valu-bound at these cycles may compose with it;
+  it is strictly-no-worse and bit-exact). Do NOT flip mainline — zero
+  standalone gain.
+
+### Follow-ups
+- H-036 (hash re-derivation) is now the ONLY lane-op class big enough for
+  the 892 gap — this analysis strengthens its justification note.
+- H-037 (load_offset): unaffected; the gather-address FEEDING arithmetic
+  it targets is the same 2-op floor shown here, so expect small.
+- If any future accept turns the 1030s valu-bound: re-measure
+  idx_boundary_select (+ idx_select) composed — they free ~283 alu/valu
+  slots between them at zero cycle cost today.
+- P-10 can be moved to CLOSED in the backlog with the fp=1/copy-budget
+  argument above (stronger than the previous "likely rejected").
