@@ -2150,6 +2150,17 @@ class KernelBuilder:
                 + [state_vecs[g] for g in unserved if g >= early_dead_group_count]
                 + [node_val_vecs[g] for g in unserved if g >= early_dead_group_count]
             )
+            # H-045 (parity_ring): a SERVED final-round group's ring is
+            # still read during this very round (its b3l masks), so those
+            # borrowed registers are NOT dead here -- drop them from the
+            # donor pool. (Unserved groups' rings are last read at r-1 and
+            # every pool write below is emitted after that -- safe.)
+            served_ring_bases = {a for (ep, rg), triple in parity_ring_map.items()
+                                 if ep == 1 and is_pair_tournament_served(r, rg)
+                                 for a in triple}
+            if served_ring_bases:
+                newest_parity_last_dead_reg_pool = [
+                    a for a in newest_parity_last_dead_reg_pool if a not in served_ring_bases]
             if len(newest_parity_last_dead_reg_pool) < 8 + 9:  # diffs + one private group
                 newest_parity_last_leaf_diffs_e, newest_parity_last_leaf_diffs_d, newest_parity_last_dead_reg_pool = [], [], []
                 return
@@ -2161,23 +2172,34 @@ class KernelBuilder:
                     odd_of[h] = tabs[2 * k + 1]
                     out.append(h)
 
-        def b3l_fold_diffs(state_vec_: int, node_val_: int) -> None:
+        def b3l_fold_diffs(state_vec_: int, node_val_: int,
+                           ring_: tuple[int, int, int] | None = None) -> None:
             # Final-round b3-last fold with precomputed diffs and private
             # registers: masks computed ONCE (exact 0/1, off st_ which is
             # ready at round start), each leaf a dual_fold (1 valu madd
             # racing 1 flow vselect), combines race_sel. Post-b3 chain =
             # 1 madd + fold-in + hash. st_ is left intact (final round:
             # nothing reads it after, but the masks need it here).
+            # H-045 (parity_ring): a ringed group reads b2/b1/b0 straight
+            # from its retained parities -- all 5 mask ops disappear and
+            # only 5 private temps are popped (E and D share the transient
+            # hi temp; its E-read strictly precedes its D-write).
             assert (newest_parity_last_dead_reg_pool is not None
                     and newest_parity_last_leaf_diffs_e is not None
                     and newest_parity_last_leaf_diffs_d is not None)
-            mask_b2, mask_b1, mask_b0, e_lo, e_mid, e_hi, d_lo, d_mid, d_hi = (
-                newest_parity_last_dead_reg_pool.pop(0) for _ in range(9))
-            vec("&", mask_b2, state_vec_, one_vec)
-            vec(">>", mask_b1, state_vec_, one_vec)
-            vec("&", mask_b1, mask_b1, one_vec)
-            vec(">>", mask_b0, state_vec_, two_vec)
-            vec("&", mask_b0, mask_b0, one_vec)
+            if ring_ is not None:
+                mask_b0, mask_b1, mask_b2 = ring_
+                e_lo, e_mid, d_lo, d_mid, shared_hi = (
+                    newest_parity_last_dead_reg_pool.pop(0) for _ in range(5))
+                e_hi = d_hi = shared_hi
+            else:
+                mask_b2, mask_b1, mask_b0, e_lo, e_mid, e_hi, d_lo, d_mid, d_hi = (
+                    newest_parity_last_dead_reg_pool.pop(0) for _ in range(9))
+                vec("&", mask_b2, state_vec_, one_vec)
+                vec(">>", mask_b1, state_vec_, one_vec)
+                vec("&", mask_b1, mask_b1, one_vec)
+                vec(">>", mask_b0, state_vec_, two_vec)
+                vec("&", mask_b0, mask_b0, one_vec)
             comb = race_sel if newest_parity_last_fold_race else vsel
             for tabs, dt, r0, r1, r2 in (
                 (level4_evens, newest_parity_last_leaf_diffs_e, e_lo, e_mid, e_hi),
@@ -2469,11 +2491,12 @@ class KernelBuilder:
                         if (newest_parity_last_leaf_diff_tables and r == rounds - 1
                                 and (make_newest_parity_last_diffs(r) or
                                      # make_...(r) populates the pool just above.
-                                     len(newest_parity_last_dead_reg_pool) >= 9)):  # pyright: ignore[reportArgumentType]
+                                     len(newest_parity_last_dead_reg_pool) >= (5 if ring is not None else 9))):  # pyright: ignore[reportArgumentType]
                             # H-027: diff tables + private dead registers
                             # (falls through to dffold if the dead-register
                             # pool cannot fund another private group).
-                            b3l_fold_diffs(st, nv)
+                            # H-045: ringed groups skip the 5 mask ops.
+                            b3l_fold_diffs(st, nv, ring)
                         else:
                             nonlocal two_minus_fp_vec_clobbered
                             two_minus_fp_vec_clobbered = True  # see the bug guard note above
