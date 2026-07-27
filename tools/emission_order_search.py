@@ -297,11 +297,26 @@ def local(budget: float, workers: int, out_path: str, seed_json: str | None,
     cur = list(plan)
     cur_c = best_c
     n = len(cur)
+
+    def round_of(entry) -> int:
+        members = entry[1] if entry and entry[0] == "rr" else (entry,)
+        return min(r_ for r_, _ in members)
+
+    round_window: tuple[int, int] | None = None
+    if window.startswith("r:"):
+        lo, hi = window[2:].split("-")
+        round_window = (int(lo), int(hi))
     while time.time() - t0 < budget:
         batch = []
         for _ in range(workers * 8):
             p = list(cur)
-            if window == "ramp":
+            if round_window is not None:
+                idxs = [k for k, e in enumerate(p)
+                        if round_window[0] <= round_of(e) <= round_window[1]]
+                if not idxs:
+                    continue
+                i = rng.choice(idxs)
+            elif window == "ramp":
                 i = rng.randrange(0, min(120, n))
             elif window == "drain":
                 i = rng.randrange(max(0, n - 120), n)
