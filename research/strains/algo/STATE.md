@@ -437,3 +437,23 @@ word is the research question.
 - F-8: H-042/N-3 should treat the 12 unmeasured-positive audited rings
   as the retention budget the scheduler must make free (hazard-aware
   placement of ring accesses), rather than hunting more words.
+
+## F-6 (2026-07-27): H-048 mainline port — perf_takehome.py 1034 -> 1032
+
+Ported the verified H-048 frontier into the flag-free submission:
+l4_gmin (7,30) -> (8,30) plus the 4-ring plan appended in
+`build_parity_ring_map`. Per the F-6 note the addresses are NOT baked:
+each donor is derived from its named vector (verified equal to the
+audited raw addresses 185/193/201, 601-625, 1225/1233/1297 by
+instrumenting alloc_scratch):
+
+    (0, 5):  lv+8,  lv+16,  st8      (0, 6):  st9, st10, st11
+    (0, 15): lv+0,  nv22,   nv23     (0, 16): lv+8, lv+16, nv31
+
+lv+24 (two_minus_fp_vec) deliberately untouched; donors are structural
+classes only (st/nv/lv) — the emit_any trace-liveness exclusion from
+H-048 carries over in the code comment. No temp-pool or emission-order
+drift this time: cycles matched dev's 1032 on the first build.
+
+Gates: `perf_takehome.py Tests.test_kernel_cycles` CYCLES: 1032 (x2);
+`tests/submission_tests.py` 9/9 green, all CYCLES lines 1032 (x3).

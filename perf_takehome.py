@@ -490,8 +490,15 @@ class KernelBuilder:
           sees identical values. The ring registers are BORROWED from other
           skew blocks' st/nv vectors whose real accesses sit strictly on the
           other side of the ring's accesses in EMISSION order (see
-          `build_parity_ring_map`); this relief funds the epoch-0 `l4_gmin`
-          slide from 9 to 7 (+2 served L4 group-rounds).
+          `build_parity_ring_map`). Four more rings come from an
+          offline-audited word-level donor plan (H-048): scratch runs
+          (level-table words, dead-window st/nv of other blocks) whose real
+          accesses were trace-verified emission-order-disjoint from the
+          ring's access window -- structural donors only, never
+          trace-liveness of emit_any-raced operands (the losing encoding's
+          reads never land in the trace, so such liveness is unsound).
+          This combined relief funds the epoch-0 `l4_gmin` slide from 9 to
+          8 (+1 served L4 group-round vs the ringless 9).
 
         - alu offload: elementwise vector ops are split into 8 scalar alu
           slots when that retires them no later (see `_sched_vec`), raising
@@ -548,7 +555,7 @@ class KernelBuilder:
         # --- shape/tuning constants (not toggles; they define the kernel) ---
         # Levels 1..k folded as "tournaments" (broadcast tables + position accumulator), not gathered; l4_gmin = per-epoch group threshold (or explicit set) for two-stage level-(k+1) "pair" tournament; temp_and_cond_pool_sizes/skew size scratch pools + software-pipeline diagonal.
         tournament_levels = (1, 2, 3)
-        l4_gmin = (7, 30)
+        l4_gmin = (8, 30)
         temp_and_cond_pool_sizes = (16, 4)
         skew = (4, 3)
         primed_gather_levels = {5}  # deeper gather levels primed in mem
@@ -1174,6 +1181,31 @@ class KernelBuilder:
                     if len(donors) < 3:
                         continue
                     parity_ring_map[(epoch, g)] = (donors.pop(0), donors.pop(0), donors.pop(0))
+            # H-048: four extra rings from an offline-audited window-disjoint
+            # donor plan. Each triple borrows three 8-word scratch runs whose
+            # REAL accesses were trace-verified emission-order-disjoint from
+            # the ring's access window (rounds 0-4 of the group, all epoch 0),
+            # with no live range spanning it -- the same borrow-safety
+            # criterion as the block slices above, mined word-by-word across
+            # scratch classes instead of whole dead blocks. Donors are named
+            # STRUCTURAL vectors (their reads are schedule-independent), never
+            # trace-liveness of emit_any-raced operands; lv words share
+            # between entries only because the two ring windows are
+            # emission-order disjoint (group 5's ring accesses end before
+            # group 16's window opens). lv+24 (two_minus_fp_vec's slot) is
+            # deliberately NOT used.
+            assert level_table is not None
+            lv = level_table
+            h048_plan: tuple[tuple[tuple[int, int], tuple[int, int, int]], ...] = (
+                ((0, 5), (lv + VLEN, lv + 2 * VLEN, state_vecs[8])),
+                ((0, 6), (state_vecs[9], state_vecs[10], state_vecs[11])),
+                ((0, 15), (lv, node_val_vecs[22], node_val_vecs[23])),
+                ((0, 16), (lv + VLEN, lv + 2 * VLEN, node_val_vecs[31])),
+            )
+            for key, bases in h048_plan:
+                assert key not in parity_ring_map, \
+                    f"H-048 plan entry {key} already ring-funded"
+                parity_ring_map[key] = bases
 
         # --- rounds ---
         # Round body is a GENERATOR yielding at stage boundaries (node_val, each hash dep level, state update); emission loop drains each group's round in order.
