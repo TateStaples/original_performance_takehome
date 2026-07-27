@@ -124,14 +124,22 @@ class ListScheduler:
         self.trace: list[tuple[Any, ...]] | None = None
         self.tag: tuple[int, int] | None = None
         # H-042 (joint selection x scheduling): offline-searched spelling
-        # plan for emit_any race sites that carry a pure-flow encoding.
-        # Sites are numbered in emission order counting ONLY flow-containing
-        # races (dual_fold / race_sel / race_leaf / race_copy) -- that
-        # subsequence is emission-stable across plan changes, unlike the
-        # schedule-dependent _sched_vec alu/valu races. flow_site_plan maps
-        # site index -> encoding index to place UNCONDITIONALLY (skipping
-        # the retire-time race); empty dict = bit-identical greedy.
+        # plan for emit_any race sites. Sites are numbered in emission
+        # order over TWO independent counters -- flow-containing races
+        # (dual_fold / race_sel / race_leaf / race_copy; unconditional
+        # calls, so their subsequence is emission-stable across plan
+        # changes) keyed >= 0, and the schedule-dependent non-flow races
+        # (_sched_vec's alu/valu splits, race_idx_madd) keyed as
+        # -(index+1). flow_site_plan maps site key -> encoding index to
+        # place UNCONDITIONALLY (skipping the retire-time race); every
+        # encoding of a site is semantically equivalent, so ANY plan is
+        # correct by construction -- only cycles move. Empty dict =
+        # bit-identical greedy. Non-flow keys are schedule-dependent
+        # (their race only exists when valu is backed up at decision
+        # time), so plans using them are config-specific measurement
+        # artifacts; the offline search re-derives them per config.
         self.flow_site_idx = 0
+        self.aux_site_idx = 0
         self.flow_site_plan: dict[int, int] = {}
 
     def ready(self, reads: Iterable[int] = (), writes: Iterable[int] = (), mem_read: bool = False, mem_write: bool = False, min_cycle: int = 0, ignore_mem_read_hazard: bool = False, ignore_mem_write_hazard: bool = False) -> int:
@@ -231,11 +239,14 @@ class ListScheduler:
         race the same way.
         """
         encodings = list(encodings)
-        if len(encodings) > 1 and any(
-            all(e == "flow" for e, *_ in enc) for enc in encodings
-        ):
-            forced = self.flow_site_plan.get(self.flow_site_idx)
-            self.flow_site_idx += 1
+        if len(encodings) > 1:
+            if any(all(e == "flow" for e, *_ in enc) for enc in encodings):
+                key = self.flow_site_idx
+                self.flow_site_idx += 1
+            else:
+                key = -(self.aux_site_idx + 1)
+                self.aux_site_idx += 1
+            forced = self.flow_site_plan.get(key)
             if forced is not None:
                 encodings = [encodings[forced]]
         best: tuple[int, Iterable[tuple[Any, ...]], list[int]] | None = None
@@ -1644,13 +1655,13 @@ class KernelBuilder:
                 [dict(c) for c in scheduler.engine_slot_counts],
                 dict(scheduler.last_write), dict(scheduler.last_read),
                 scheduler.last_mem_read_cycle, scheduler.last_mem_write_cycle, dict(scheduler.first_free_cycle_hint),
-                scheduler.flow_site_idx,
+                scheduler.flow_site_idx, scheduler.aux_site_idx,
             )
 
         def sched_install(snap: tuple[Any, ...]) -> None:
             (scheduler.bundles, scheduler.engine_slot_counts, scheduler.last_write, scheduler.last_read,
              scheduler.last_mem_read_cycle, scheduler.last_mem_write_cycle, scheduler.first_free_cycle_hint,
-             scheduler.flow_site_idx) = snap
+             scheduler.flow_site_idx, scheduler.aux_site_idx) = snap
 
         # --- header (inp_indices is never read: only values are graded) ---
         for name, hidx in (("forest_values_p", 4), ("inp_values_p", 6)):
