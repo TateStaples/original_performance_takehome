@@ -985,7 +985,7 @@ correct, measured worse at every configuration tried]
 - predicted_gain: small, -5..-15; cheap to close. cost: S. depends: none.
   Touches: gather-address emission only.
 
-### H-038 [strain: op-reduction] [status: testing]
+### H-038 [strain: op-reduction] [status: closed negative -> graveyard G-24 (~1.586T cmpsel candidates; hash op-count closed by 4th tool class — FINAL entry)]
 - statement: extend the hash program search vocabulary with compare/select
   ops -- the ONE gap both G-10 (fusion) and G-20 (re-derivation) explicitly
   name as unsearched. Op set: current base + alu `<`/`==` + flow select
