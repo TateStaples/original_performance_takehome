@@ -999,3 +999,23 @@ not placement, selection, or order.
   parity_ring_plan): re-derive via emission_order_search.py after ANY
   flag/algo change; spelling re-search after any order change (both
   cheap, ~25 min / ~7 min).
+
+## F-12 (2026-07-27): H-049 emission order ported to mainline —
+## perf_takehome.py 1031 -> 1023
+
+Port shape: the 512-entry plan from tools/h049_best_plan.json baked as a
+module-level literal `_EMISSION_ORDER` (all plain (r, g) entries, no rr
+merges), consumed in build_kernel_scheduled behind the same graded-shape
+guard as the parity rings (n_groups==32, rounds==16, skew==(4,3));
+other shapes keep the diagonal step loop. Coverage + per-group round
+monotonicity asserted at use, exactly like dev's emission_plan
+validation. F-9's (13, 29) multiply_add spelling pin REVERTED to the
+plain first_fold race — the searched order's spelling re-search
+fixpoints at zero flips, so the old pin was a stale order-specific
+forcing (comment left at the site).
+
+Gates (each run twice): Tests.test_kernel_cycles CYCLES 1023 / 1023;
+tests/submission_tests.py 9/9 green, all nine CYCLES lines 1023, both
+runs. Literal programmatically verified equal to the committed JSON
+artifact. dev.py and tests/ untouched. Mainline == dev frontier again;
+F-14 (backtrack re-localization at 1023) can now run against main.

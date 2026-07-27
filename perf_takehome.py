@@ -48,6 +48,84 @@ from problem import (
 _SCALARIZABLE = {"+", "-", "*", "^", "&", "|", "<<", ">>", "<", "=="}
 
 
+# H-049 emission order (2026-07-27): explicit (round, group) emission plan
+# replacing the (4,3)-skew diagonal step loop for the graded 32-group,
+# 16-round shape. Found by tools/emission_order_search.py (windowed
+# single-entry local search + sideways plateau walk from the default
+# diagonal order; committed artifact tools/h049_best_plan.json): 1031 ->
+# 1023 cycles. Order-load-bearing AND ring-liveness-timed -- the parity
+# rings' borrow windows are validated against THIS order, so do not
+# regenerate, simplify, or locally reorder it; re-derive via the search
+# driver after any kernel change. Covers every (round, group) exactly
+# once with per-group rounds ascending (asserted at use).
+_EMISSION_ORDER: tuple[tuple[int, int], ...] = (
+    (0, 1), (0, 2), (0, 0), (0, 5), (0, 4), (1, 1), (1, 4), (0, 3),
+    (0, 7), (0, 6), (1, 0), (1, 3), (1, 2), (1, 5), (1, 6), (1, 7),
+    (2, 1), (2, 2), (2, 0), (2, 5), (3, 0), (2, 6), (2, 7), (3, 1),
+    (3, 2), (3, 6), (2, 4), (4, 0), (2, 3), (3, 5), (0, 8), (3, 7),
+    (3, 4), (3, 3), (0, 11), (4, 5), (0, 14), (0, 12), (4, 2), (0, 9),
+    (0, 10), (0, 15), (4, 1), (4, 6), (4, 4), (4, 7), (0, 13), (5, 0),
+    (1, 13), (4, 3), (1, 15), (1, 8), (5, 2), (1, 9), (5, 4), (1, 12),
+    (1, 14), (1, 10), (5, 6), (1, 11), (5, 5), (2, 8), (5, 3), (5, 7),
+    (2, 12), (5, 1), (6, 2), (2, 10), (6, 4), (2, 9), (6, 0), (6, 5),
+    (2, 11), (3, 9), (6, 1), (2, 14), (6, 3), (3, 10), (2, 13), (2, 15),
+    (6, 6), (3, 13), (6, 7), (3, 8), (3, 15), (3, 12), (3, 14), (0, 18),
+    (7, 2), (0, 17), (0, 19), (7, 4), (0, 23), (7, 0), (7, 1), (0, 20),
+    (3, 11), (4, 8), (0, 22), (0, 16), (7, 6), (0, 21), (7, 3), (7, 7),
+    (4, 10), (7, 5), (4, 11), (1, 19), (4, 15), (4, 12), (1, 17), (1, 21),
+    (1, 16), (8, 2), (4, 14), (8, 5), (1, 23), (1, 22), (4, 9), (8, 3),
+    (5, 8), (1, 18), (8, 6), (4, 13), (5, 14), (1, 20), (8, 0), (8, 4),
+    (8, 1), (8, 7), (5, 9), (5, 10), (5, 15), (5, 11), (5, 12), (5, 13),
+    (2, 16), (2, 17), (2, 19), (2, 23), (2, 22), (2, 18), (2, 20), (9, 1),
+    (9, 2), (9, 3), (9, 0), (9, 5), (9, 4), (9, 6), (9, 7), (6, 10),
+    (6, 14), (6, 9), (3, 17), (6, 15), (6, 13), (6, 11), (6, 12), (2, 21),
+    (3, 16), (3, 20), (6, 8), (3, 18), (3, 19), (3, 21), (3, 22), (3, 23),
+    (0, 26), (0, 24), (0, 25), (0, 27), (0, 28), (10, 5), (0, 30), (0, 29),
+    (7, 8), (0, 31), (10, 1), (10, 3), (10, 2), (10, 4), (10, 0), (10, 6),
+    (10, 7), (7, 9), (7, 13), (7, 12), (7, 14), (7, 15), (4, 17), (7, 10),
+    (4, 19), (4, 16), (4, 20), (7, 11), (4, 21), (4, 22), (4, 23), (1, 25),
+    (4, 18), (1, 26), (1, 28), (1, 27), (1, 24), (1, 29), (1, 30), (11, 0),
+    (1, 31), (11, 1), (11, 4), (11, 5), (11, 6), (11, 7), (11, 2), (11, 3),
+    (8, 8), (5, 18), (8, 11), (8, 10), (8, 9), (8, 14), (8, 12), (5, 16),
+    (5, 21), (5, 19), (2, 24), (5, 22), (8, 15), (8, 13), (5, 20), (5, 17),
+    (2, 31), (2, 27), (12, 5), (2, 30), (2, 25), (5, 23), (2, 29), (2, 26),
+    (2, 28), (12, 0), (12, 2), (12, 3), (12, 4), (12, 6), (12, 7), (9, 8),
+    (3, 25), (9, 9), (9, 10), (9, 11), (9, 12), (12, 1), (9, 13), (9, 14),
+    (6, 16), (6, 17), (6, 20), (6, 18), (6, 23), (6, 19), (6, 21), (3, 27),
+    (9, 15), (3, 24), (3, 26), (3, 29), (3, 28), (3, 31), (6, 22), (13, 0),
+    (13, 2), (13, 3), (13, 1), (13, 5), (13, 6), (13, 7), (3, 30), (10, 9),
+    (7, 20), (13, 4), (10, 8), (10, 13), (10, 11), (10, 12), (10, 14), (7, 22),
+    (10, 15), (7, 21), (7, 18), (10, 10), (7, 19), (7, 17), (4, 26), (7, 16),
+    (14, 1), (4, 31), (4, 27), (4, 28), (4, 29), (4, 24), (14, 0), (7, 23),
+    (4, 25), (14, 3), (14, 7), (14, 5), (14, 4), (4, 30), (14, 6), (11, 8),
+    (8, 22), (8, 21), (11, 9), (11, 10), (11, 11), (8, 20), (8, 19), (14, 2),
+    (11, 14), (11, 13), (5, 26), (11, 12), (11, 15), (8, 16), (8, 23), (5, 25),
+    (5, 27), (15, 1), (8, 17), (5, 28), (5, 29), (15, 0), (8, 18), (5, 30),
+    (5, 24), (5, 31), (15, 4), (15, 2), (15, 3), (15, 5), (12, 10), (15, 6),
+    (15, 7), (12, 9), (12, 15), (12, 8), (9, 18), (9, 19), (12, 12), (12, 11),
+    (12, 14), (9, 16), (12, 13), (6, 24), (9, 17), (9, 20), (9, 21), (9, 22),
+    (9, 23), (6, 25), (6, 30), (6, 28), (6, 26), (6, 27), (6, 29), (6, 31),
+    (13, 8), (13, 10), (13, 11), (10, 22), (13, 12), (13, 9), (13, 13), (13, 14),
+    (7, 30), (10, 18), (10, 17), (13, 15), (10, 16), (10, 23), (10, 21), (7, 28),
+    (7, 24), (7, 29), (10, 19), (10, 20), (7, 26), (14, 12), (7, 25), (14, 13),
+    (7, 27), (14, 9), (11, 20), (14, 15), (14, 11), (14, 14), (14, 10), (11, 17),
+    (8, 28), (15, 12), (11, 19), (7, 31), (8, 31), (14, 8), (11, 22), (11, 16),
+    (11, 18), (8, 29), (11, 23), (8, 24), (8, 25), (8, 26), (11, 21), (12, 17),
+    (15, 8), (15, 15), (15, 14), (15, 11), (15, 13), (15, 10), (8, 27), (12, 19),
+    (12, 16), (15, 9), (8, 30), (12, 23), (12, 20), (12, 18), (12, 22), (12, 21),
+    (9, 24), (9, 25), (9, 30), (9, 26), (9, 27), (9, 29), (9, 28), (13, 19),
+    (9, 31), (13, 18), (13, 23), (13, 17), (13, 16), (13, 21), (13, 20), (13, 22),
+    (10, 24), (10, 25), (10, 26), (10, 27), (10, 30), (10, 29), (14, 18), (14, 17),
+    (14, 16), (10, 28), (14, 19), (14, 20), (10, 31), (14, 22), (14, 23), (14, 21),
+    (11, 24), (11, 25), (11, 26), (11, 27), (15, 19), (11, 29), (11, 28), (12, 24),
+    (11, 31), (15, 18), (15, 22), (12, 27), (15, 16), (15, 20), (12, 28), (15, 21),
+    (15, 23), (11, 30), (12, 25), (12, 26), (13, 24), (13, 25), (15, 17), (13, 26),
+    (12, 30), (12, 29), (12, 31), (13, 27), (13, 28), (13, 30), (14, 25), (13, 29),
+    (14, 26), (13, 31), (14, 24), (14, 28), (15, 28), (14, 27), (14, 29), (15, 26),
+    (14, 31), (14, 30), (15, 31), (15, 24), (15, 29), (15, 27), (15, 30), (15, 25),
+)
+
+
 class ListScheduler:
     """
     Greedy dependency-tracking list scheduler over the VLIW bundle stream.
@@ -1266,19 +1344,10 @@ class KernelBuilder:
                     # nv=b1 (raw parity), st=b0 (single bit); b0 copy (st folds b1 next) = pure vselect(c,a,a,a) on idle flow engine.
                     vsel(condB[j], st, st, st)
                     fold_position(st, nv)                    # fold b1: st = b0b1
-                    # H-042 spelling plan: an offline joint selection x
-                    # scheduling search (greedy sweep + plateau walk over
-                    # per-site encoding forcings, exact rebuild objective)
-                    # found exactly one paying flip for this config: pin THIS
-                    # first-fold of (round 13, group 29) -- flow-race site 354
-                    # in emission order, in the drain-adjacent soft window --
-                    # to its valu madd spelling instead of racing it. Greedy
-                    # emit_any is myopic: it takes the flow slot that a later,
-                    # tighter op needs; returning it re-routes the downstream
-                    # races (-1 cycle). The two spellings are equivalent
-                    # (cond is raw 0/1 parity), so only cycles move.
-                    (multiply_add if (round, g) == (13, 29) else first_fold)(
-                        temp_pool[s], nv, diffs[0], evens[0])
+                    # (H-042's (13, 29) valu-madd spelling pin was dropped
+                    # with the H-049 emission order: the spelling re-search
+                    # on the searched order fixpoints at zero flips.)
+                    first_fold(temp_pool[s], nv, diffs[0], evens[0])
                     first_fold(tm[j], nv, diffs[1], evens[1])
                     vsel(nv, condB[j], tm[j], temp_pool[s])
                 elif ring is not None:  # L == 3
@@ -1489,12 +1558,30 @@ class KernelBuilder:
                        for b in range(n_blocks)]
         n_steps = rounds + lag * (n_blocks - 1)
         build_parity_ring_map()  # after alloc_state, before any round emits
-        for step in range(n_steps):
-            for block_lag, group_range in block_specs:
-                r = step - block_lag
-                if 0 <= r < rounds:
-                    for g in group_range:
-                        emit_group_round(r, g)
+        if n_groups == 32 and rounds == 16 and skew == (4, 3):
+            # H-049: the graded shape emits in the searched _EMISSION_ORDER
+            # (see the module-level constant) instead of walking the diagonal.
+            # Validate coverage + per-group round monotonicity first: any such
+            # order is dataflow-correct (the scheduler re-derives hazards from
+            # the stream), and the parity rings' liveness-timed borrow windows
+            # are verified against exactly this order.
+            next_round_ = [0] * n_groups
+            for r, g in _EMISSION_ORDER:
+                assert 0 <= g < n_groups and next_round_[g] == r, (
+                    f"_EMISSION_ORDER: group {g} expected round "
+                    f"{next_round_[g]}, got {r}")
+                next_round_[g] += 1
+            assert all(nr == rounds for nr in next_round_), \
+                "_EMISSION_ORDER must cover every (round, group) exactly once"
+            for r, g in _EMISSION_ORDER:
+                emit_group_round(r, g)
+        else:
+            for step in range(n_steps):
+                for block_lag, group_range in block_specs:
+                    r = step - block_lag
+                    if 0 <= r < rounds:
+                        for g in group_range:
+                            emit_group_round(r, g)
 
         # --- store final values; second pause after everything ---
         # H-031: each store's target (val_addrs[g], inside inp_values_p's
