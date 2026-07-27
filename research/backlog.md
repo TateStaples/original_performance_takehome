@@ -1180,3 +1180,26 @@ correct, measured worse at every configuration tried]
   classes (st/nv/lv/root_nv_vec). Applies to ALL future borrowing.
 - follow-ups: F-6 mainline flip 1032 (derive plan addresses from named
   vectors, not raw numbers); F-7 re-audit after any emission change.
+
+### H-042 result addendum [status: PARTIAL ACCEPT — frontier 1031; per-site selection space measured-EXHAUSTED]
+- mechanism: flow_spelling_plan (offline-searched per-site encoding forcing
+  at emit_any race sites; correct BY CONSTRUCTION — all encodings
+  equivalent, so H-048's liveness unsoundness doesn't apply). Driver:
+  tools/spelling_plan_search.py (0.1s/build exact objective).
+- frontier: 1032 4-ring config + flow_spelling_plan=((354,1),) = 1031
+  (6 seeds + debug_compares). Plan-space optimum: greedy fixpoint,
+  ~2,000-eval plateau walks, full aux space, and an independent random
+  basin all converge to 1031.
+- KEY MEASUREMENTS: (a) the LP's valu->flow direction NEVER pays on
+  relieved configs — what pays is UNDOING greedy's myopic flow grabs in
+  ramp/drain (the winning flip is flow->valu); (b) 0/155 flow-lost sites
+  have a bubble within retire-delta<=3 — the anti-correlation is
+  structural (round cadence creates bubbles exactly when selects aren't
+  ready); (c) full 16-ring retention (384 words) now TIES 1031 with 2
+  flips — complete cond retention converts to ZERO cycles, closing F-8:
+  ring hazards neutralized, ring benefit also ~0 at this emission order;
+  (d) F-1-form (7,30 no rings) + 2 flips = 1032 — matches the 4-ring
+  frontier with zero borrowed words.
+- verdict: residual flow prize (~55 modeled cyc) is EMISSION-ORDER-shaped:
+  requires beam/interleave over emission order (F-11) or the H-047
+  restructure. Per-site selection under fixed order is done.
