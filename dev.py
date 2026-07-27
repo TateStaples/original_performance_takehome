@@ -635,6 +635,9 @@ class KernelBuilder:
         store_pair: bool = False,
         store_disjoint_region: bool = False,
         mem_prime_ignore_l4_hazard: bool = False,
+        mem_prime_region_hazards: bool = False,
+        mem_prime_dead_reg_staging: bool = False,
+        mem_prime_min_cycles: tuple[int, ...] = (),
         debug_compares: bool = True,
         temp_pool_coloring: bool = False,
         temp_pool_coloring_uncapped: bool = False,
@@ -775,6 +778,32 @@ class KernelBuilder:
           cost doubles per level while the elide gain stays constant, so
           only the shallowest levels can pay. Requires c5_prexored_value_domain (and the
           full-width level_table scratch: tournament_level_count == 3 with level-4 service on).
+
+        - `mem_prime_region_hazards` / `mem_prime_dead_reg_staging` /
+          `mem_prime_min_cycles` (H-039, all default off, MEASURED
+          NEGATIVE beyond level 5 -- kept as the mem_prime
+          generalization's honest closure): exact address-range hazard
+          handling for the priming waves. `mem_prime_region_hazards`
+          drops each wave's store off the coarse whole-mem write clock
+          (waves are block-disjoint and only level-d gathers ever read
+          level d) and gates level-d gathers on that level's recorded
+          last priming-store cycle instead -- so priming level d no
+          longer serializes ahead of every OTHER level's gathers.
+          `mem_prime_dead_reg_staging` additionally stages waves through
+          wave-private DEAD registers (tail groups' nv vectors + the last
+          group's st lanes as address words) instead of the shared lv
+          scratch + single address scalar, unchaining the priming vloads
+          into the dependency-dead cycle-0..50 load window.
+          `mem_prime_min_cycles` (matched to sorted levels) floors each
+          level's waves to push their ^C5 compute out of the saturated
+          schedule front. Finding: even with all three, level 6 is +1
+          cycle and level 7 is +5 -- the front and mid-schedule are
+          compute- and load-saturated respectively, so a wave's
+          vload+vxor+vstore always displaces useful work, while the 32
+          elided lane-xors/level sit in the load-bound mid-window where
+          compute relief buys ~nothing. Level 5 stays the only priming
+          level that pays (dropping it costs +19 via the idx_select
+          stack).
 
         - `speculative_fold_levels` (H-010): parity speculation at shallow tournament
           levels. xor distributes over select, so the hash fold-in
@@ -1037,6 +1066,9 @@ class KernelBuilder:
                 lazy_val_loads=lazy_val_loads, store_pair=store_pair,
                 store_disjoint_region=store_disjoint_region,
                 mem_prime_ignore_l4_hazard=mem_prime_ignore_l4_hazard,
+                mem_prime_region_hazards=mem_prime_region_hazards,
+                mem_prime_dead_reg_staging=mem_prime_dead_reg_staging,
+                mem_prime_min_cycles=mem_prime_min_cycles,
                 debug_compares=debug_compares, temp_pool_coloring=False,
                 temp_pool_coloring_uncapped=temp_pool_coloring_uncapped,
             )
@@ -1075,6 +1107,9 @@ class KernelBuilder:
                 lazy_val_loads=lazy_val_loads, store_pair=store_pair,
                 store_disjoint_region=store_disjoint_region,
                 mem_prime_ignore_l4_hazard=mem_prime_ignore_l4_hazard,
+                mem_prime_region_hazards=mem_prime_region_hazards,
+                mem_prime_dead_reg_staging=mem_prime_dead_reg_staging,
+                mem_prime_min_cycles=mem_prime_min_cycles,
                 debug_compares=debug_compares, temp_pool_coloring=False,
                 temp_pool_coloring_uncapped=temp_pool_coloring_uncapped,
             )
@@ -1899,6 +1934,10 @@ class KernelBuilder:
                 scheduler.emit("store", ("vstore", primed_store_addr, src),
                        (primed_store_addr,) + self._v(src), (), mem_write=True)
 
+        # H-039 (mem_prime_region_hazards): last priming-store cycle per
+        # primed level; level-d gathers wait on THIS (min_cycle) instead of
+        # the coarse whole-mem write clock.
+        mem_prime_store_done_cycle: dict[int, int] = {}
         if primed_gather_levels:
             # H-026 (mem_prime): prime the listed deeper gather levels in
             # mem -- vload / ^C5 / vstore waves staged through lv[0..23]
@@ -1914,19 +1953,79 @@ class KernelBuilder:
             two_minus_fp_vec = level_table + 3 * VLEN
             scheduler.emit("valu", ("vbroadcast", two_minus_fp_vec, two_minus_fp_s),
                    (two_minus_fp_s,), self._v(two_minus_fp_vec))
+            if mem_prime_dead_reg_staging:
+                # H-039: the lv staging + single shared address scalar chain
+                # the waves through registers the setup BROADCASTS must read
+                # first, pushing the priming vloads into the contended
+                # 50..100 load window (where they displace early gathers /
+                # val vloads 1-for-1 -- the real cost H-026 measured, NOT
+                # mem-model serialization; priming stores retire by ~cycle
+                # 60 even under the coarse clock). Wave-private DEAD
+                # registers place them in the 0..50 window instead, whose
+                # ~90 free load slots nothing else can use (no other load's
+                # deps are ready): staging in the tail groups' nv vectors
+                # (first genuinely written at those groups' round 0, cycles
+                # ~300+ under the mainline lag-9 skew) and address words in
+                # the last group's st lanes (same lifetime). Emission order
+                # (priming before all rounds) makes the borrow safe for ANY
+                # skew: the running-maxima hazard model can only push the
+                # owning group's first write AFTER the priming reads, never
+                # reorder priming after the group.
+                assert not vals_first, \
+                    "mem_prime_dead_reg_staging borrows state vectors allocated pre-priming"
+                assert state_vecs is not None and node_val_vecs is not None
+                assert mem_prime_region_hazards, \
+                    "dead-reg staging drops the lv WAR chain; gathers must be region-gated"
+            # H-039: optional per-level placement floor for the priming
+            # waves (matched positionally to sorted(primed_gather_levels)).
+            # The schedule FRONT is compute-saturated (valu 6/6, alu 12/12
+            # from ~cycle 9), so a wave's ^C5 placed early displaces
+            # critical-path round compute 1:1; floors push the waves into
+            # the load-idle window just ahead of the level's first gather.
+            level_min_cycle = dict(zip(sorted(primed_gather_levels), mem_prime_min_cycles))
             k = 0
             for d in sorted(primed_gather_levels):
+                wave_floor = level_min_cycle.get(d, 0)
                 for off in range(0, 2 ** d, VLEN):
-                    stage = level_table + (k % 3) * VLEN
+                    if mem_prime_dead_reg_staging:
+                        assert node_val_vecs is not None and state_vecs is not None
+                        stage = node_val_vecs[n_groups - 1 - (k % min(VLEN, n_groups))]
+                        wave_addr = state_vecs[n_groups - 1] + (k % VLEN)
+                    else:
+                        stage = level_table + (k % 3) * VLEN
+                        wave_addr = level_table_addr
                     k += 1
-                    scheduler.emit("flow", ("add_imm", level_table_addr, fp, 2 ** d - 1 + off),
-                           (fp,), (level_table_addr,))
-                    scheduler.emit("load", ("vload", stage, level_table_addr),
-                           (level_table_addr,), self._v(stage), mem_read=True,
-                           ignore_mem_write_hazard=mem_prime_ignore_l4_hazard)
+                    scheduler.emit("flow", ("add_imm", wave_addr, fp, 2 ** d - 1 + off),
+                           (fp,), (wave_addr,))
+                    # H-039 (mem_prime_region_hazards): every priming wave's
+                    # vload reads a tree block no OTHER wave's store writes
+                    # (in-place, block-disjoint waves), and the only prior
+                    # mem writes are the L4 priming stores (level 4 < d), so
+                    # the coarse RAW gate is address-provably skippable.
+                    scheduler.emit("load", ("vload", stage, wave_addr),
+                           (wave_addr,), self._v(stage), mem_read=True,
+                           min_cycle=wave_floor,
+                           ignore_mem_write_hazard=(mem_prime_ignore_l4_hazard
+                                                    or mem_prime_region_hazards))
                     vec("^", stage, stage, fused_hash_const_vecs["C5"])
-                    scheduler.emit("store", ("vstore", level_table_addr, stage),
-                           (level_table_addr,) + self._v(stage), (), mem_write=True)
+                    # H-039: under region hazards the priming store leaves
+                    # the coarse mem-write clock untouched (mem_write=False)
+                    # -- it writes ONLY level d's block, which nothing but
+                    # level-d gathers ever reads (setup vloads stop at level
+                    # 4, final vstores target the inp region). The level-d
+                    # gathers are gated instead by an exact per-level
+                    # min_cycle recorded here, so priming of level d no
+                    # longer serializes ahead of every OTHER level's gathers
+                    # (the +3 regression H-026 measured for L6).
+                    store_cycle = scheduler.emit(
+                        "store", ("vstore", wave_addr, stage),
+                        (wave_addr,) + self._v(stage), (),
+                        mem_write=not mem_prime_region_hazards)
+                    if mem_prime_region_hazards:
+                        mem_prime_store_done_cycle[d] = max(
+                            mem_prime_store_done_cycle.get(d, -1), store_cycle)
+            # Diagnostic breadcrumb for tools (never read by the kernel).
+            self._mem_prime_store_done = dict(mem_prime_store_done_cycle)
 
         # H-035 (idx_boundary_select): rec +/- 1 select-arm vectors for the
         # epoch-exit boundary conversions, hosted in the setup-dead
@@ -2485,6 +2584,19 @@ class KernelBuilder:
                         else:
                             madd(st, st, two_vec, offset_vec)  # 2*gaddr + 1 - fp
                             vec(sign_op, st, st, par)
+                    # H-039 (mem_prime_region_hazards): this lane loop is
+                    # the ONLY reader of tree levels >= 5. A gather here
+                    # prefetches round r+1's level, so when that level is
+                    # primed it must follow that level's priming stores --
+                    # an exact per-level min_cycle -- and may ignore the
+                    # coarse whole-mem write clock (all other mem writes at
+                    # this point are the L4 priming stores / other levels'
+                    # priming, address-disjoint from level(r+1)'s block).
+                    gather_gate = 0
+                    gather_ignore_writes = False
+                    if mem_prime_region_hazards and level(r + 1) in primed_gather_levels:
+                        gather_gate = mem_prime_store_done_cycle[level(r + 1)] + 1
+                        gather_ignore_writes = True
                     for lane in range(VLEN):
                         # H-037 (gather_load_offset): load_offset's +offset
                         # lane indexing happens at ASSEMBLY time (scratch
@@ -2494,10 +2606,14 @@ class KernelBuilder:
                         # flag-gated to document the negative result.
                         if gather_load_offset:
                             scheduler.emit("load", ("load_offset", nv, st, lane),
-                                   (st + lane,), (nv + lane,), mem_read=True)
+                                   (st + lane,), (nv + lane,), mem_read=True,
+                                   min_cycle=gather_gate,
+                                   ignore_mem_write_hazard=gather_ignore_writes)
                         else:
                             scheduler.emit("load", ("load", nv + lane, st + lane),
-                                   (st + lane,), (nv + lane,), mem_read=True)
+                                   (st + lane,), (nv + lane,), mem_read=True,
+                                   min_cycle=gather_gate,
+                                   ignore_mem_write_hazard=gather_ignore_writes)
 
         def emit_stages(r: int, g: int) -> Iterator[None]:
             # Re-tag on every resume so interleaved generators keep the

@@ -815,3 +815,70 @@ H-009, H-011.
 - status: CLOSED NEGATIVE. Flag kept in dev.py as documentation of the
   equivalence; recommend the backlog census stop counting load_offset as
   an "unused opcode opportunity" — it is an alias, not a capability.
+
+## H-039 (2026-07-27): mem_prime generalization — CLOSED NEGATIVE beyond L5
+- assignment: generalize H-026's c5_primed_gather_levels=(5,) to more
+  levels / other table shapes; quantify scratch, setup load/store, and mem
+  budgets honestly; probe the -116 loads leg of the 892 gap.
+- landed (dev.py, all default OFF, default stream verified BIT-IDENTICAL
+  to HEAD's, grader 9/9 @ 1038, debug_compares green under the flags):
+  * `mem_prime_region_hazards`: exact region hazards for priming waves.
+    Priming stores leave the coarse whole-mem write clock (waves are
+    block-disjoint; only level-d gathers read level d — audited all 7
+    mem_read sites); level-d gathers instead gate on a recorded per-level
+    last-store cycle (min_cycle + ignore_mem_write_hazard).
+  * `mem_prime_dead_reg_staging`: waves stage through wave-private DEAD
+    registers (tail groups' nv vectors, last group's st lanes as address
+    words) instead of shared lv scratch + one address scalar, unchaining
+    the priming vloads into the cycle-0..50 dependency-dead load window.
+    Emission order (priming before all rounds) makes the borrow safe for
+    any skew under the running-maxima hazard model.
+  * `mem_prime_min_cycles`: per-level placement floors for the waves.
+- MEASUREMENTS (run_variant, baseline 1038, schedule deterministic):
+  * (5,6): coarse 1041, region 1041, region+dead-reg 1039, floors never
+    below 1039. (5,6,7): 1049 region, 1044 dead-reg. (5,6,7,8): 1065/1076.
+  * (5,) dead-reg alone 1040 (+2 vs lv-staged 1038!); (5,) floor=90 ties
+    1038. No configuration anywhere beat 1038. Marginal cost of L6 at its
+    best: +1 cycle; L7: +5 more.
+  * l4_gmin re-sweep under (5,6) dead-reg: (8,30)=1042 (7,30)=1041
+    (10,30)=1043 (9,29)=1043 (9,31)=1042 — all worse than (9,30)=1039;
+    the freed mid-window compute does NOT fund more L4 service.
+  * op-mix at (5,6) dead-reg vs base: load 1900->1908 (+8), store 38->46,
+    alu 11881->11745 (-136), valu 6119->6118, flow 797->795; lane-ops
+    (alu+8*valu) 60833->60689 (-144) yet +1 cycle.
+  * reverse control: dropping (5,) entirely (with idx_select off, which it
+    funds) = 1057 (+19) — L5 stays load-bearing.
+- WHY IT CANNOT PAY (mechanism, corrects H-026's L6 note): the "coarse mem
+  model serialization" explanation is FALSE — even under the coarse clock
+  the priming stores retire by cycle ~59, far ahead of round-5/6 gathers
+  (135/167). The real ledger: (a) the schedule FRONT is compute-saturated
+  (valu 6/6 and alu 12/12 from cycle ~9), so each wave's ^C5 displaces
+  critical-path round compute ~1:1 wherever it lands before the level's
+  gather gate; (b) the load engine's only free slots are cycles 0..~60
+  (~90 slots, free precisely because no load's deps are ready) and the
+  drain (950+, useless — priming must precede gathers); the 36..70 load
+  lull is reachable (dead-reg staging proves it) but doesn't help because
+  the binding cost was never load slots at L6 scale; (c) the elide gain
+  (32 lane-xors/level) sits in the load-bound 135..950 window where
+  compute relief shortens nothing (P-3/G-16 mid-window triple-saturation).
+  Cost doubles per level (2^d/8 waves), gain constant — the crossover is
+  already behind L5.
+- -116 loads leg: mem_prime ADDS loads (+2^d/8 per level); the l4_gmin
+  channel (priming-freed compute -> more L4 table service -> -8 loads per
+  served group-round) measured negative at every neighbor point. No
+  supply-side table transform reduces steady-state load count: gathers
+  are 1 word/walker/round at data-dependent addresses (G-16 killed dedup/
+  contiguity demand-side; G-18 killed speculation; G-21 killed
+  relocation). The -116 loads target has NO visible mechanism in this
+  program organization — recommend the driver treat the 892 load gap as
+  evidence for H-040's external-characterization hypothesis, not as an
+  open kernel lever.
+- budgets at close: scratch 1533/1536 unchanged (dead-reg staging borrows
+  ZERO net scratch — nv/st lifetimes are disjoint by construction);
+  setup loads +2^d/8 per level (L6: 8 of the ~90 early-window slots);
+  stores +2^d/8 (free); mem untouched (priming is in-place, no extra_room
+  use — the ~2.6k-word extra_room slack remains unused and useless here).
+- verdict: REJECT generalization; keep (5,) mainline; flags stay in dev.py
+  as the measured negative control + the region-hazard machinery (may be
+  reusable if a future accept opens mid-window load slack, per G-16's
+  reopen-if).
