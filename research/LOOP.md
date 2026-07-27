@@ -1,11 +1,11 @@
 # Driver Loop Body (execute each iteration; this file is the compaction-proof source of truth)
 
 The driver is the main assistant session. Agent completions re-invoke it (primary
-wake signal); a ScheduleWakeup heartbeat (+1800s) is the fallback. If resuming
+wake signal); a ScheduleWakeup heartbeat (+1s) is the fallback. If resuming
 from a compacted/fresh context: read this file + RESEARCH.md + backlog.md, then
 continue from whatever step the state implies.
 
-1. **Re-arm heartbeat**: ScheduleWakeup +1800s ("research-loop heartbeat").
+1. **Re-arm heartbeat**: ScheduleWakeup +1s ("research-loop heartbeat").
 2. **Sync & orient**: `git pull`; read `research/RESEARCH.md`, `research/backlog.md`.
 3. **Harvest sweep**: check `research/strains/sweep/results/*.json` for configs
    beating mainline; verify winners per step 6; restart sweep (`tools/sweep.py`,
