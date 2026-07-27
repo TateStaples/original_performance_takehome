@@ -624,7 +624,8 @@ def load_capture():
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("cmd", choices=["capture", "validate", "regret", "probe",
-                                    "cp", "search"])
+                                    "cp", "search", "pairs", "bound",
+                                    "verify"])
     ap.add_argument("--fungible", action="store_true")
     ap.add_argument("--budget", type=float, default=900.0,
                     help="search wall-clock budget (seconds)")
@@ -830,6 +831,63 @@ def main() -> None:
         print("full path dumped to", outp)
         return
 
+    if args.cmd == "verify":
+        # End-to-end proof of the reconstruction path: rebuild the program
+        # from recorded placements (or the checkpointed incumbent if one
+        # exists and beats baseline) and run the frozen grader multi-seed.
+        place = [op[9] for op in ops]
+        src = "greedy(identity)"
+        inc_path = os.path.join(SCRATCH_DIR, "h51_incumbent.pkl")
+        if os.path.exists(inc_path):
+            with open(inc_path, "rb") as f:
+                inc = pickle.load(f)
+            if inc["cycles"] < max(place) + 1:
+                place = inc["place"]
+                src = f"incumbent({inc['cycles']}, floors={inc['floors']})"
+        ok = check_feasible(ops, preds, floors, place)
+        print(f"source: {src}  feasible={ok}")
+        res = reconstruct_and_verify(ops, place)
+        print(json.dumps(res))
+        return
+
+    if args.cmd == "bound":
+        # Two-sided energetic interval bound: for makespan C, every op has
+        # release est_i and deadline C-1-h_i; if for some engine e and
+        # window [t1, t2] the ops confined to it exceed (t2-t1+1)*cap_e,
+        # C is infeasible. Largest infeasible C + 1 is a valid LB for ANY
+        # packing of this op stream.
+        est = ests(ops, preds, floors)
+        h = tails(ops, preds)
+
+        def feasible(C: int) -> bool:
+            for e in ENGINES:
+                cap = SLOT_LIMITS[e]
+                pts = [(est[i], C - 1 - h[i]) for i in range(len(ops))
+                       if ops[i][0] == e]
+                if not pts:
+                    continue
+                if any(d < r for r, d in pts):
+                    return False
+                t1s = sorted({r for r, _ in pts})
+                for t1 in t1s:
+                    dls = sorted(d for r, d in pts if r >= t1)
+                    for k, t2 in enumerate(dls, 1):
+                        if k > (t2 - t1 + 1) * cap:
+                            return False
+            return True
+
+        lo, hi = 1000, 1032  # bracket
+        while not feasible(hi):
+            hi += 8
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if feasible(mid):
+                hi = mid
+            else:
+                lo = mid + 1
+        print(f"energetic interval LB (any packing of this stream): {lo}")
+        return
+
     if args.cmd == "search":
         # Delay-plan local search: force min_cycle floors on single ops in
         # the high-regret windows and rerun offline greedy end-to-end.
@@ -910,6 +968,60 @@ def main() -> None:
             print(f"best schedule feasible={ok}; verifying on frozen grader...")
             res = reconstruct_and_verify(ops, best_place)
             print(json.dumps(res))
+        return
+
+    if args.cmd == "pairs":
+        # Joint 2-deviation search (the discrepancy-2 slice of the bounded
+        # backtrack): delay PAIRS of ops that both sit in the neighborhood
+        # of the same regret-jump cycle. Covers improvements needing two
+        # simultaneous deviations with no improving single step.
+        place0 = [op[9] for op in ops]
+        base_cycles = max(place0) + 1
+        F, _, _ = regret_profile(ops, preds, floors, place0)
+        jumps = []
+        prev = 0
+        for c in range(len(F)):
+            if F[c] > prev and c > 0:
+                jumps.append(c)
+            prev = max(prev, F[c])
+        engset = set(args.engines.split(","))
+        rad = 3
+        t0 = time.time()
+        best = base_cycles
+        tried = 0
+        for jc in jumps:
+            cand = [i for i in range(len(ops))
+                    if abs(place0[i] - jc) <= rad and ops[i][0] in engset]
+            print(f"jump c={jc}: {len(cand)} candidates "
+                  f"({time.time() - t0:.0f}s, tried {tried})", flush=True)
+            for ai in range(len(cand)):
+                if time.time() - t0 > args.budget:
+                    print("budget exhausted", flush=True)
+                    break
+                i = cand[ai]
+                for bi in range(ai + 1, len(cand)):
+                    j = cand[bi]
+                    for di in (1, 2):
+                        for dj in (1, 2):
+                            trial = {i: place0[i] + di, j: place0[j] + dj}
+                            place, n2 = greedy_schedule(ops, preds, floors,
+                                                        extra_floors=trial)
+                            tried += 1
+                            if n2 is not None and n2 < best:
+                                best = n2
+                                print(f"  IMPROVED -> {best} with {trial}",
+                                      flush=True)
+                                with open(os.path.join(
+                                        SCRATCH_DIR, "h51_incumbent.pkl"),
+                                        "wb") as f:
+                                    pickle.dump({"cycles": best,
+                                                 "floors": trial,
+                                                 "place": place}, f)
+            else:
+                continue
+            break
+        print(f"pairs done: {tried} trials in {time.time() - t0:.0f}s; "
+              f"best {best} (baseline {base_cycles})")
         return
 
     if args.cmd == "probe":
