@@ -312,3 +312,25 @@ L4 served 25 -> 27 group-rounds (LP wants 31); flow util DID NOT MOVE.
 - F-5: flow-saturation leg: re-scope as a scheduler-side hypothesis
   (H-042 beam / N-3), not further spelling flags; three independent
   negatives now show local flow-window flooding eats every spelling win.
+
+## F-1 (2026-07-27): H-045 parity_ring ported to mainline perf_takehome.py — LANDED, 1038 -> 1034
+
+Flag-free port of the verified frontier (`parity_ring=True, l4_gmin=(7,30)`)
+into perf_takehome.py: ring-slice set gated on the graded (4,3)/32-group
+16-round shape (any other shape silently keeps the packed-st path), ring map
+built after alloc_state from cross-block st/nv donors (5 rings per 8-group
+slice, served-at-L4 groups first), L2 seed-madd + L3/L4 ring cond reads, b3l
+ring-mask rewiring (5-temp pop) + served-ring donor-pool filter, parity
+writes redirected into ring slots. No extras (parity_ring_extras stays dev-
+only), no lazy-val donors (mainline loads vals at setup).
+
+Divergence found and closed: the first port measured 1036, not 1034 — the
+files had drifted on temp-pool slot keying (perf used `g % pool_size`, dev's
+temp_slot() rotates by global emission index). Porting dev's emission-index
+rotation recovered 1034 exactly. This keying is now baked into
+perf_takehome.py (comment explains the WAW-halving effect).
+
+Gates: `perf_takehome.py Tests.test_kernel_cycles` CYCLES: 1034 (x2);
+`tests/submission_tests.py` 9/9 green, all CYCLES lines 1034 (x2).
+Debug vcompare hooks unchanged and exercised (test runs with value_trace +
+debug compares enabled and passes).

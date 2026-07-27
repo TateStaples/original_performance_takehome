@@ -477,6 +477,22 @@ class KernelBuilder:
           run in its shadow. node_val = E[t] + b3*D[t] with t = b0b1b2 the
           level-3 winner and b3 the newest parity.
 
+        - Parity rings: the raw parity VECTORS are retained across a group's
+          tournament rounds in a per-group 3-slot ring, so the tournament
+          conditions at L2/L3/L4 are read directly (exact 0/1 parities)
+          instead of re-extracted from the packed position accumulator. Per
+          ringed group-round this deletes the L2 flow copy of b0, both L3
+          mask extractions, and all served-L4 mask extractions -- with zero
+          added ops: the parity write simply targets a ring slot instead of
+          st/nv, the newest L4 bit keeps riding nv, and the position
+          accumulator is SEEDED at L2 (madd st = 2*P0 + P1, replacing the
+          fold madd) then folded as before, so every downstream st reader
+          sees identical values. The ring registers are BORROWED from other
+          skew blocks' st/nv vectors whose real accesses sit strictly on the
+          other side of the ring's accesses in EMISSION order (see
+          `build_parity_ring_map`); this relief funds the epoch-0 `l4_gmin`
+          slide from 9 to 7 (+2 served L4 group-rounds).
+
         - alu offload: elementwise vector ops are split into 8 scalar alu
           slots when that retires them no later (see `_sched_vec`), raising
           compute throughput from 6 to up to 7.5 vector-ops/cycle. The
@@ -532,7 +548,7 @@ class KernelBuilder:
         # --- shape/tuning constants (not toggles; they define the kernel) ---
         # Levels 1..k folded as "tournaments" (broadcast tables + position accumulator), not gathered; l4_gmin = per-epoch group threshold (or explicit set) for two-stage level-(k+1) "pair" tournament; temp_and_cond_pool_sizes/skew size scratch pools + software-pipeline diagonal.
         tournament_levels = (1, 2, 3)
-        l4_gmin = (9, 30)
+        l4_gmin = (7, 30)
         temp_and_cond_pool_sizes = (16, 4)
         skew = (4, 3)
         primed_gather_levels = {5}  # deeper gather levels primed in mem
@@ -597,6 +613,28 @@ class KernelBuilder:
                 "two_minus_fp_vec for the idx-select steady-gather update "
                 "(H-029) -- tighten the final-epoch threshold instead."
             )
+
+        # Parity rings (see docstring): the dead-register funding map is
+        # derived for the graded (4,3)/32-group, 16-round shape (slot =
+        # global diagonal step; blocks emit in block order within a step):
+        #   (0, 0): groups 0-7 ring in block 2's st/nv (first real write:
+        #           block 2's round 0 at slot 6 > last ring read slot <= 4)
+        #   (0, 1): groups 8-15 ring in block 3's st/nv (born slot 9 > 7)
+        #   (1, 2): groups 16-23 ring in block 0's st/nv (dead after its
+        #           r14/r15 at slots 14/15 < first ring write slot 17)
+        #   (1, 3): groups 24-31 ring in block 1's st/nv (dead after
+        #           slots 17/18 < first ring write slot 20)
+        # Each slice funds floor(16/3) = 5 of its 8 groups (st+nv of one
+        # donor block = 16 vectors; a ring is 3); unfunded groups keep the
+        # packed-st path. The final round's dead-register pool writes the
+        # same donors strictly AFTER the last ring read in emission order.
+        # Any other shape falls back to the packed-st path everywhere.
+        parity_ring_slices: set[tuple[int, int]] = (
+            {(0, 0), (0, 1), (1, 2), (1, 3)}
+            if (tournament_level_count == 3 and group_count == 32
+                and skew == (4, 3) and rounds == 16 and period == 11)
+            else set()
+        )
 
         def is_served_without_gather(r: int, g: int) -> bool:
             # node_val comes from scratch (no gather) on these rounds
@@ -673,7 +711,7 @@ class KernelBuilder:
             # retire-time TIES favor the otherwise-idle flow engine instead
             # of the saturated valu engine (H-021 tie_break="fold_flow",
             # re-measured as a real -2 win once composed with the current
-            # idx_select/l4_gmin=(9,30) mainline, though it measured neutral
+            # idx_select/l4_gmin=(9,30)-era mainline, though it measured neutral
             # under the older pre-idx_select engine mix).
             ov = odd_of[dv]
             writes = self._v(dst)
@@ -1050,6 +1088,17 @@ class KernelBuilder:
                 + [state_vecs[g] for g in unserved if g >= early_dead_group_count]
                 + [node_val_vecs[g] for g in unserved if g >= early_dead_group_count]
             )
+            # A SERVED final-round group's parity ring is still read during
+            # this very round (its b3l masks), so those borrowed registers
+            # are NOT dead here -- drop them from the donor pool. (Unserved
+            # groups' rings are last read at r-1 and every pool write below
+            # is emitted after that -- safe.)
+            served_ring_bases = {a for (ep, rg), triple in parity_ring_map.items()
+                                 if ep == 1 and is_pair_tournament_served(r, rg)
+                                 for a in triple}
+            if served_ring_bases:
+                newest_parity_last_dead_reg_pool = [
+                    a for a in newest_parity_last_dead_reg_pool if a not in served_ring_bases]
             if len(newest_parity_last_dead_reg_pool) < 8 + 9:  # diffs + one private group
                 newest_parity_last_leaf_diffs_e, newest_parity_last_leaf_diffs_d, newest_parity_last_dead_reg_pool = [], [], []
                 return
@@ -1061,19 +1110,30 @@ class KernelBuilder:
                     odd_of[h] = tabs[2 * k + 1]
                     out.append(h)
 
-        def b3l_fold_diffs(state_vec_: int, node_val_: int) -> None:
+        def b3l_fold_diffs(state_vec_: int, node_val_: int,
+                           ring_: tuple[int, int, int] | None = None) -> None:
             assert (newest_parity_last_dead_reg_pool is not None
                     and newest_parity_last_leaf_diffs_e is not None
                     and newest_parity_last_leaf_diffs_d is not None
                     and level4_evens is not None and level4_diffs is not None)
             # Final-round newest-parity-last fold (precomputed diffs + private regs): masks (exact 0/1) computed once off st_, each leaf a dual_fold combined via race_sel; post-b3 = 1 madd + fold-in + hash; st_ left intact (masks need it).
-            mask_b2, mask_b1, mask_b0, e_lo, e_mid, e_hi, d_lo, d_mid, d_hi = (
-                newest_parity_last_dead_reg_pool.pop(0) for _ in range(9))
-            vec("&", mask_b2, state_vec_, one_vec)
-            vec(">>", mask_b1, state_vec_, one_vec)
-            vec("&", mask_b1, mask_b1, one_vec)
-            vec(">>", mask_b0, state_vec_, two_vec)
-            vec("&", mask_b0, mask_b0, one_vec)
+            # A ringed group reads b2/b1/b0 straight from its retained
+            # parities -- all 5 mask ops disappear and only 5 private temps
+            # are popped (E and D share the transient hi temp; its E-read
+            # strictly precedes its D-write).
+            if ring_ is not None:
+                mask_b0, mask_b1, mask_b2 = ring_
+                e_lo, e_mid, d_lo, d_mid, shared_hi = (
+                    newest_parity_last_dead_reg_pool.pop(0) for _ in range(5))
+                e_hi = d_hi = shared_hi
+            else:
+                mask_b2, mask_b1, mask_b0, e_lo, e_mid, e_hi, d_lo, d_mid, d_hi = (
+                    newest_parity_last_dead_reg_pool.pop(0) for _ in range(9))
+                vec("&", mask_b2, state_vec_, one_vec)
+                vec(">>", mask_b1, state_vec_, one_vec)
+                vec("&", mask_b1, mask_b1, one_vec)
+                vec(">>", mask_b0, state_vec_, two_vec)
+                vec("&", mask_b0, mask_b0, one_vec)
             comb = race_sel
             for tabs, dt, r0, r1, r2 in (
                 (level4_evens, newest_parity_last_leaf_diffs_e, e_lo, e_mid, e_hi),
@@ -1088,8 +1148,41 @@ class KernelBuilder:
                 comb(r0, mask_b0, r1, r0)                 # winner = b0 ? q1 : q0
             multiply_add(node_val_, node_val_, d_lo, e_lo)                    # node_val = E + b3*D
 
+        # Parity rings: (epoch, group) -> 3 ring vector bases holding the
+        # retained parities P0/P1/P2 (P3 keeps riding nv). Built after
+        # alloc_state so the donor registers exist; groups a slice cannot
+        # fund (donors run out at 5/8) keep the packed-st path.
+        parity_ring_map: dict[tuple[int, int], tuple[int, int, int]] = {}
+
+        def build_parity_ring_map() -> None:
+            if not parity_ring_slices or parity_ring_map:
+                return
+            assert state_vecs is not None and node_val_vecs is not None
+            bs8 = group_count // 4  # 8 at the guarded shape
+            for (epoch, block) in sorted(parity_ring_slices):
+                # e0 slices (blocks 0/1) borrow the not-yet-live blocks 2/3;
+                # e1 slices (blocks 2/3) borrow the already-dead blocks 0/1.
+                donor_block = block + 2 if epoch == 0 else block - 2
+                donor_groups = range(donor_block * bs8, (donor_block + 1) * bs8)
+                donors = ([state_vecs[g] for g in donor_groups]
+                          + [node_val_vecs[g] for g in donor_groups])
+                # Served-at-L4 groups first: they delete 6 ops/ring vs 3.
+                targets = sorted(range(block * bs8, (block + 1) * bs8),
+                                 key=lambda g: (not is_pair_tournament_served(
+                                     L4 if epoch == 0 else rounds - 1, g), g))
+                for g in targets:
+                    if len(donors) < 3:
+                        continue
+                    parity_ring_map[(epoch, g)] = (donors.pop(0), donors.pop(0), donors.pop(0))
+
         # --- rounds ---
         # Round body is a GENERATOR yielding at stage boundaries (node_val, each hash dep level, state update); emission loop drains each group's round in order.
+        # Temp-pool slots rotate by EMISSION index (one bump per group-round),
+        # not by group id: with pool size 16 and 8-group blocks, consecutive
+        # rounds of the same block then land on disjoint slot halves, halving
+        # cross-round WAW serialization on the shared temps.
+        temp_call_index = 0
+
         def _round_stage_generator(round: int, g: int) -> Iterator[None]:
             # Setup asserts guarantee tournament_level_count == 3, pair-tournament service, and primed gather levels, so these pools/tables are populated (output-neutral narrowing).
             assert (state_vecs is not None and hash_chain_vecs is not None
@@ -1101,12 +1194,17 @@ class KernelBuilder:
                     and four_vec is not None and eight_vec is not None
                     and level_table is not None and two_minus_fp_s is not None
                     and two_minus_fp_vec is not None)
+            nonlocal temp_call_index
             L = level(round)
-            s = g % temp_pool_size
+            s = temp_call_index % temp_pool_size
+            temp_call_index += 1
             j = g % cond_pool_size
             st = state_vecs[g]
             vl = hash_chain_vecs[g]
             nv = node_val_vecs[g]
+            # Retained-parity ring of this (epoch, group), or None for the
+            # packed-st path.
+            ring = parity_ring_map.get((round // period, g))
 
             # ---- node_val: broadcast root / tournament select / gather ----
             # All values in the C5-pre-xored domain; tournament conds are raw 0/1 parity: newest bit rides `nv` fresh from round r-1's hash, older bits in position accumulator `st`. First-folds at levels 1/2 race valu madd vs flow vselect (dual_fold); level 3 rides valu madd.
@@ -1118,8 +1216,20 @@ class KernelBuilder:
                 evens, diffs = tables_by_level[L]
                 first_fold = dual_fold if L in auto_raced_first_fold_level_set else multiply_add
                 if L == 1:
-                    # p is the single parity bit itself.
-                    first_fold(nv, st, diffs[0], evens[0])
+                    # p is the single parity bit itself (retained in ring[0]
+                    # for ringed groups; st is then first written by the L2
+                    # seed madd).
+                    first_fold(nv, ring[0] if ring is not None else st,
+                               diffs[0], evens[0])
+                elif L == 2 and ring is not None:
+                    # Ringed: b1 = ring[1], b0 = ring[0] -- the b0 flow copy
+                    # disappears, and the position accumulator is SEEDED here
+                    # (st = 2*P0 + P1; st was never written this epoch)
+                    # instead of lag-folded.
+                    first_fold(temp_pool[s], ring[1], diffs[0], evens[0])
+                    first_fold(tm[j], ring[1], diffs[1], evens[1])
+                    vsel(nv, ring[0], tm[j], temp_pool[s])
+                    multiply_add(st, ring[0], two_vec, ring[1])
                 elif L == 2:
                     # nv=b1 (raw parity), st=b0 (single bit); b0 copy (st folds b1 next) = pure vselect(c,a,a,a) on idle flow engine.
                     vsel(condB[j], st, st, st)
@@ -1127,6 +1237,20 @@ class KernelBuilder:
                     first_fold(temp_pool[s], nv, diffs[0], evens[0])
                     first_fold(tm[j], nv, diffs[1], evens[1])
                     vsel(nv, condB[j], tm[j], temp_pool[s])
+                elif ring is not None:  # L == 3
+                    # Ringed: b2 = ring[2] (newest), b1 = ring[1], b0 =
+                    # ring[0] -- both mask extractions disappear and nv is a
+                    # pure fold destination. The position fold still runs
+                    # (st = 2*st + P2) so the epoch-exit gaddr conversions
+                    # see identical st.
+                    fold_position(st, ring[2])
+                    first_fold(temp_pool[s], ring[2], diffs[0], evens[0])   # m0
+                    first_fold(tmM[j], ring[2], diffs[1], evens[1])  # m1
+                    first_fold(tm[j], ring[2], diffs[2], evens[2])   # m2
+                    first_fold(nv, ring[2], diffs[3], evens[3])      # m3
+                    vsel(temp_pool[s], ring[1], tmM[j], temp_pool[s])  # q0 = b1 ? m1 : m0
+                    vsel(nv, ring[1], nv, tm[j])         # q1 = b1 ? m3 : m2
+                    vsel(nv, ring[0], nv, temp_pool[s])         # b0 ? q1 : q0
                 else:  # L == 3
                     # nv=b2 (raw parity), st=b0b1 (bit1=b0,bit0=b1); both conds extract from st at round START.
                     vec("&", condB[j], st, one_vec)   # b1
@@ -1149,9 +1273,9 @@ class KernelBuilder:
                     # pfold (epoch-exit position, non-final rounds) runs AFTER the folds read st but BEFORE the madd clobbers nv (=b3).
                     if (round == rounds - 1
                             and (make_newest_parity_last_diffs(round) or
-                                 len(newest_parity_last_dead_reg_pool) >= 9)):  # pyright: ignore[reportArgumentType]  # make_newest_parity_last_diffs(r), evaluated first, populates the pool
-                        # Precomputed leaf-diff tables + private dead registers (falls through to depth_first_fold if the dead-reg pool cannot fund another group).
-                        b3l_fold_diffs(st, nv)
+                                 len(newest_parity_last_dead_reg_pool) >= (5 if ring is not None else 9))):  # pyright: ignore[reportArgumentType]  # make_newest_parity_last_diffs(r), evaluated first, populates the pool
+                        # Precomputed leaf-diff tables + private dead registers (falls through to depth_first_fold if the dead-reg pool cannot fund another group); ringed groups skip the 5 mask ops.
+                        b3l_fold_diffs(st, nv, ring)
                     else:
                         # Leaf diff temps: dead `lv` scratch (setup-only); distinct E/D fold slots to run concurrently on valu when drain-idle.
                         depth_first_fold(st, level4_evens, tm[j], tmM[j], temp_pool[s],
@@ -1171,26 +1295,41 @@ class KernelBuilder:
                             else multiply_add(dst, cond, dv, ev)))
                     # Each U-combine is dst := b2 ? wa : wb (runtime arms, exact 0/1 cond) -- race flow vselect vs valu subtract+madd.
                     u_combine = race_sel
-                    vec("&", condB[j], st, one_vec)             # b2 (0/1)
+                    # Ringed groups read b2/b1/b0 straight from the retained
+                    # parities (exact 0/1) -- all three mask extractions
+                    # disappear.
+                    if ring is not None:
+                        b2c = ring[2]
+                    else:
+                        vec("&", condB[j], st, one_vec)         # b2 (0/1)
+                        b2c = condB[j]
                     if should_fold_b3:
                         fold_position(st, nv)                           # b0b1b2b3
                     w_fold(temp_pool[s], nv, level4_diffs[0], level4_evens[0])          # W0
                     w_fold(tm[j], nv, level4_diffs[1], level4_evens[1])                 # W1
-                    u_combine(temp_pool[s], condB[j], tm[j], temp_pool[s])              # U0
+                    u_combine(temp_pool[s], b2c, tm[j], temp_pool[s])                   # U0
                     w_fold(tmM[j], nv, level4_diffs[2], level4_evens[2])                # W2
                     w_fold(tm[j], nv, level4_diffs[3], level4_evens[3])                 # W3
-                    u_combine(tmM[j], condB[j], tm[j], tmM[j])                          # U1
+                    u_combine(tmM[j], b2c, tm[j], tmM[j])                               # U1
                     w_fold(tm[j], nv, level4_diffs[4], level4_evens[4])                 # W4
                     w_fold(condA[j], nv, level4_diffs[5], level4_evens[5])              # W5
-                    u_combine(tm[j], condB[j], condA[j], tm[j])                         # U2
+                    u_combine(tm[j], b2c, condA[j], tm[j])                              # U2
                     w_fold(condA[j], nv, level4_diffs[6], level4_evens[6])              # W6
                     w_fold(nv, nv, level4_diffs[7], level4_evens[7])                    # W7 (b3 dead)
-                    u_combine(nv, condB[j], nv, condA[j])                               # U3 (b2 dead)
-                    vec("&", condA[j], st, four_vec if should_fold_b3 else two_vec)     # b1
-                    vsel(temp_pool[s], condA[j], tmM[j], temp_pool[s])                  # q0
-                    vsel(nv, condA[j], nv, tm[j])                                       # q1
-                    vec("&", condB[j], st, eight_vec if should_fold_b3 else four_vec)   # b0
-                    vsel(nv, condB[j], nv, temp_pool[s])                                # winner
+                    u_combine(nv, b2c, nv, condA[j])                                    # U3 (b2 dead)
+                    if ring is not None:
+                        b1c: int = ring[1]
+                    else:
+                        vec("&", condA[j], st, four_vec if should_fold_b3 else two_vec)  # b1
+                        b1c = condA[j]
+                    vsel(temp_pool[s], b1c, tmM[j], temp_pool[s])                       # q0
+                    vsel(nv, b1c, nv, tm[j])                                            # q1
+                    if ring is not None:
+                        b0c: int = ring[0]
+                    else:
+                        vec("&", condB[j], st, eight_vec if should_fold_b3 else four_vec)  # b0
+                        b0c = condB[j]
+                    vsel(nv, b0c, nv, temp_pool[s])                                     # winner
             else:
                 nvsrc = nv  # gathered during round r-1
 
@@ -1240,7 +1379,14 @@ class KernelBuilder:
             par = temp_pool[s]
             parity: Callable[[int], int] = lambda dst: vec("&", dst, vl, one_vec)
             if is_served_without_gather(round + 1, g):
-                if L == 0:
+                # The parity feeding a ringed tournament round at level 1..3
+                # is written straight into its ring slot (P0/P1/P2); the L4
+                # feeder keeps riding nv (the ring only needs the three
+                # OLDER bits).
+                ring_next = parity_ring_map.get(((round + 1) // period, g))
+                if ring_next is not None and 1 <= next_level <= 3:
+                    parity(ring_next[next_level - 1])
+                elif L == 0:
                     parity(st)                         # p := b
                 else:
                     # Newest parity rides nv into the next tournament round; the p-fold lags into that round's block.
@@ -1298,6 +1444,7 @@ class KernelBuilder:
         block_specs = [(lag * b, range(b * bs_, (b + 1) * bs_))
                        for b in range(n_blocks)]
         n_steps = rounds + lag * (n_blocks - 1)
+        build_parity_ring_map()  # after alloc_state, before any round emits
         for step in range(n_steps):
             for block_lag, group_range in block_specs:
                 r = step - block_lag
