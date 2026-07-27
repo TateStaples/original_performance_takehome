@@ -215,3 +215,32 @@ Seeded 2026-07-23 from the 2148->1140 campaign's measured rejections.
   semantics before hypothesizing -- immediates vs scratch-indirection decides
   whether an opcode is a capability or an alias.
 - reopen-if: never (equivalence is exact, not empirical).
+
+### G-20 Hash re-decomposition / re-derivation space (H-036)
+- claim: alternative algebraic DECOMPOSITIONS of myhash (not fusions of the
+  current step sequence) could shave ~1.5 ops/hash and close the 892 gap.
+- evidence: closed negative at three levels (tools/hash_relation_probe.py,
+  340,023 candidates over the 25-node two-round trace DAG; N=64 structured+
+  random 32-bit samples as screen).
+  * structural: every node of the 11-op DAG costs exactly 1 op, so any shared
+    new intermediate serving two nodes costs >=3 ops vs the 2 it replaces --
+    subexpression sharing can never win. Op removal requires a globally
+    shorter program (H-025 space, closed depth<=7) or a deletable node whose
+    consumers re-derive in 1 op -- enumerated completely: 67 hits, all chain
+    ops/local inverses/sibling rearrangements, zero long-range coincidences.
+  * analytic: xor-conjugation domains transport free through xorshifts but
+    are blocked by madd stages for any D!=0 (confines the family to the
+    already-closed c5_prexor/xr3p space); affine conjugation is constant
+    relabeling already inside solved-constant searches, can't cross ^nv.
+  * parity-from-prefix is MOOT: parity already costs 0 ops (H-015 table
+    reversal); mid-round val is non-deferrable (feeds next hash exactly).
+  * constant-coincidence scan over {C0..C5,ap,aq}: nothing but definitional
+    aq=C2<<9; s0 not GF(2)-affine, s1/s5 not Z-affine.
+- moral: three independent tool classes (fusion/MITM G-10, CEGIS H-025,
+  re-derivation/conjugation here) bottom out at the same boundaries. Stop
+  reopening hash op-count; the credible 892 route is idx folding (H-035)
+  and load/schedule shape.
+- reopen-if: someone exhibits a <11-op two-round-consistent program (e.g.
+  leaderboard disclosure), or a compare/select-based branchy form (the one
+  stated vocabulary gap) is shown viable, or depth>7 global search becomes
+  computationally feasible.

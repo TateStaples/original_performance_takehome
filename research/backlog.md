@@ -955,7 +955,7 @@ correct, measured worse at every configuration tried]
 - reopen-context: H-029 (idx_select) showed the recurrence is malleable;
   c5_prexor (H-015) proved the carry-work-in-a-transformed-domain trick.
 
-### H-036 [strain: op-reduction] [status: testing]
+### H-036 [strain: op-reduction] [status: closed negative -> graveyard G-20 (340K-candidate re-derivation probe + conjugation closures; hash op-count boundary now closed by 3 independent tool classes)]
 - statement: alternative algebraic DECOMPOSITIONS of myhash (not fusions).
   H-016/H-025 closed fusion/MITM/CEGIS over the CURRENT step sequence
   (2.36T candidates, kf<=3 closed, kf=4 CPU-walled) but never searched
