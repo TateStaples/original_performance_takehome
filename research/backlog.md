@@ -1249,3 +1249,21 @@ correct, measured worse at every configuration tried]
 - predicted_gain: bounded above by ~17 (to the as-built-mix floor);
   complements H-049 (order moves) — B&B explores packing choices at
   fixed order. cost: XL.
+
+### H-049 result addendum [status: PARTIAL ACCEPT — frontier 1023 (-8); order+spelling+packing TRIANGULATED closed below ~1023]
+- winner: emission_plan (512-entry, tools/h049_best_plan.json) on the ring
+  stack, flow_spelling_plan DROPPED (order search absorbs the spelling
+  prize — re-search fixpoint at zero flips, including dynamic valu<->alu
+  aux forcing per H-050); gmin (8,30) stable at every frontier (no P-3).
+- coverage: 57 structured-family evals ALL >=1032 (the (4,3) diagonal is
+  locally optimal at every structured granularity; several reorders are
+  ring-liveness INCORRECT — every candidate needs sim-verification);
+  ~245k sim-verified local-search evals; wins live in ramp/drain-seam
+  windows (~9 paying moves). H-051's r9-11 epoch seam: 55k targeted
+  evals, ZERO — order-resistant, chain-bound.
+- TRIANGULATION (with H-042 spelling, G-25 packing/LB-1015): below ~1023
+  requires op-count/chain changes (H-047 restructure or chain
+  shortening), not placement/selection/order.
+- follow-ups: F-12 mainline port (NOTE: must REVERT F-9's (13,29)
+  multiply_add pin — spelling plan is now empty); F-13 restart-portfolio
+  walks (still descending ~1-2/round); F-14 regret re-profile at 1023.
