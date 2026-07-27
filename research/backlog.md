@@ -1145,3 +1145,20 @@ correct, measured worse at every configuration tried]
   ~2,000 lanes). Flow-disabled control: 1040 (G-4/G-12/G-14 confirmed
   model-side). 892 under our rules needs ~0.93 more ops/hash removed —
   consistent with H-040.
+
+### H-045 result addendum [status: PARTIAL ACCEPT — strain frontier 1034, mainline flip pending F-1 port]
+- landed: parity_ring (cond retention via dead-window cross-block register
+  borrowing, 480 words at zero net allocation), b3l ring-mask rewiring,
+  parity_ring_extras (default off). Frontier: parity_ring + l4_gmin=(7,30)
+  = 1034 (-4), correct on 6 seeds + debug_compares. Superadditive slices
+  confirm H-044's coupled-prize direction; gmin slid 9->7; mem_prime (5,6)
+  crossed to neutral.
+- blockers quantified: full cond retention needs >=384 more ring words
+  (mid-schedule has ZERO dead registers — everything live); flow
+  saturation unreachable by spelling (select readiness anti-correlated
+  with flow bubbles, third confirmation) — the flow leg is H-042/N-3
+  joint scheduling, not flags. idx_boundary_select REJECTS composed
+  (+3..+5).
+- follow-ups: F-1 port parity_ring+gmin(7,30) to perf_takehome.py
+  (mainline 1034); F-2 scratch thresholds (24w = +1 ring; 384w = full
+  retention ~ 16 ideal cyc); F-5 unpark H-042 re-scoped.
