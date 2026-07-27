@@ -1232,3 +1232,20 @@ correct, measured worse at every configuration tried]
 - predicted_gain: -2..-6 (valu binder 1021 -> toward 1014). Routed to the
   running H-049 agent (beam move set + optional post-pass) 2026-07-27.
 - analysis doc: scratchpad external_1018_analysis.md (session 5cfbd141).
+
+### H-051 [strain: scheduler] [status: testing] (user-directed 2026-07-27)
+- statement: bounded-backtrack (branch-and-bound) scheduler: schedule
+  forward maintaining an ADMISSIBLE lower bound on remaining cycles
+  (per-engine remaining-slots/limits + dependency span from the current
+  frontier + H-044 fungibility bound); when the partial schedule exceeds
+  LB + N (regret budget), backtrack and try a different packing choice.
+  Incumbent = greedy 1031. Key prerequisite measurement: the REGRET
+  PROFILE of the greedy schedule (where along the 1031 cycles the 17
+  cycles over the 1014 floor are lost) — localizes backtrack points and
+  is valuable even if full B&B thrashes. Feasibility risk: ~19k slots
+  over ~1031 cycles is astronomical for naive B&B; bound looseness
+  mid-schedule may cause thrash — use bounded-discrepancy/checkpointed
+  restarts, not exhaustive search.
+- predicted_gain: bounded above by ~17 (to the as-built-mix floor);
+  complements H-049 (order moves) — B&B explores packing choices at
+  fixed order. cost: XL.
