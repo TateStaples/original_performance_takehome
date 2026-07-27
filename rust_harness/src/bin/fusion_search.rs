@@ -41,6 +41,30 @@
 //!   fusion_search --mitm       # H-016 MITM suite (6->5 boundary questions)
 //!   fusion_search --mitm --stretch   # + interior 7-op spans at k<=6
 //!   fusion_search --mitm b2d   # run specific MITM targets by name
+//!
+//! H-038 adds `--cmpsel`: extends the op vocabulary with the machine's
+//! compare alu/valu ops `lt` (a < b -> 0/1) and `eq` (a == b -> 0/1) and the
+//! flow engine's 3-operand `select(cond, a, b)` (= a if cond != 0 else b) —
+//! the one vocabulary gap G-10/G-20 name as unsearched. With the flag on:
+//!   * interior levels enumerate lt/eq over all operand pairs and select
+//!     over all (cond, a, b) triples (cond non-const, a != b);
+//!   * the final level additionally checks pooled lt/eq/select forms,
+//!     solved-constant select arms (select(c, x, C) / select(c, C, x) /
+//!     select(c, C1, C2)), and — for 0/1-valued targets only (the par_*
+//!     family) — solved threshold constants lt(x, C), lt(C, x), eq(x, C);
+//!   * the MITM engines' FORWARD prefixes inherit the extension through the
+//!     shared `enumerate_level`. The invertible-suffix-chain and meet-op
+//!     sides are NOT extended, and need not be for full-width targets: a
+//!     compare link collapses the chain value to {0,1} and a select link
+//!     with constant arms to <= 2 distinct values, so any suffix containing
+//!     one cannot reproduce a requirement battery with > 2 distinct probe
+//!     values; a compare as the meet op cannot equal a full-width
+//!     requirement battery for the same reason. The only non-collapsing
+//!     unary select link, select(x, x, C) = (x == 0 ? C : x), differs from
+//!     the identity link at the single input 0, i.e. it is probe-
+//!     indistinguishable from identity (already covered) and can only ever
+//!     repair a program at one point of 2^32 — outside probe methodology.
+//! Default (no flag) behavior is byte-for-byte unchanged.
 
 use perf_harness::problem::hashseg as hs;
 use perf_harness::problem::{myhash, Rng};
@@ -63,14 +87,37 @@ enum Op {
     Or,
     Shl,
     Shr,
+    /// H-038 (`--cmpsel` only): a < b -> 1 else 0 (machine `<`).
+    Lt,
+    /// H-038 (`--cmpsel` only): a == b -> 1 else 0 (machine `==`).
+    Eq,
 }
 use Op::*;
 
 const BIN_OPS: [Op; 8] = [Add, Sub, Mul, Xor, And, Or, Shl, Shr];
+const BIN_OPS_CMPSEL: [Op; 10] = [Add, Sub, Mul, Xor, And, Or, Shl, Shr, Lt, Eq];
+
+/// H-038 `--cmpsel` flag: set once in `main` before any search runs.
+static CMPSEL: AtomicBool = AtomicBool::new(false);
+
+#[inline(always)]
+fn cmpsel() -> bool {
+    CMPSEL.load(Ordering::Relaxed)
+}
+
+/// The active binary-op vocabulary (8 base ops, +lt/+eq under `--cmpsel`).
+#[inline(always)]
+fn active_bin_ops() -> &'static [Op] {
+    if cmpsel() {
+        &BIN_OPS_CMPSEL
+    } else {
+        &BIN_OPS
+    }
+}
 
 impl Op {
     fn commutative(self) -> bool {
-        matches!(self, Add | Mul | Xor | And | Or)
+        matches!(self, Add | Mul | Xor | And | Or | Eq)
     }
     fn name(self) -> &'static str {
         match self {
@@ -82,6 +129,8 @@ impl Op {
             Or => "or",
             Shl => "shl",
             Shr => "shr",
+            Lt => "lt",
+            Eq => "eq",
         }
     }
 }
@@ -110,6 +159,18 @@ fn bin(op: Op, a: u32, b: u32) -> u32 {
                 a >> b
             }
         }
+        Lt => u32::from(a < b),
+        Eq => u32::from(a == b),
+    }
+}
+
+/// Bit-exact flow `select`: a if cond != 0 else b (`Machine.flow` "select").
+#[inline(always)]
+fn select(cond: u32, a: u32, b: u32) -> u32 {
+    if cond != 0 {
+        a
+    } else {
+        b
     }
 }
 
@@ -144,6 +205,20 @@ enum Inst {
     MultiplyAddConst(usize, usize, u32),
     /// pool[i] * K + C.
     MultiplyAddAffine(usize, u32, u32),
+    /// H-038: select(pool[cond], pool[a], pool[b]).
+    Select(usize, usize, usize),
+    /// H-038 final-level: select(pool[cond], C, pool[b]) with solved C.
+    SelectConstTrue(usize, u32, usize),
+    /// H-038 final-level: select(pool[cond], pool[a], C) with solved C.
+    SelectConstFalse(usize, usize, u32),
+    /// H-038 final-level: select(pool[cond], C1, C2), both solved.
+    SelectConstBoth(usize, u32, u32),
+    /// H-038 final-level (0/1 targets only): lt(pool[i], C), solved C.
+    LtConstRight(usize, u32),
+    /// H-038 final-level (0/1 targets only): lt(C, pool[i]), solved C.
+    LtConstLeft(u32, usize),
+    /// H-038 final-level (0/1 targets only): eq(pool[i], C), solved C.
+    EqConst(usize, u32),
 }
 
 /// A reference target function evaluated on an input tuple.
@@ -212,7 +287,7 @@ impl SearchState {
                     undo[1] = self.mark(j);
                 }
             }
-            Inst::MultiplyAdd(i, j, k) => {
+            Inst::MultiplyAdd(i, j, k) | Inst::Select(i, j, k) => {
                 undo[0] = self.mark(i);
                 if j != i {
                     undo[1] = self.mark(j);
@@ -241,7 +316,7 @@ impl SearchState {
         self.unused_temp_count -= 1;
         let ops: [usize; 3] = match inst {
             Inst::Bin(_, i, j) => [i, j, usize::MAX],
-            Inst::MultiplyAdd(i, j, k) => [i, j, k],
+            Inst::MultiplyAdd(i, j, k) | Inst::Select(i, j, k) => [i, j, k],
             _ => unreachable!(),
         };
         for (n, &o) in ops.iter().enumerate() {
@@ -288,18 +363,27 @@ fn eval_multiply_add(a: &ProbeValues, b: &ProbeValues, c: &ProbeValues) -> Probe
     out
 }
 
+fn eval_select(cond: &ProbeValues, a: &ProbeValues, b: &ProbeValues) -> ProbeValues {
+    let mut out = [0u32; PROBE_COUNT];
+    for p in 0..PROBE_COUNT {
+        out[p] = select(cond[p], a[p], b[p]);
+    }
+    out
+}
+
 /// Enumerate every candidate instruction over the current pool (dedup'd,
 /// const-const skipped, commutative ops canonicalized) and call `f`.
 fn enumerate_level(w: &SearchState, mut f: impl FnMut(Inst, ProbeValues)) {
     let pool_size = w.vals.len();
-    for &op in BIN_OPS.iter() {
+    for &op in active_bin_ops().iter() {
         for i in 0..pool_size {
             let j0 = if op.commutative() { i } else { 0 };
             for j in j0..pool_size {
                 if w.is_const[i] && w.is_const[j] {
                     continue;
                 }
-                if op == Sub && i == j {
+                // sub/lt(i,i) = 0 and eq(i,i) = 1: constants, never useful.
+                if (op == Sub || op == Lt || op == Eq) && i == j {
                     continue;
                 }
                 let candidate_probe0 = bin(op, w.probe0_vals[i], w.probe0_vals[j]);
@@ -323,6 +407,28 @@ fn enumerate_level(w: &SearchState, mut f: impl FnMut(Inst, ProbeValues)) {
                     continue;
                 }
                 f(Inst::MultiplyAdd(i, j, k), v);
+            }
+        }
+    }
+    // H-038: select(cond, a, b) triples. cond const => one arm always taken
+    // (a dup of that arm); a == b likewise a dup. Both skipped.
+    if cmpsel() {
+        for i in 0..pool_size {
+            if w.is_const[i] {
+                continue;
+            }
+            for j in 0..pool_size {
+                for k in 0..pool_size {
+                    if j == k {
+                        continue;
+                    }
+                    let candidate_probe0 = select(w.probe0_vals[i], w.probe0_vals[j], w.probe0_vals[k]);
+                    let v = eval_select(&w.vals[i], &w.vals[j], &w.vals[k]);
+                    if w.is_dup(candidate_probe0, &v) {
+                        continue;
+                    }
+                    f(Inst::Select(i, j, k), v);
+                }
             }
         }
     }
@@ -368,12 +474,15 @@ fn final_level(ctx: &Ctx, w: &mut SearchState) {
     let covers3 = |i: usize, j: usize, k: usize| unused_temp_indices.iter().all(|&u| u == i || u == j || u == k);
 
     // ---- pooled operands ----
-    for &op in BIN_OPS.iter() {
+    for &op in active_bin_ops().iter() {
         for i in 0..pool_size {
             let j0 = if op.commutative() { i } else { 0 };
             for j in j0..pool_size {
                 if w.is_const[i] && w.is_const[j] {
                     continue;
+                }
+                if (op == Lt || op == Eq) && i == j {
+                    continue; // constant 0 / 1
                 }
                 w.tested_local += 1;
                 if bin(op, w.probe0_vals[i], w.probe0_vals[j]) != target_probe0 || !covers2(i, j) {
@@ -397,6 +506,31 @@ fn final_level(ctx: &Ctx, w: &mut SearchState) {
                 }
                 if (0..PROBE_COUNT).all(|p| multiply_add(w.vals[i][p], w.vals[j][p], w.vals[k][p]) == target[p]) {
                     report(ctx, w, Inst::MultiplyAdd(i, j, k));
+                }
+            }
+        }
+    }
+
+    // ---- H-038: pooled select(cond, a, b) as the final op ----
+    if cmpsel() {
+        for i in 0..pool_size {
+            if w.is_const[i] {
+                continue; // constant cond: select degenerates to one arm
+            }
+            for j in 0..pool_size {
+                for k in 0..pool_size {
+                    if j == k {
+                        continue;
+                    }
+                    w.tested_local += 1;
+                    if select(w.probe0_vals[i], w.probe0_vals[j], w.probe0_vals[k]) != target_probe0
+                        || !covers3(i, j, k)
+                    {
+                        continue;
+                    }
+                    if (0..PROBE_COUNT).all(|p| select(w.vals[i][p], w.vals[j][p], w.vals[k][p]) == target[p]) {
+                        report(ctx, w, Inst::Select(i, j, k));
+                    }
                 }
             }
         }
@@ -503,6 +637,87 @@ fn final_level(ctx: &Ctx, w: &mut SearchState) {
             }
         }
     }
+
+    // ---- H-038 solved-constant compare/select forms ----
+    if cmpsel() {
+        // (i) 0/1-valued targets (the par_* family): solved thresholds.
+        let target_is_bool = (0..PROBE_COUNT).all(|p| target[p] <= 1);
+        if target_is_bool {
+            for i in 0..pool_size {
+                if w.is_const[i] || !unused_temp_indices.iter().all(|&u| u == i) {
+                    continue;
+                }
+                let x = &w.vals[i];
+                let ones = || (0..PROBE_COUNT).filter(|&p| target[p] == 1);
+                let zeros = || (0..PROBE_COUNT).filter(|&p| target[p] == 0);
+                // lt(x, C) == target: C in (max(x|t=1), min(x|t=0)].
+                let a = ones().map(|p| u64::from(x[p])).max().map_or(0, |m| m + 1);
+                let b = zeros().map(|p| u64::from(x[p])).min().unwrap_or(u64::from(u32::MAX));
+                w.tested_local += 1;
+                if ones().next().is_some() && a <= b && a <= u64::from(u32::MAX) {
+                    let c = a as u32;
+                    if (0..PROBE_COUNT).all(|p| u32::from(x[p] < c) == target[p]) {
+                        report(ctx, w, Inst::LtConstRight(i, c));
+                    }
+                }
+                // lt(C, x) == target: C in [max(x|t=0), min(x|t=1)).
+                let a2 = zeros().map(|p| x[p]).max().unwrap_or(0);
+                w.tested_local += 1;
+                if (0..PROBE_COUNT).all(|p| u32::from(a2 < x[p]) == target[p]) {
+                    report(ctx, w, Inst::LtConstLeft(a2, i));
+                }
+                // eq(x, C) == target: C = the common x over t=1 probes.
+                if let Some(p1) = ones().next() {
+                    let c = x[p1];
+                    w.tested_local += 1;
+                    if (0..PROBE_COUNT).all(|p| u32::from(x[p] == c) == target[p]) {
+                        report(ctx, w, Inst::EqConst(i, c));
+                    }
+                }
+            }
+        }
+        // (ii) select with solved constant arm(s).
+        for i in 0..pool_size {
+            if w.is_const[i] {
+                continue;
+            }
+            let cond = &w.vals[i];
+            let first_zero = (0..PROBE_COUNT).find(|&p| cond[p] == 0);
+            let first_nonzero = (0..PROBE_COUNT).find(|&p| cond[p] != 0);
+            // select(cond, C1, C2): both arms solved (2-valued targets).
+            if let (Some(pz), Some(pn)) = (first_zero, first_nonzero) {
+                if unused_temp_indices.iter().all(|&u| u == i) {
+                    let c1 = target[pn];
+                    let c2 = target[pz];
+                    w.tested_local += 1;
+                    if (0..PROBE_COUNT).all(|p| select(cond[p], c1, c2) == target[p]) {
+                        report(ctx, w, Inst::SelectConstBoth(i, c1, c2));
+                    }
+                }
+            }
+            for j in 0..pool_size {
+                if !covers2(i, j) {
+                    continue;
+                }
+                // select(cond, pool[j], C): C solved from a cond==0 probe.
+                if let Some(pz) = first_zero {
+                    let c = target[pz];
+                    w.tested_local += 1;
+                    if (0..PROBE_COUNT).all(|p| select(cond[p], w.vals[j][p], c) == target[p]) {
+                        report(ctx, w, Inst::SelectConstFalse(i, j, c));
+                    }
+                }
+                // select(cond, C, pool[j]): C solved from a cond!=0 probe.
+                if let Some(pn) = first_nonzero {
+                    let c = target[pn];
+                    w.tested_local += 1;
+                    if (0..PROBE_COUNT).all(|p| select(cond[p], c, w.vals[j][p]) == target[p]) {
+                        report(ctx, w, Inst::SelectConstTrue(i, c, j));
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// A candidate matched all probes: verify against the reference function on
@@ -553,6 +768,13 @@ fn run_prog(ctx: &Ctx, prog: &[Inst], inputs: &[u32]) -> u32 {
             Inst::BinConstLeft(op, c, i) => bin(op, c, vals[i]),
             Inst::MultiplyAddConst(i, j, c) => multiply_add(vals[i], vals[j], c),
             Inst::MultiplyAddAffine(i, k, c) => multiply_add(vals[i], k, c),
+            Inst::Select(i, j, k) => select(vals[i], vals[j], vals[k]),
+            Inst::SelectConstTrue(i, c, j) => select(vals[i], c, vals[j]),
+            Inst::SelectConstFalse(i, j, c) => select(vals[i], vals[j], c),
+            Inst::SelectConstBoth(i, c1, c2) => select(vals[i], c1, c2),
+            Inst::LtConstRight(i, c) => u32::from(vals[i] < c),
+            Inst::LtConstLeft(c, i) => u32::from(c < vals[i]),
+            Inst::EqConst(i, c) => u32::from(vals[i] == c),
         };
         vals.push(v);
     }
@@ -645,6 +867,21 @@ fn render(ctx: &Ctx, prog: &[Inst]) -> String {
             Inst::MultiplyAddAffine(a, k, c) => {
                 format!("madd({}, {:#010x}, {:#010x})", name(a, ctx), k, c)
             }
+            Inst::Select(a, b, c) => {
+                format!("select({}, {}, {})", name(a, ctx), name(b, ctx), name(c, ctx))
+            }
+            Inst::SelectConstTrue(a, c, b) => {
+                format!("select({}, {:#010x}, {})", name(a, ctx), c, name(b, ctx))
+            }
+            Inst::SelectConstFalse(a, b, c) => {
+                format!("select({}, {}, {:#010x})", name(a, ctx), name(b, ctx), c)
+            }
+            Inst::SelectConstBoth(a, c1, c2) => {
+                format!("select({}, {:#010x}, {:#010x})", name(a, ctx), c1, c2)
+            }
+            Inst::LtConstRight(a, c) => format!("lt({}, {:#010x})", name(a, ctx), c),
+            Inst::LtConstLeft(c, a) => format!("lt({:#010x}, {})", c, name(a, ctx)),
+            Inst::EqConst(a, c) => format!("eq({}, {:#010x})", name(a, ctx), c),
         };
         out.push_str(&format!("{lhs} = {rhs}; "));
     }
@@ -2496,7 +2733,7 @@ fn mitm_targets() -> Vec<MTarget> {
     ]
 }
 
-fn run_mitm_target(tg: &MTarget, threads: usize, max_kf: usize, force_engine_c: bool) {
+fn run_mitm_target(tg: &MTarget, threads: usize, max_kf: usize, force_engine_c: bool, engine_a_kmax_cap: Option<usize>) {
     let kmax_use = tg.current_ops - 1;
     let wanted: u32 = (2u32 << kmax_use) - 2; // bits 1..=kmax_use
     println!(
@@ -2506,17 +2743,22 @@ fn run_mitm_target(tg: &MTarget, threads: usize, max_kf: usize, force_engine_c: 
     let t_start = Instant::now();
 
     // Engine A: forward-only exhaustive (full j=0 coverage at k <= engine_a_kmax)
-    // over the target's engine-A pool.
+    // over the target's engine-A pool. H-038: `--engine-a-kmax N` caps this
+    // depth (the cmpsel vocabulary multiplies engine A's k=4 layer ~10-30x
+    // into a CPU wall; the base-vocabulary k<=4 layer stays closed by iter
+    // 4/7, and compare/select shapes at k=4..5 are reached through engines
+    // B/C's extended forward sides instead). Default (no flag): unchanged.
+    let engine_a_kmax = engine_a_kmax_cap.map_or(tg.engine_a_kmax, |cap| tg.engine_a_kmax.min(cap));
     let pool_a = if tg.engine_a_pool_override.is_empty() {
         &tg.pool
     } else {
         &tg.engine_a_pool_override
     };
     let ctx_a = build_ctx(tg.input_count, pool_a, &*tg.reference_fn);
-    if tg.engine_a_kmax > 0 {
+    if engine_a_kmax > 0 {
         println!(
             "   engine A (forward exhaustive, k <= {}): pool [{}]",
-            tg.engine_a_kmax,
+            engine_a_kmax,
             ctx_a
                 .base_names
                 .iter()
@@ -2525,9 +2767,11 @@ fn run_mitm_target(tg: &MTarget, threads: usize, max_kf: usize, force_engine_c: 
                 .collect::<Vec<_>>()
                 .join(", ")
         );
-        search_iterative(&ctx_a, tg.engine_a_kmax, threads);
-    } else {
+        search_iterative(&ctx_a, engine_a_kmax, threads);
+    } else if tg.engine_a_kmax == 0 {
         println!("   engine A skipped (H-003 closed this span at k <= 4 already)");
+    } else {
+        println!("   engine A skipped (--engine-a-kmax 0)");
     }
 
     // Shared MITM context (same pool; link constants live outside the ctx).
@@ -2739,6 +2983,106 @@ fn run_kf_scale_target_probe(name: &str) {
     println!("== probe complete ==");
 }
 
+/// H-038 positive controls (`--selftest-cmpsel`): plant three functions whose
+/// shortest machine programs REQUIRE the compare/select vocabulary, and
+/// confirm the extended searcher rediscovers each at its planted length.
+/// Exercises all three new mechanisms: interior compare feeding arithmetic
+/// (carry form), final-level solved select arms, and a pooled 3-operand
+/// select over mixed operands.
+fn run_cmpsel_selftest(threads: usize) {
+    assert!(cmpsel(), "--selftest-cmpsel requires the cmpsel vocabulary");
+    struct Case {
+        name: &'static str,
+        input_count: usize,
+        consts: Vec<(&'static str, u32)>,
+        max_ops: usize,
+        reference_fn: &'static TargetFn,
+    }
+    let cases = vec![
+        Case {
+            name: "carry-add: x + (x < 0x80000000)",
+            input_count: 1,
+            consts: vec![("H", 0x8000_0000)],
+            max_ops: 2,
+            reference_fn: &|ins| ins[0].wrapping_add(u32::from(ins[0] < 0x8000_0000)),
+        },
+        Case {
+            name: "branch consts: x > 0xC0DECAFE ? 0x12345678 : 0x0BADF00D",
+            input_count: 1,
+            consts: vec![("K", 0xC0DE_CAFE)],
+            max_ops: 2,
+            reference_fn: &|ins| {
+                if ins[0] > 0xC0DE_CAFE {
+                    0x1234_5678
+                } else {
+                    0x0BAD_F00D
+                }
+            },
+        },
+        Case {
+            name: "select mix: y if x < 0x40000000 else x",
+            input_count: 2,
+            consts: vec![("K", 0x4000_0000)],
+            max_ops: 2,
+            reference_fn: &|ins| {
+                if ins[0] < 0x4000_0000 {
+                    ins[1]
+                } else {
+                    ins[0]
+                }
+            },
+        },
+    ];
+    for case in &cases {
+        let probes = probes(case.input_count);
+        let mut base_names: Vec<String> = Vec::new();
+        let mut base_vals: Vec<ProbeValues> = Vec::new();
+        let mut base_is_const: Vec<bool> = Vec::new();
+        let input_names = ["x", "y"];
+        for k in 0..case.input_count {
+            base_names.push(input_names[k].to_string());
+            let mut v = [0u32; PROBE_COUNT];
+            for (p, tup) in probes.iter().enumerate() {
+                v[p] = tup[k];
+            }
+            base_vals.push(v);
+            base_is_const.push(false);
+        }
+        for (nm, c) in &case.consts {
+            base_names.push(format!("{nm}={c:#010x}"));
+            base_vals.push([*c; PROBE_COUNT]);
+            base_is_const.push(true);
+        }
+        let mut target = [0u32; PROBE_COUNT];
+        for (p, tup) in probes.iter().enumerate() {
+            target[p] = (case.reference_fn)(tup);
+        }
+        let ctx = Ctx {
+            input_count: case.input_count,
+            base_names,
+            base_vals,
+            base_is_const,
+            target,
+            tested_count: AtomicU64::new(0),
+            should_stop: AtomicBool::new(false),
+            finds: Mutex::new(Vec::new()),
+            unsolved_count: AtomicU64::new(0),
+            reference_fn: case.reference_fn,
+        };
+        println!("== cmpsel selftest: {} (planted {} ops) ==", case.name, case.max_ops);
+        search_iterative(&ctx, case.max_ops, threads);
+        let finds = ctx.finds.lock().unwrap();
+        assert!(
+            !finds.is_empty(),
+            "cmpsel selftest FAILED: planted {}-op form not found for {}",
+            case.max_ops,
+            case.name
+        );
+        println!("   PASS ({} verified find(s))\n", finds.len());
+    }
+    println!("cmpsel selftest: all {} positive controls PASS", cases.len());
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let long = args.iter().any(|a| a == "--long");
@@ -2752,6 +3096,12 @@ fn main() {
     // iter 7/8, so this cannot silently alter any already-verified result.
     let kf3 = args.iter().any(|a| a == "--kf3");
     let max_kf: usize = if kf3 { 3 } else { 2 };
+    // H-038: opt-in compare/select vocabulary extension. Default off keeps
+    // every prior run byte-for-byte reproducible.
+    if args.iter().any(|a| a == "--cmpsel") {
+        CMPSEL.store(true, Ordering::Relaxed);
+        println!("[cmpsel] vocabulary extended: +lt +eq (alu compares) +select (flow) in forward enumeration and final level");
+    }
     // Opt-in iter-11/P-12 extension: force engine C on for a named target even
     // when its own MTarget.enable_engine_c is false (a2d/b2e/c2out were an
     // iter-4 CPU-budget guess, never actually timed). Only affects targets
@@ -2761,7 +3111,23 @@ fn main() {
     let force_engine_c = args.iter().any(|a| a == "--force-engine-c");
     let kf_scale_target: Option<String> =
         args.iter().position(|a| a == "--kf-scale-target").and_then(|i| args.get(i + 1).cloned());
-    let names: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
+    // H-038: optional cap on MITM engine A's forward depth (see run_mitm_target).
+    let engine_a_kmax_cap: Option<usize> = args
+        .iter()
+        .position(|a| a == "--engine-a-kmax")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|v| v.parse().ok());
+    // Positional args are target names; skip option VALUES (the token after
+    // a value-taking flag) so e.g. `--engine-a-kmax 3` doesn't leak a "3".
+    let value_flags = ["--kf-scale-target", "--engine-a-kmax"];
+    let names: Vec<&String> = args
+        .iter()
+        .enumerate()
+        .filter(|(i, a)| {
+            !a.starts_with("--") && !(*i > 0 && value_flags.contains(&args[i - 1].as_str()))
+        })
+        .map(|(_, a)| a)
+        .collect();
     if kf_scale {
         run_kf_scale_probe();
         return;
@@ -2773,6 +3139,11 @@ fn main() {
     let threads = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4);
+    if args.iter().any(|a| a == "--selftest-cmpsel") {
+        CMPSEL.store(true, Ordering::Relaxed);
+        run_cmpsel_selftest(threads);
+        return;
+    }
     if mitm {
         let all = mitm_targets();
         let mut ran = 0;
@@ -2783,7 +3154,7 @@ fn main() {
                 names.iter().any(|n| n.as_str() == tg.name)
             };
             if selected {
-                run_mitm_target(tg, threads, max_kf, force_engine_c);
+                run_mitm_target(tg, threads, max_kf, force_engine_c, engine_a_kmax_cap);
                 ran += 1;
             }
         }
