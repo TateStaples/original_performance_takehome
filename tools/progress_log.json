@@ -118,5 +118,23 @@
     "label": "cross-pollination\n(H-026/27/28)",
     "cycles": 1053,
     "note": "Three composed pieces, each ~0 alone: L5 in-mem C5-priming, b3-last with leaf-diff tables in 52 dead registers (G-17 reopen satisfied), disjoint same-cycle store pairing (model fix)."
+  },
+  {
+    "step": "1034",
+    "label": "parity_ring",
+    "cycles": 1034,
+    "note": "H-045 cond retention via dead-window register borrowing + gmin(7,30); F-1 port"
+  },
+  {
+    "step": "1034",
+    "label": "parity_ring",
+    "cycles": 1034,
+    "note": "H-045 cond retention via dead-window register borrowing + gmin(7,30); F-1 port"
+  },
+  {
+    "step": "1034",
+    "label": "parity_ring",
+    "cycles": 1034,
+    "note": "H-045 cond retention via dead-window register borrowing + gmin(7,30); F-1 port"
   }
 ]
