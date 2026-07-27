@@ -136,5 +136,11 @@
     "label": "parity_ring",
     "cycles": 1034,
     "note": "H-045 cond retention via dead-window register borrowing + gmin(7,30); F-1 port"
+  },
+  {
+    "step": "1032",
+    "label": "ring_plan",
+    "cycles": 1032,
+    "note": "H-048 word-level ring borrowing (4 plan rings, 96 words) + gmin(8,30); F-6 port"
   }
 ]
