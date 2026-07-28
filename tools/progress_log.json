@@ -178,5 +178,11 @@
     "label": "ring_remine",
     "cycles": 1011,
     "note": "F-25/F-29: 23-ring plan re-mined for the H-056 organization + gmin(6,30) + re-walked order; ring audit clean"
+  },
+  {
+    "step": "1006",
+    "label": "joint_chain",
+    "cycles": 1006,
+    "note": "H-057/F-33: F-24 diagonal + re-mined 20-ring plan + gmin(6,31) + round-window walk; audit clean over 40 rings"
   }
 ]
