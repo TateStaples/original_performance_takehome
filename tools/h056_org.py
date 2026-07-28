@@ -388,11 +388,41 @@ def perturb_jobs(rng: random.Random, base_lags: Sequence[int],
     return jobs
 
 
+def dump_plan(spec: str, path: str) -> None:
+    """Materialise one organization as an emission_order_search seed file.
+
+    spec = "<part><k>/stag<s>/<interleave>/<wave_order>/<group_order>", e.g.
+    "even8/stag2/zip/rot:1/asc" -- the format `deep_jobs` prints.
+    """
+    part, stag, iv, wo, go = spec.split("/")
+    s = int(stag[4:])
+    for pref, fn in (("even", even_blocks), ("cut", cut_blocks),
+                     ("stride", strided_blocks)):
+        if part.startswith(pref):
+            blk = fn(int(part[len(pref):]))
+            break
+    else:
+        raise ValueError(part)
+    assert blk is not None
+    lags = tuple(s * b for b in range(len(blk)))
+    plan = make_plan(lags=lags, blocks=blk, interleave=iv, wave_order=wo,
+                     group_order=go)
+    cyc, ok = measure(dict(MIX, emission_plan=plan), seed=1)
+    with open(path, "w") as f:
+        json.dump({"cycles": cyc, "params": {"spec": spec, "lags": list(lags)},
+                   "plan": [list(e) if e[0] != "rr"
+                            else ["rr", [list(p) for p in e[1]]] for e in plan]},
+                  f)
+    print(json.dumps({"spec": spec, "cycles": cyc, "correct": bool(ok),
+                      "entries": len(plan), "path": path}))
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("mode", choices=["fam", "lagrand", "rand", "deep",
-                                     "perturb", "cfg"])
+                                     "perturb", "dump", "cfg"])
     ap.add_argument("--out", required=True)
+    ap.add_argument("--spec", default=None, help="dump mode organization spec")
     ap.add_argument("--workers", type=int, default=max(2, (os.cpu_count() or 4) - 1))
     ap.add_argument("--budget", type=float, default=600.0)
     ap.add_argument("--blocks", type=int, default=4)
@@ -419,6 +449,11 @@ def main() -> None:
         mixov = {"parity_ring_plan": ()}
     elif args.mix == "noring":
         mixov = {"parity_ring_plan": (), "parity_ring": False}
+
+    if args.mode == "dump":
+        assert args.spec, "dump needs --spec"
+        dump_plan(args.spec, args.out)
+        return
 
     p = Pool(args.workers, args.out)
     t0 = time.time()
