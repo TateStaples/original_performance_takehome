@@ -166,5 +166,11 @@
     "label": "order_radius",
     "cycles": 1020,
     "note": "F-13 restart portfolio, jump radius +/-16/32 (the +/-8 set was a local optimum); driver-ported literal"
+  },
+  {
+    "step": "1015",
+    "label": "organization",
+    "cycles": 1015,
+    "note": "H-056: even8/stagger2/zip interleave (LB 1013 -> 1001) + walked order; driver-ported literal"
   }
 ]
