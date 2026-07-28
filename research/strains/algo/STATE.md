@@ -1695,3 +1695,80 @@ fungible 992. The reachable band is 1006 -> 996.
   `anon:23`-class free words (F-25's F-31, verbatim and unchanged).
 - **CLOSED**: the cheap-greedy organization search (section 6). Do not spend
   more budget on lag-diagonal screening at this move set.
+
+
+## F-33 (2026-07-28): H-057 mainline port — perf_takehome.py 1011 -> **1006**, ring audit clean over 40 rings, bundle stream bit-identical to dev.py
+
+Ported the verified H-057 frontier into the flag-free submission. Three
+coupled literals, no structural change — F-24's non-uniform-lag organization
+(8 blocks of 4, lags (0,3,6,6,10,10,13,14), zip/default/asc) is expressed
+entirely through the emission order, so there is nothing else to port.
+
+1. `_EMISSION_ORDER` <- H-057's 512 entries (asserted bit-for-bit equal to
+   `tools/h057_best_plan_1006.json`'s `plan`; coverage, uniqueness and
+   per-group-ascending all re-checked).
+2. `l4_gmin` (6,30) -> **(6,31)**.
+3. `build_parity_ring_map`'s appended plan: F-25's 23 rings -> H-057's
+   **20** rings, renamed `f25_ring_plan` -> `h057_ring_plan`.
+
+Per F-6 house style no raw addresses are baked. H-057's symbolized
+named-vector literal was used verbatim and then VERIFIED against the
+artifact's raw addresses by instrumenting `alloc_scratch`: **all 20 triples
+matched exactly**, both before and after the gmin change (layout is stable
+at `lv=185`, `root_nv_vec=40`). Donor classes are structural only —
+`st`/`nv`/`lv(+VLEN,+2*VLEN)`/`root_nv_vec`; no `anon`. Mapping:
+
+    (0,  3)  st6, st7, st13          (0, 28)  st0, st1, st3
+    (0,  4)  st25, nv8, nv12         (0, 29)  lv, lv+VLEN, st2
+    (0,  5)  lv, lv+VLEN, lv+2*VLEN  (1,  8)  nv0, nv1, nv2
+    (0, 13)  nv20, nv21, nv22        (1,  9)  root_nv_vec, st4, st5
+    (0, 14)  st22, st23, nv16        (1, 21)  st8, st9, st10
+    (0, 15)  nv17, nv18, nv19        (1, 22)  st13, nv8, nv10
+    (0, 16)  nv28, nv29, nv30        (1, 23)  root_nv_vec, lv, lv+VLEN
+    (0, 17)  lv, lv+VLEN, nv31       (1, 28)  st0, st1, st2
+    (0, 18)  lv+2*VLEN, st30, st31   (1, 29)  lv+2*VLEN, st16, st17
+    (0, 19)  st28, st29, nv27        (1, 30)  st18, st19, st20
+
+Note `(0, 5)` now borrows all three level-table words `lv`/`lv+VLEN`/
+`lv+2*VLEN` in one ring; `lv+3*VLEN` (two_minus_fp_vec) is still deliberately
+unused, and `root_nv_vec` is still epoch-1-only.
+
+### Verification
+
+- `perf_takehome.py Tests.test_kernel_cycles`: **CYCLES 1006**, twice.
+- `tests/submission_tests.py`: **9/9 OK**, all nine **CYCLES 1006**, twice.
+- Multi-seed via the harness's own `do_kernel_test` (value-trace compares
+  enabled): **1006 and correct at all 10 seeds**
+  {0,1,2,3,7,42,99,123,2026,31337}.
+- **Ring audit on the PORTED config: `OK over 40 rings`, zero LIVE-ACROSS.**
+  Run by reading the three literals back out of the shipped file (order,
+  gmin, and the symbolic ring plan re-resolved against the live scratch
+  map), asserting they equal the artifact, then feeding them to
+  `tools/audit_ring_windows.py`. This audits what shipped, not what was
+  searched — F-29 caught a stale carried borrow exactly this way.
+- **Bit-identity: `dev.instrs == perf_takehome.instrs`, 1006 bundles,
+  exactly equal**, at BASE_KWARGS + the H-057 mix + `emission_plan`.
+  (First comparison differed only in the `debug` slot, because dev's
+  BASE_KWARGS sets `debug_compares=False` while the mainline always emits
+  vcompares; with that matched the streams are identical. The grader
+  ignores debug slots either way.) The port is airtight: every remaining
+  dev/mainline op-mix drift is outside this config.
+- No divergence of any kind observed.
+
+### Comment maintenance (the rules that keep costing cycles when dropped)
+
+The `_EMISSION_ORDER` header, the `l4_gmin` line and the ring-plan preamble
+were all updated to the new numbers (20 rings / 40 audited rings / (6,31)),
+and the preamble now states the two rules explicitly:
+
+- Ring plans are **ORDER-specific AND GMIN-specific** — gmin decides which
+  groups are pair-tournament served and therefore what each ring's access
+  window is. Never carry a plan across a change to either; **re-mine from
+  EMPTY** (H-057 measured that seeding the mine from a carried plan gives a
+  same-size but UNSOUND assignment).
+- Plans are **ALL-OR-NOTHING**; the leave-one-out counterexample is kept but
+  re-labelled as historical (it was `(0, 25)` in F-25's 1011 plan, which is
+  not an entry in this one).
+
+Strain frontier and mainline are now both at **1006**; envelope 1006 ->
+energetic 996. Next live axis is H-057's F-34 (finer round windows).

@@ -48,87 +48,90 @@ from problem import (
 _SCALARIZABLE = {"+", "-", "*", "^", "&", "|", "<<", ">>", "<", "=="}
 
 
-# F-25/H-056/H-049 emission order (2026-07-28): explicit (round, group)
-# emission plan replacing the (4,3)-skew diagonal step loop for the graded
-# 32-group, 16-round shape. Found by tools/emission_order_search.py
-# (windowed single-entry local search + sideways plateau walk); H-049
-# reached 1023 from the default diagonal order, H-047 re-searched it
-# jointly with the serving mix to 1022, H-056 re-organized it
-# (even8/stag2/zip/rev/asc) and F-25 re-walked that organization at the
-# F-25 mix -- l4_gmin (6,30) plus the RE-MINED 23-entry parity-ring plan
-# below -- to 1011 (committed artifact tools/f25_best_plan.json).
+# H-057/F-24 emission order (2026-07-28): explicit (round, group) emission
+# plan replacing the (4,3)-skew diagonal step loop for the graded 32-group,
+# 16-round shape. Found by tools/emission_order_search.py (windowed
+# single-entry local search + sideways plateau walk); H-049 reached 1023
+# from the default diagonal order, H-047 re-searched it jointly with the
+# serving mix to 1022, H-056 re-organized it (even8/stag2/zip/rev/asc),
+# F-25 re-walked that organization to 1011, and H-057 re-ran the full
+# joint chain on F-24's NON-UNIFORM lag diagonal (8 blocks of 4, lags
+# (0,3,6,6,10,10,13,14), zip/default/asc) at the H-057 mix -- l4_gmin
+# (6,31) plus the RE-MINED 20-entry parity-ring plan below -- to 1006
+# (committed artifact tools/h057_best_plan_1006.json). The organization is
+# expressed entirely through this order; there is no structural knob for it.
 # Order-load-bearing, MIX-matched AND ring-liveness-timed -- the plan is
-# only worth 1011 at exactly that op mix, and the parity rings' borrow
+# only worth 1006 at exactly that op mix, and the parity rings' borrow
 # windows are validated against THIS order (tools/audit_ring_windows.py
-# reports OK over 43 rings here) -- so do not regenerate, simplify, or
+# reports OK over 40 rings here) -- so do not regenerate, simplify, or
 # locally reorder it; re-derive via the search driver after any kernel
 # change. Covers every (round, group) exactly once with per-group rounds
 # ascending (asserted at use).
 _EMISSION_ORDER: tuple[tuple[int, int], ...] = (
-    (0, 0), (0, 3), (0, 1), (0, 4), (0, 2), (1, 4), (1, 1), (1, 2),
-    (1, 0), (2, 0), (1, 3), (2, 2), (0, 5), (3, 0), (0, 7), (1, 5),
-    (1, 7), (2, 1), (0, 6), (2, 3), (1, 6), (3, 1), (3, 3), (0, 8),
-    (0, 10), (2, 4), (3, 2), (4, 0), (4, 1), (3, 4), (4, 2), (4, 3),
-    (2, 6), (2, 5), (5, 2), (0, 12), (5, 3), (3, 5), (0, 11), (1, 8),
-    (0, 9), (2, 7), (1, 11), (0, 14), (5, 0), (1, 10), (6, 0), (0, 15),
-    (3, 6), (4, 4), (6, 2), (1, 9), (2, 11), (5, 1), (2, 10), (2, 9),
-    (3, 7), (6, 3), (4, 6), (4, 5), (0, 13), (5, 6), (3, 9), (7, 0),
-    (2, 8), (3, 8), (6, 1), (4, 7), (5, 4), (1, 12), (1, 13), (7, 1),
-    (5, 5), (2, 13), (3, 10), (5, 7), (1, 15), (0, 22), (8, 1), (0, 16),
-    (0, 17), (0, 19), (6, 7), (7, 2), (3, 11), (4, 9), (8, 2), (7, 3),
-    (2, 12), (2, 15), (8, 0), (9, 0), (1, 14), (4, 10), (9, 2), (3, 12),
-    (6, 4), (6, 5), (4, 11), (0, 18), (2, 14), (1, 16), (4, 8), (5, 10),
-    (9, 1), (6, 10), (0, 21), (3, 14), (5, 11), (5, 8), (5, 9), (10, 0),
-    (10, 2), (3, 13), (6, 9), (6, 6), (1, 19), (1, 21), (7, 7), (6, 8),
-    (0, 20), (7, 4), (4, 13), (1, 17), (4, 12), (8, 3), (8, 4), (9, 3),
-    (0, 23), (7, 5), (1, 18), (2, 16), (10, 1), (7, 6), (8, 7), (2, 19),
-    (2, 18), (3, 15), (4, 14), (0, 28), (8, 6), (10, 3), (8, 5), (7, 9),
-    (9, 4), (3, 16), (0, 24), (11, 2), (4, 15), (1, 22), (7, 8), (1, 20),
-    (11, 1), (3, 19), (4, 16), (9, 5), (1, 23), (5, 14), (2, 20), (2, 17),
-    (11, 0), (11, 3), (5, 13), (10, 5), (5, 12), (7, 10), (8, 9), (6, 13),
-    (3, 18), (6, 11), (2, 23), (9, 7), (5, 15), (4, 19), (0, 25), (6, 15),
-    (9, 6), (7, 11), (6, 12), (12, 1), (8, 11), (2, 22), (12, 0), (1, 25),
-    (2, 21), (10, 4), (13, 0), (3, 20), (10, 7), (8, 8), (0, 26), (8, 10),
-    (5, 16), (7, 12), (1, 26), (4, 18), (9, 9), (11, 7), (5, 18), (3, 17),
-    (6, 16), (12, 2), (7, 13), (12, 3), (10, 6), (6, 14), (13, 1), (4, 17),
-    (9, 8), (9, 10), (0, 27), (10, 10), (1, 28), (3, 23), (5, 19), (3, 21),
-    (13, 3), (9, 11), (14, 0), (13, 2), (1, 27), (2, 26), (4, 21), (14, 3),
-    (8, 12), (1, 24), (11, 4), (5, 17), (4, 20), (0, 29), (12, 4), (7, 15),
-    (3, 22), (0, 31), (11, 5), (10, 8), (7, 14), (11, 6), (5, 20), (4, 23),
-    (2, 27), (2, 24), (15, 0), (6, 17), (14, 1), (8, 13), (12, 5), (10, 9),
-    (6, 19), (4, 22), (12, 7), (2, 28), (5, 21), (9, 12), (7, 16), (13, 5),
-    (10, 11), (3, 24), (6, 20), (13, 7), (12, 6), (7, 17), (8, 15), (6, 18),
-    (11, 10), (2, 25), (14, 2), (13, 4), (3, 28), (0, 30), (11, 9), (9, 13),
-    (6, 21), (11, 8), (3, 27), (7, 19), (15, 2), (1, 29), (14, 4), (15, 3),
-    (4, 24), (7, 18), (5, 23), (13, 6), (8, 14), (1, 30), (12, 8), (3, 25),
-    (5, 22), (10, 12), (2, 30), (9, 15), (8, 19), (15, 1), (11, 11), (15, 4),
-    (4, 25), (6, 22), (3, 26), (8, 18), (9, 19), (14, 6), (11, 12), (10, 13),
-    (11, 13), (5, 25), (4, 26), (6, 23), (10, 15), (12, 10), (3, 30), (14, 5),
-    (9, 14), (1, 31), (8, 17), (12, 9), (9, 17), (4, 27), (2, 29), (13, 8),
-    (12, 13), (8, 16), (13, 9), (10, 17), (9, 16), (3, 29), (10, 14), (9, 18),
-    (14, 9), (10, 16), (13, 13), (5, 24), (2, 31), (10, 19), (11, 16), (7, 23),
-    (6, 25), (5, 26), (12, 11), (6, 26), (7, 25), (13, 10), (14, 7), (13, 11),
-    (4, 29), (3, 31), (7, 20), (5, 27), (15, 5), (4, 28), (8, 23), (6, 24),
-    (6, 27), (7, 22), (15, 7), (10, 18), (14, 10), (8, 20), (12, 12), (11, 19),
-    (4, 30), (9, 20), (8, 22), (7, 24), (14, 11), (11, 15), (7, 21), (15, 11),
-    (14, 8), (8, 24), (9, 22), (15, 9), (15, 10), (11, 14), (13, 12), (15, 6),
-    (5, 28), (6, 28), (5, 29), (15, 8), (4, 31), (5, 30), (7, 26), (10, 20),
-    (12, 14), (5, 31), (12, 15), (13, 14), (13, 15), (11, 17), (8, 21), (14, 12),
-    (9, 23), (12, 16), (11, 18), (6, 29), (9, 21), (10, 21), (7, 27), (12, 17),
-    (6, 31), (8, 25), (8, 26), (14, 13), (12, 19), (6, 30), (8, 27), (12, 18),
-    (14, 15), (14, 14), (10, 23), (10, 22), (7, 28), (11, 20), (9, 24), (9, 26),
-    (15, 13), (15, 12), (11, 21), (13, 16), (9, 25), (13, 17), (7, 29), (7, 30),
-    (11, 23), (15, 14), (11, 22), (7, 31), (13, 18), (9, 27), (13, 19), (15, 15),
-    (12, 20), (8, 28), (14, 16), (10, 25), (12, 21), (8, 29), (10, 24), (12, 22),
-    (14, 17), (8, 30), (10, 26), (14, 18), (8, 31), (10, 27), (12, 23), (9, 28),
-    (14, 19), (11, 24), (13, 20), (9, 29), (15, 16), (11, 25), (15, 17), (13, 21),
-    (13, 23), (9, 30), (11, 26), (13, 22), (11, 27), (10, 28), (9, 31), (15, 19),
-    (12, 24), (14, 20), (14, 21), (10, 29), (15, 18), (12, 25), (10, 30), (14, 22),
-    (12, 26), (10, 31), (14, 23), (12, 27), (13, 24), (11, 29), (11, 28), (11, 30),
-    (13, 25), (15, 21), (15, 22), (11, 31), (13, 26), (13, 27), (15, 23), (12, 28),
-    (14, 24), (12, 29), (14, 25), (12, 30), (12, 31), (14, 27), (13, 28), (15, 20),
-    (13, 29), (13, 31), (13, 30), (14, 26), (14, 28), (14, 30), (15, 28), (14, 29),
-    (15, 25), (14, 31), (15, 30), (15, 24), (15, 27), (15, 29), (15, 31), (15, 26),
+    (0, 0), (0, 1), (0, 2), (1, 0), (1, 2), (0, 3), (1, 3), (1, 1),
+    (2, 0), (2, 1), (2, 2), (2, 3), (3, 0), (3, 1), (0, 5), (0, 4),
+    (3, 2), (0, 6), (0, 7), (3, 3), (4, 0), (1, 4), (4, 1), (1, 5),
+    (4, 2), (1, 7), (4, 3), (1, 6), (5, 0), (5, 1), (2, 5), (2, 4),
+    (5, 2), (2, 6), (5, 3), (2, 7), (6, 0), (3, 5), (3, 4), (0, 8),
+    (6, 1), (0, 9), (0, 12), (6, 2), (3, 6), (0, 13), (0, 10), (0, 14),
+    (6, 3), (3, 7), (0, 15), (7, 0), (4, 4), (1, 8), (1, 12), (0, 11),
+    (7, 1), (4, 5), (1, 9), (1, 10), (1, 13), (7, 2), (4, 6), (7, 3),
+    (4, 7), (1, 14), (1, 11), (1, 15), (8, 0), (2, 8), (8, 1), (2, 12),
+    (5, 5), (2, 9), (2, 15), (2, 13), (5, 6), (8, 2), (9, 2), (5, 7),
+    (8, 3), (2, 10), (5, 4), (2, 11), (9, 0), (6, 4), (2, 14), (3, 8),
+    (9, 1), (3, 12), (3, 9), (3, 13), (6, 6), (3, 14), (7, 6), (3, 10),
+    (6, 7), (9, 3), (6, 5), (4, 12), (10, 0), (3, 11), (7, 4), (0, 16),
+    (4, 8), (0, 20), (10, 1), (7, 5), (4, 13), (0, 21), (0, 17), (4, 9),
+    (10, 2), (4, 10), (0, 18), (4, 14), (10, 3), (7, 7), (0, 22), (4, 11),
+    (3, 15), (4, 15), (0, 19), (11, 0), (0, 23), (8, 4), (5, 8), (5, 12),
+    (1, 16), (1, 20), (8, 5), (11, 1), (5, 9), (5, 13), (1, 17), (1, 21),
+    (12, 0), (8, 6), (5, 10), (11, 2), (5, 14), (1, 18), (1, 22), (8, 7),
+    (5, 11), (5, 15), (1, 19), (1, 23), (9, 4), (6, 8), (6, 12), (2, 16),
+    (2, 20), (9, 5), (6, 9), (6, 13), (2, 17), (11, 3), (2, 21), (9, 6),
+    (6, 10), (6, 14), (2, 18), (2, 22), (12, 3), (9, 7), (6, 11), (6, 15),
+    (12, 1), (2, 19), (2, 23), (13, 0), (10, 4), (7, 8), (7, 12), (3, 16),
+    (3, 20), (12, 2), (13, 2), (13, 1), (0, 24), (10, 5), (7, 9), (7, 13),
+    (3, 17), (3, 21), (0, 25), (10, 6), (7, 10), (13, 3), (7, 14), (3, 18),
+    (3, 22), (14, 2), (0, 26), (10, 7), (7, 11), (7, 15), (14, 1), (3, 19),
+    (11, 4), (3, 23), (0, 27), (8, 8), (8, 12), (4, 16), (14, 0), (4, 20),
+    (14, 3), (1, 24), (0, 28), (11, 5), (8, 9), (8, 13), (4, 17), (4, 21),
+    (12, 4), (1, 25), (0, 29), (8, 10), (8, 14), (4, 18), (4, 22), (1, 26),
+    (15, 1), (0, 30), (8, 11), (11, 6), (8, 15), (4, 19), (11, 7), (4, 23),
+    (1, 27), (0, 31), (9, 8), (9, 12), (5, 16), (12, 5), (5, 20), (2, 24),
+    (1, 28), (9, 9), (9, 13), (5, 17), (5, 21), (2, 25), (1, 29), (12, 7),
+    (15, 2), (9, 10), (9, 14), (5, 18), (5, 22), (15, 0), (2, 26), (1, 30),
+    (9, 11), (9, 15), (5, 19), (5, 23), (2, 27), (1, 31), (13, 4), (10, 8),
+    (10, 12), (6, 16), (6, 20), (3, 24), (2, 28), (10, 9), (10, 13), (12, 6),
+    (6, 17), (13, 6), (6, 21), (3, 25), (2, 29), (10, 10), (10, 14), (6, 18),
+    (6, 22), (3, 26), (13, 5), (2, 30), (10, 11), (13, 7), (10, 15), (6, 19),
+    (6, 23), (3, 27), (2, 31), (11, 12), (7, 16), (11, 8), (14, 4), (7, 20),
+    (14, 5), (11, 9), (4, 24), (3, 28), (7, 17), (7, 21), (4, 25), (15, 5),
+    (3, 29), (11, 10), (11, 14), (7, 18), (11, 13), (14, 6), (7, 22), (4, 26),
+    (3, 30), (11, 15), (7, 19), (7, 23), (4, 27), (3, 31), (12, 12), (14, 7),
+    (8, 16), (11, 11), (4, 30), (8, 20), (5, 24), (4, 28), (12, 9), (12, 13),
+    (5, 27), (12, 11), (12, 8), (15, 3), (8, 17), (8, 21), (15, 7), (5, 25),
+    (4, 29), (12, 14), (8, 18), (13, 8), (8, 22), (9, 21), (8, 19), (12, 15),
+    (5, 26), (9, 20), (4, 31), (8, 23), (9, 16), (6, 24), (5, 28), (15, 4),
+    (6, 25), (5, 29), (13, 12), (13, 13), (9, 18), (5, 31), (9, 22), (6, 26),
+    (13, 11), (5, 30), (9, 17), (12, 10), (14, 13), (9, 19), (9, 23), (6, 27),
+    (13, 9), (13, 15), (14, 8), (7, 24), (10, 23), (10, 16), (13, 14), (10, 20),
+    (14, 12), (6, 31), (10, 17), (14, 9), (7, 25), (10, 21), (6, 28), (13, 10),
+    (6, 29), (15, 13), (10, 22), (6, 30), (10, 19), (14, 10), (10, 18), (15, 12),
+    (7, 26), (14, 14), (14, 11), (11, 20), (11, 21), (7, 27), (11, 18), (8, 25),
+    (7, 28), (11, 17), (12, 20), (15, 9), (15, 8), (14, 15), (7, 30), (8, 24),
+    (11, 19), (11, 16), (8, 27), (15, 6), (12, 16), (7, 31), (15, 10), (15, 15),
+    (15, 11), (15, 14), (11, 22), (8, 26), (11, 23), (7, 29), (9, 24), (12, 17),
+    (12, 21), (8, 28), (8, 29), (9, 25), (12, 22), (12, 18), (9, 26), (12, 23),
+    (8, 30), (12, 19), (9, 27), (8, 31), (13, 20), (13, 16), (10, 24), (9, 28),
+    (13, 21), (13, 17), (10, 25), (9, 29), (13, 18), (13, 22), (10, 26), (9, 30),
+    (13, 23), (13, 19), (10, 27), (9, 31), (14, 16), (14, 20), (11, 24), (10, 28),
+    (14, 21), (14, 17), (11, 25), (10, 29), (14, 18), (14, 22), (11, 26), (10, 30),
+    (14, 23), (14, 19), (11, 27), (10, 31), (11, 29), (12, 24), (15, 20), (15, 18),
+    (15, 21), (12, 25), (11, 30), (15, 22), (12, 26), (13, 24), (12, 30), (13, 25),
+    (12, 27), (14, 24), (12, 29), (13, 26), (11, 31), (11, 28), (12, 28), (12, 31),
+    (13, 27), (13, 28), (14, 25), (13, 30), (13, 29), (14, 26), (14, 27), (14, 28),
+    (13, 31), (14, 29), (14, 31), (15, 28), (14, 30), (15, 30), (15, 24), (15, 26),
+    (15, 16), (15, 25), (15, 23), (15, 19), (15, 31), (15, 17), (15, 27), (15, 29),
 )
 
 
@@ -584,9 +587,9 @@ class KernelBuilder:
           sees identical values. The ring registers are BORROWED from other
           skew blocks' st/nv vectors whose real accesses sit strictly on the
           other side of the ring's accesses in EMISSION order (see
-          `build_parity_ring_map`). Twenty-three more rings come from an
+          `build_parity_ring_map`). Twenty more rings come from an
           offline-audited word-level donor plan (H-048, RE-MINED at the
-          H-056/F-25 emission order by F-25): scratch runs (level-table
+          F-24/H-057 emission order by H-057): scratch runs (level-table
           words, the primed root's broadcast vector, dead-window st/nv of
           other blocks) whose real accesses were trace-verified
           emission-order-disjoint from the ring's access window --
@@ -596,7 +599,7 @@ class KernelBuilder:
           epoch-0 `l4_gmin` slide from 9 to 8 (+1 served L4 group-round vs
           the ringless 9), and -- once the level-6 mem priming below
           deletes another ~184 alu slots -- on to 7 (H-047) and, with the
-          re-mined 23-ring plan's retention relief, to 6 (F-25).
+          re-mined 20-ring plan's retention relief, to 6 (F-25/H-057).
 
         - alu offload: elementwise vector ops are split into 8 scalar alu
           slots when that retires them no later (see `_sched_vec`), raising
@@ -620,8 +623,8 @@ class KernelBuilder:
           in the dependency-idle cycle-0..50 load window, its stores stay
           off the coarse whole-mem write clock (exact per-level gather
           gating instead), and the ~184 alu slots it frees are what fund
-          the `l4_gmin` (8,30) -> (7,30) slide (and, with F-25's re-mined
-          ring plan, (6,30)). Neither leg wins alone.
+          the `l4_gmin` (8,30) -> (7,30) slide (and, with H-057's re-mined
+          ring plan, (6,31)). Neither leg wins alone.
 
         - Newest-parity-last fold at the final round: fold the level-4 E/D
           tables by the OLDER bits b0,b1,b2 (already in `st` at round start)
@@ -660,7 +663,10 @@ class KernelBuilder:
         # --- shape/tuning constants (not toggles; they define the kernel) ---
         # Levels 1..k folded as "tournaments" (broadcast tables + position accumulator), not gathered; l4_gmin = per-epoch group threshold (or explicit set) for two-stage level-(k+1) "pair" tournament; temp_and_cond_pool_sizes/skew size scratch pools + software-pipeline diagonal.
         tournament_levels = (1, 2, 3)
-        l4_gmin = (6, 30)  # F-25: 7 -> 6, funded by the 23-ring parity plan
+        # H-057: epoch-1 threshold re-slid 30 -> 31 under the relief of the
+        # re-mined 20-ring parity plan. gmin and the ring plan are chosen
+        # JOINTLY -- neither transfers to the other's setting.
+        l4_gmin = (6, 31)  # F-25: 7 -> 6, funded by the 20-ring parity plan
         temp_and_cond_pool_sizes = (16, 4)
         skew = (4, 3)
         # Deeper gather levels primed in mem; a level only exists to prime
@@ -1331,8 +1337,8 @@ class KernelBuilder:
                     if len(donors) < 3:
                         continue
                     parity_ring_map[(epoch, g)] = (donors.pop(0), donors.pop(0), donors.pop(0))
-            # H-048 word-level donor plan, RE-MINED by F-25 at the current
-            # _EMISSION_ORDER: 23 extra rings. Each triple borrows three
+            # H-048 word-level donor plan, RE-MINED by H-057 at the current
+            # _EMISSION_ORDER: 20 extra rings. Each triple borrows three
             # 8-word scratch runs whose REAL accesses were trace-verified
             # emission-order-disjoint from the ring's access window (rounds
             # 0-4 for epoch 0, 11-15 for epoch 1), with no live range
@@ -1350,42 +1356,45 @@ class KernelBuilder:
             # root_node_val_vec is epoch-1-only: its last real read is block
             # 3's round-0 fold, before any epoch-1 ring write.
             #
-            # ORDER-SPECIFIC AND ALL-OR-NOTHING. The windows are indices
-            # into _EMISSION_ORDER, so this plan is valid only at exactly
-            # that order -- re-mine it (tools/audit_ring_windows.py) after
-            # any emission-order or op-mix change, and never drop or
-            # reorder individual entries: leave-one-out of (0, 25) alone
-            # makes the kernel INCORRECT. Audit at this order: OK, zero
-            # LIVE-ACROSS violations over all 43 rings.
+            # ORDER-SPECIFIC, GMIN-SPECIFIC AND ALL-OR-NOTHING. The windows
+            # are indices into _EMISSION_ORDER, so this plan is valid only at
+            # exactly that order AND at exactly the `l4_gmin` above (which
+            # decides which groups are pair-tournament served and therefore
+            # what each ring's access window is) -- re-mine it from EMPTY
+            # (tools/audit_ring_windows.py, audit -> add -> re-audit to a
+            # fixpoint) after any emission-order, gmin or op-mix change, and
+            # never carry a plan across such a change: H-057 measured that
+            # seeding the mine from a carried plan yields a same-size but
+            # UNSOUND assignment. Never drop or reorder individual entries
+            # either -- at F-25's 1011 plan, leave-one-out of a single entry
+            # ((0, 25)) alone made the kernel INCORRECT. Audit at this order:
+            # OK, zero LIVE-ACROSS violations over all 40 rings.
             assert level_table is not None
             lv = level_table
             st, nv = state_vecs, node_val_vecs
-            f25_ring_plan: tuple[tuple[tuple[int, int], tuple[int, int, int]], ...] = (
-                ((0, 3), (st[6], st[7], st[14])),
-                ((0, 4), (st[9], st[10], st[11])),
-                ((0, 5), (lv + 2 * VLEN, st[8], st[12])),
-                ((0, 13), (st[23], nv[17], nv[18])),
-                ((0, 14), (nv[20], nv[22], nv[23])),
-                ((0, 15), (lv, lv + VLEN, nv[31])),
-                ((0, 18), (st[27], nv[24], nv[27])),
-                ((0, 20), (st[29], st[30], st[31])),
-                ((0, 23), (lv + 2 * VLEN, nv[29], nv[30])),
-                ((0, 25), (lv, lv + VLEN, nv[31])),
-                ((0, 30), (st[1], st[2], nv[0])),
-                ((1, 0), (st[4], st[25], nv[31])),
-                ((1, 4), (st[0], st[3], nv[10])),
-                ((1, 11), (st[4], nv[2], nv[3])),
-                ((1, 12), (root_node_val_vec, lv, st[19])),
-                ((1, 14), (st[8], st[18], st[22])),
-                ((1, 15), (st[11], st[20], nv[5])),
-                ((1, 21), (st[9], st[10], st[26])),
-                ((1, 22), (st[12], st[13], nv[14])),
+            h057_ring_plan: tuple[tuple[tuple[int, int], tuple[int, int, int]], ...] = (
+                ((0, 3), (st[6], st[7], st[13])),
+                ((0, 4), (st[25], nv[8], nv[12])),
+                ((0, 5), (lv, lv + VLEN, lv + 2 * VLEN)),
+                ((0, 13), (nv[20], nv[21], nv[22])),
+                ((0, 14), (st[22], st[23], nv[16])),
+                ((0, 15), (nv[17], nv[18], nv[19])),
+                ((0, 16), (nv[28], nv[29], nv[30])),
+                ((0, 17), (lv, lv + VLEN, nv[31])),
+                ((0, 18), (lv + 2 * VLEN, st[30], st[31])),
+                ((0, 19), (st[28], st[29], nv[27])),
+                ((0, 28), (st[0], st[1], st[3])),
+                ((0, 29), (lv, lv + VLEN, st[2])),
+                ((1, 8), (nv[0], nv[1], nv[2])),
+                ((1, 9), (root_node_val_vec, st[4], st[5])),
+                ((1, 21), (st[8], st[9], st[10])),
+                ((1, 22), (st[13], nv[8], nv[10])),
                 ((1, 23), (root_node_val_vec, lv, lv + VLEN)),
-                ((1, 27), (lv + 2 * VLEN, st[16], st[17])),
                 ((1, 28), (st[0], st[1], st[2])),
-                ((1, 29), (st[18], st[19], st[20])),
+                ((1, 29), (lv + 2 * VLEN, st[16], st[17])),
+                ((1, 30), (st[18], st[19], st[20])),
             )
-            for key, bases in f25_ring_plan:
+            for key, bases in h057_ring_plan:
                 assert key not in parity_ring_map, \
                     f"parity ring plan entry {key} already ring-funded"
                 parity_ring_map[key] = bases
