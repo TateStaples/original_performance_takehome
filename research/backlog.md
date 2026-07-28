@@ -1386,3 +1386,29 @@ correct, measured worse at every configuration tried]
   tools/h054_oracle.py, tools/backtrack_sched.py regret.
 - predicted_gain: unknown but this is where the -181 joint signal lives;
   the free-compute bound is 993 and CP-bound regions dominate it.
+
+### H-056 [strain: algo] [status: testing] (post-convergence: re-open the ORGANIZATION)
+- statement: every axis WITHIN the current program organization is now
+  closed with evidence (G-16/18/20/21/22/24/25/26/27/28/29 + H-047's
+  serve-more floor closure); envelope is 1020 -> 1006 and unreachable by
+  order/packing. The one untested surface is the ORGANIZATION ITSELF:
+  the (32 groups x 8 lanes x 2 epochs, skew=(4,3), 11-round period,
+  block=8) decomposition. Every prior organization experiment (uneven
+  blocks / external-repo 13-block shape / skew sweeps, commit f76753c
+  and the sweep phases) was measured under a GREEDY emission order and
+  the pre-H-042 spelling regime — both of which no longer exist.
+- why this is a justified reopen, not a re-run: H-047 proved the exact
+  pattern — G-22's mem_prime(5,6) flipped from +1 to -1 once the order
+  was re-searched per candidate. F-13 then proved orders are MIX-SPECIFIC
+  (each mix's plan scores ~1027 on the other), so ANY organization
+  change must carry its own order search or it is being measured wrong.
+- method: for each organization candidate (skew shape, block size/evenness,
+  group count, epoch split, round-period phase), run the standing
+  pre-screens FIRST (h054_shadow for the resource ceiling, backtrack_sched
+  for LB+regret, free_slot_oracle if op classes move), then an emission
+  order walk seeded fresh (radius +/-8..32 per G-29's saturation finding)
+  ONLY for candidates whose LB is at or below 1006. Report LB even for
+  cycle-negative candidates — a lower-LB stream is the input to the next
+  order round.
+- predicted_gain: unknown; this is the only surface left below 1006.
+  cost: XL.
