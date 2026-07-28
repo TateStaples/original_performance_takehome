@@ -597,3 +597,32 @@ Seeded 2026-07-23 from the 2148->1140 campaign's measured rejections.
   cp 512 | all-lags-zero 1004 | regret 11 = ramp 4 + mid 3 + drain 4.
 - reopen-if: a different mix or organization (both closed by their own
   artifacts) — i.e. only if some OTHER axis moves first.
+
+### G-32 Packing axis re-tested at the 1006 stream (F-39) — G-25 HOLDS
+- justification for the re-open: G-25 closed packing at the 1031 stream,
+  which no longer exists (organization, ring plan, gmin and order all
+  changed since). Three prior stale closures had flipped sign under
+  regime change (G-22->H-047, the convergence call->H-056, the phantom
+  LB-992 prize->F-24), so this was the one untested closure.
+- model still exact: capture 20,462 ops (was 20,562), `validate` reports
+  exact_match true / 0 mismatches — offline greedy reproduces every
+  captured placement; frozen-grader reconstruction verifies 1006 correct
+  on 6 seeds. The constraint model did not drift with the organization.
+- **386,090 full re-schedules, best = 1006** (i.e. greedy): priority-list
+  variants 4 (best 1024, reverse-emission); exhaustive discrepancy-1 over
+  the ENTIRE stream at d in {1,2} = 40,924 and d in {3,5,8} = 61,386;
+  discrepancy-2 pairs at radius 3 around ALL 11 regret jumps, all
+  engines = 283,780. k=3 deliberately not sampled (exhaustive disc-1 and
+  exhaustive pairs-at-every-jump both empty).
+- bounds at 1006: engine LB 995 / CP 512 / staircase 996-995 /
+  **energetic interval LB 996** / fungible 992. **Open window 10**
+  (was 16 at 1031) — a tighter negative than the original.
+- regret 11 = ramp 4 (c=0,1,3,7) + mid 3 (c=805,864,915) + drain 4
+  (c=978,984,993,997). The r9-11 epoch-seam CLUSTER is gone (replaced by
+  3 isolated unit jumps) and drain fell 7 -> 4. **In the drain, cpLB
+  strictly exceeds engLB from c=978 — those cycles are provably LATENCY,
+  not packing.**
+- verdict: all three scheduler axes (order G-30/G-31, spelling
+  H-042/F-25, packing here) are measured-closed at the 1006 mix for the
+  SECOND regime running. The residual 11 is chain structure; only chain
+  shortening (capped at 2 by all-lags-zero = 1004) or a mix change moves.
