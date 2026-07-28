@@ -564,3 +564,36 @@ Seeded 2026-07-23 from the 2148->1140 campaign's measured rejections.
   all-lags-zero 1004; regret 11 = ramp 4 + mid 3 + drain 4.
 - basin evidence: 0 of 12 perturbed restarts re-found 1006 (best 1008).
 - reopen-if: multi-move (see F-37), or any mix/organization change.
+
+### G-31 Multi-move emission-order search (F-37) — ORDER AXIS CLOSED
+- claim (from G-30): single moves are provably empty at 1006, so any
+  order win must be a paired/tripled escape, and it must live in the
+  only productive band (rounds 12-15).
+- evidence: 438,247 multi-move evals, ZERO below 1006.
+  * plateau in the band: 7,306 single displacements (source round
+    12-15, destination unbounded), zero below 1006; 1,641 exactly 1006
+    (22.5%) and 541 "slightly worse" (1007-1009) as +1/-2 raw material.
+  * k=2 INTERACTING space EXHAUSTED: neutral x neutral 209,311,
+    worse x neutral 92,175, worse x worse 25,570, plus the 12,789
+    anchor-clash pairs re-run resolved — all >= 1006. The only pairs not
+    evaluated are 4,498 whose composite violates per-group round order
+    (not valid emission plans at all).
+  * k=3 mutually-overlapping triples: 28,591 sampled, zero.
+  * disjoint-span pairs: 69,811 sampled (6.4%), zero — and measured NOT
+    additive (only 71% stay at 1006), so the overlap split was a
+    prioritisation, not a proof.
+  * k=4 deliberately not run (k=2 exhausted zero, k=3 flat).
+- enabling fix worth keeping: f18's (i,j) reinsertion coordinates DO NOT
+  COMPOSE (the second j is measured in a list the first move shifted).
+  tools/f37_lib.py re-coordinatises moves as (src, anchor) in base-index
+  space, which composes for arbitrary k; verified to reproduce f18's
+  25,550 moves bit-for-bit at k=1.
+- finding beyond the zero: **the plateau composes freely but never
+  crosses** — 154,039 interacting pairs return to exactly 1006,
+  including 20,848 where a +1..+3 penalty is fully cancelled by a
+  neutral partner and 1,027 worse x worse pairs that cancel each other.
+- 1006 bound stack (tools/f37_bounds.py): realized 1006 | LB 995 (valu
+  995, alu 981, load 946, flow 797) | energetic 996 | fungible 992 |
+  cp 512 | all-lags-zero 1004 | regret 11 = ramp 4 + mid 3 + drain 4.
+- reopen-if: a different mix or organization (both closed by their own
+  artifacts) — i.e. only if some OTHER axis moves first.
