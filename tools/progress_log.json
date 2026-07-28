@@ -172,5 +172,11 @@
     "label": "organization",
     "cycles": 1015,
     "note": "H-056: even8/stagger2/zip interleave (LB 1013 -> 1001) + walked order; driver-ported literal"
+  },
+  {
+    "step": "1011",
+    "label": "ring_remine",
+    "cycles": 1011,
+    "note": "F-25/F-29: 23-ring plan re-mined for the H-056 organization + gmin(6,30) + re-walked order; ring audit clean"
   }
 ]
