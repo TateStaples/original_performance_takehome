@@ -671,3 +671,44 @@ Seeded 2026-07-23 from the 2148->1140 campaign's measured rejections.
   registers; with it off, aliasing is correct at every W.
 - reopen-if: the alu/valu assignment stops depending on live-group count
   (i.e. H-060's static partition works).
+
+### G-34 Load-bound regret / regret-0 load saturation (H-061) — H-058's SURVIVOR IS CLOSED
+- claim (the last of H-058's four branches): 940 is reachable if a
+  scheduler realizes a load-100% stream at regret ~0 where ours measures
+  ~70.
+- **PROVED IMPOSSIBLE, with a new bound.** 2-D energetic argument valid
+  for ANY packing: M >= t + k + ceil(#{est>=t, h>=k}/2). It evaluates to
+  **naive load floor + 31 on every stream** (946->977, 986->1017,
+  1002->1033, 1034->1065), and the free-compute oracle hits it within 2.
+  So the ~70 decomposes as **31 provable ramp/drain + a constant 39 of
+  compute contention** delaying addresses past their dependency-est.
+  Neither term is a load-SCHEDULING term.
+- **940 requires <= 1,758 steady-state loads; we issue 1,831.** The
+  frontier is NOT scheduling ~1,880 loads at zero regret — under this
+  served-levels structure that is arithmetically impossible.
+- attribution: binding-edge census over all 1,892 loads = **raw 1,883,
+  floor 9, ZERO WAR / WAW / mem edges**. 70% of blocking producers are
+  the valu idx-recurrence multiply_add. **The load engine is a strict
+  slave of valu.** Load idles in exactly two places: head [29..64] = 70
+  slots and drain [958..1005] = 48; cycles **65-957 are 2/2 saturated
+  for 893 consecutive cycles**. In every head-bubble cycle valu is 6/6
+  AND alu is 12/12 — 100% compute-saturated, idle-but-blocked, with only
+  9 of 1,892 loads address-independent, i.e. nothing could fill it.
+- root of the head: the est-critical chain into the FIRST gather is 52
+  ops spanning rounds 0-3 = four consecutive hash evaluations, BECAUSE
+  levels 0-3 are served by selection rather than gathered. 1,831 of
+  1,892 loads inherit that release date (t=51).
+- fixes attempted, ALL EXACTLY ZERO (each an unsound upper bound, so the
+  zeros are conclusive): deleting BOTH coarse mem clocks entirely
+  (identical on all five streams); dropping every mem_prime gather-gate
+  min_cycle (identical); offline load-issue priorities (none beat
+  greedy-in-emission-order); prefetch distance (dependency-limited by
+  construction — the first gather is already placed at wait 0).
+  Context: 3-wide load hardware would buy 3 cycles at mainline.
+- corrected stack at mainline: cp 512 / load 946->**977** / alu 981 /
+  **valu 995** -> 1006, regret 11. Load is provably NOT the binder.
+- **RULED IN (successor H-062):** lower t=51 by GATHERING instead of
+  serving at levels 0-3 for the group-rounds that execute in the head
+  bubble — converting compute into loads exactly where 70 load slots and
+  ZERO compute slots are free. Opposite of the steady-state trade.
+  Bounded <= 35 cycles gross.

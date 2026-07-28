@@ -1548,3 +1548,19 @@ correct, measured worse at every configuration tried]
   recoverable, and does a wider/multi-start portfolio find a DIFFERENT
   1006-or-better basin? Cheap; informs whether further order search on
   this mix is worth any budget at all.
+
+### H-062 [strain: algo] [status: open] (H-061's ruled-in successor)
+- statement: INVERT the serving decision in the head bubble. Levels 0-3
+  are served by selection everywhere today, which is why the first
+  gather's release date is t=51 (52-op chain spanning four consecutive
+  hash evaluations) and why 1,831 of 1,892 loads inherit it. In cycles
+  29-64 the load engine has 70 FREE slots while valu is 6/6 and alu is
+  12/12 — the exact inverse of the steady state. GATHERING instead of
+  serving at levels 0-3, for just the group-rounds that execute there,
+  converts compute into loads precisely where compute is the constraint
+  and loads are free. Bounded <= 35 cycles gross; still fights the 977
+  load wall, so expect a fraction.
+- implementation note: only L4 has a per-group serving predicate today
+  (l4_gmin, which already accepts an arbitrary group set) — levels 1-3
+  would need the same predicate plumbing.
+- predicted_gain: a fraction of 35. cost: M.
