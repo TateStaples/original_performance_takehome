@@ -1024,3 +1024,175 @@ itself, which nothing in G-25..G-29 could do, and the reachable band is now
   mainline mix* and explicitly said "reopen-if the MIX changes". The
   organization changes the mix, so a fresh exhaustive 1-move scan
   (`tools/f18_exhaust1.py`) at the 1015 plan is cheap and unrun.
+
+## F-25 (2026-07-28): re-mine the ring plan and the spelling plan for the H-056 organization — ACCEPTED, strain frontier 1015 -> **1011** (-4). The ring plan was stale; the spelling plan is (still) empty; the order was already 1-move optimal at BOTH ends.
+
+Baseline: `tools/h056_best_plan.json` = 1015 (reproduced, `correct: true`),
+mainline 1015, gate 9/9 green (re-verified green and 1015 at the end —
+**no dev.py and no perf_takehome.py change was made**; the whole result is
+config artifacts, so flags-off bit-identity is trivially satisfied).
+
+New artifacts: `tools/f25_best_plan.json` (**1011**, order + full mix incl.
+the re-mined 23-ring `parity_ring_plan` and `l4_gmin=(6,30)`),
+`tools/f25_spell_plan_1011.json` (the re-derived spelling plan: **empty**).
+
+### 1. `f18_exhaust1` verdict at 1015 — STRICT 1-move optimum (G-29 re-closed at the new mix)
+
+Every valid single-entry displacement of the 1015 plan, radius unbounded by
+construction: **25,637 moves, ZERO below 1015**. 17,336 (68%) measure exactly
+1015 (the plateau is even bigger than G-29's 55%), 2,102 break correctness
+(ring-borrow windows). So H-056's "1015 is where budget ran out" is answered:
+1015 is a genuine 1-move local optimum, and the remaining prize was NOT in
+the order at that mix.
+
+### 2. The ring plan WAS stale — but its value at 1015 was ZERO, not 6
+
+Re-audit at the H-056 organization (`tools/audit_ring_windows.py` driven at
+`emission_plan` = the 1015 order, `parity_ring_plan=()`): **22 fundable
+windows / 528 words** under the H-048 structural-donor rule (vs 16 rings /
+384 words at the old organization), and iterating audit -> add -> re-audit
+reaches a fixpoint at **23 plan rings = 552 borrowed words** (43 rings total
+with the 20 structural slices), all passing the closed-loop donor-safety
+recheck.
+
+70-candidate composed sweep at the 1015 order (singles, leave-one-out,
+e0/e1/prize-6 subsets, incumbent+1, full):
+
+| ring plan | cycles | ops | valu | flow | LB | fungible |
+|---|---|---|---|---|---|---|
+| `parity_ring=False` | 1024 | 20763 | 6074 | 822 | 1013 | 1009 |
+| `parity_ring_plan=()` (20 structural rings) | **1015** | 20554 | 6016 | 823 | 1003 | 999 |
+| the pinned H-048 4-ring plan (incumbent) | **1015** | 20529 | 6013 | 817 | 1003 | 998 |
+| re-mined 22 rings | **1015** | 20438 | 5987 | 792 | **998** | 994 |
+| re-mined 23 rings (fixpoint) | **1015** | 20442 | 5983 | 784 | **998** | 994 |
+
+Every one of the 70 candidates measured 1015. **The carried-over 4-ring plan
+was worth exactly 0 cycles at the walked 1015 order** (its 6-cycle valuation
+belongs to the mainline order it was mined on), and deleting 116 more ops
+with a 23-ring plan also bought 0 realized cycles — it bought **5 cycles of
+FLOOR** (LB 1003 -> 998, fungible 999 -> 994). At a strict 1-move optimum
+with a 68% plateau, op deletion alone converts at zero.
+
+### 3. What converted the floor: the P-3 serving slide, then a re-walk
+
+Ring plans are gmin-specific (gmin decides which groups are *structurally*
+ringed, so a plan mined at another gmin collides on keys), so the plan was
+re-derived per gmin (`f25_gmin_audit`, audit-to-fixpoint per point) and each
+point measured at the 1015 order:
+
+| l4_gmin | rings | cycles | note |
+|---|---|---|---|
+| (6,30) | 23 | **1014** | new optimum, LB 998, fungible 994 |
+| (7,30) | 23 | 1015 | H-056's mix |
+| (5,30) | 22 | 1017 | LB 1001 |
+| (6,29) / (6,31) | 23 | 1018 / 1019 | |
+| (7,29) / (7,31) | 23 | 1019 / 1020 | (7,31) is **LB 995 / fungible 992** |
+| (6,28) / (4,30) / (5,29) | 23/22/22 | 1021 | |
+| (>=8, any) | 22 | — | audit-derived plans FAIL the closed-loop recheck; rejected unmeasured |
+
+P-3 pattern, **fourth confirmation**: retention relief slides the serving
+mix, here (7,30) -> (6,30). Then the order walk on the (6,30)+23-ring stream
+descended 1014 -> 1013 -> 1012 -> **1011** in ~17k evals (~11 min) — on a
+stream whose predecessor had just been proven 1-move optimal. Two further
+fresh chains (different seeds, `1,2,3,5,8,13,21,34,55`, ~40k evals) found
+nothing below 1011.
+
+### 4. Ring plans are ORDER-specific too (a new soundness fact)
+
+Re-running the closed-loop audit at the *walked* 1011 order with the plan
+mined at the 1015 order: **40 LIVE-ACROSS violations over 43 rings**
+(donors `st10` for ring (0,5), `nv4` for ring (1,13)) — the walk moved
+entries so that donor live ranges came to span two ring windows. The config
+still measured `correct: true` on 8 seeds, i.e. **the grader did not catch
+it** — exactly the H-048 unsound-borrow failure mode, but silent this time.
+Re-mining the plan at the 1011 order gives a different 23-ring assignment
+(different donors for (0,4)/(0,5)/(0,18)/(0,23), (0,20)+(1,0) added,
+(0,21)+(1,13) dropped) that passes the recheck **OK over 43 rings** and
+measures the same 1011. Rule to carry forward: **after every order walk,
+re-mine the ring plan and re-run the audit; seed-correctness is NOT a
+substitute for the window audit.**
+
+**The same check FAILS on the incumbent 1015 artifact** (`h056_best_plan.json`,
+i.e. what mainline now runs): audited at its own order, the carried H-048
+4-ring plan shows **16 violations over 24 rings** — ring (0,6) borrows
+(609,617,625) and donors `st9`/`st11` are live across its window. Caveat on
+severity: the audit's window is the span of ALL ops tagged with rounds 0-4
+of the group, a strict SUPERSET of the ring's real accesses, so a violation
+can be a false positive (and here the frozen grader is green on every seed
+and the full gate is 9/9). But H-048 paid for this rule with a real
+miscompare, and **at that order the 4-ring plan is worth zero cycles**
+(section 2), so the cheap de-risking move is to drop it: `parity_ring_plan=()`
+at the 1015 order measures 1015 and audits **OK over 20 rings**.
+
+### 5. Spelling plan: re-derived at this organization, still EMPTY
+
+`tools/spelling_plan_search.py` at the 23-ring/(6,30)/1011 point:
+- flow-race sites only: zero-flip fixpoint (sweep 1 exhausted, 1011 -> 1011);
+- `H042_AUX=1` (all valu<->alu negative-key race sites too): zero-flip
+  fixpoint (283 s sweep, 1011 -> 1011);
+- same at the 1015 point (flow: 140 s, aux: 324 s), also empty.
+
+So H-047's zero-flip fixpoint and H-054's shadow-price-0 **do transfer**
+across the organization change, even though H-056 showed the organization
+moves the race OUTCOMES. Four independent derivations now: the per-site
+spelling prize on this kernel is zero.
+
+### 6. The accepted point (all measured, `correct: true`)
+
+    parity_ring=True  l4_gmin=(6,30)
+    c5_primed_gather_levels=(5,6) mem_prime_region_hazards=True
+    mem_prime_dead_reg_staging=True  flow_spelling_plan=()
+    parity_ring_plan = 23 rings (tools/f25_best_plan.json)
+    emission_plan    = tools/f25_best_plan.json         -> **1011**
+
+Verified: seeds unseeded x2, 1, 2, 3, 7, 42, 99 all 1011 `correct: true`,
+and again with `debug_compares=True` (all 1011). Bound stack at the winner
+(`h056_screen --lags-zero --regret`):
+
+    realized 1011 | all-lags-zero 1002 | valu-slot floor 997 |
+    energetic 999 | fungible 993 | cp 558
+    ops 20400: valu 5982 alu 11681 load 1884 flow 807 store 46
+    regret 14 = ramp 4 + mid 4 + drain 6   (H-056's 1015: 12 = 4/2/6)
+
+Second exhaustive 1-move scan, now at the 1011 plan: **25,641 moves, ZERO
+below 1011**; 14,513 (57%) plateau, 3,941 break correctness (571 of them
+fail to build at all — ring asserts). 1011 is again a strict 1-move optimum.
+
+Leave-one-out at the winner (the ring plan's marginal value AT the walked
+point): `()` = 1015, full 23 = 1011, i.e. **-4**; the load-bearing rings are
+(1,22) (-2), (0,3) and (0,5) (-1 each), the other 20 are individually free.
+Note `loo:(0,25)` measures `correct: false` — dropping ONE ring shifts the
+stream enough to invalidate another ring's borrow, so a plan is an
+all-or-nothing artifact, not a menu.
+
+### 7. Was the "~6 cycles" there?
+
+Partly, and not where H-056 predicted. The re-mined ring plan is worth
+**-4** (1015 -> 1011) but ONLY as a three-step composition: (a) 23 rings buy
+floor, not cycles (LB 1003 -> 998); (b) the floor funds a serving-mix slide
+to gmin (6,30), worth -1; (c) the changed stream re-opens the order
+landscape, worth -3 more from a point that was provably 1-move optimal. The
+spelling leg is worth **0** and is now closed at this organization too.
+
+### 8. Follow-ups
+
+- **F-29 [mainline port]**: 1011 needs NO code change beyond what F-6
+  already ported — bake `tools/f25_best_plan.json`'s order + the 23-ring
+  plan + gmin (6,30) into `perf_takehome.py` (port note from F-6 still
+  applies: derive donor addresses from the named vectors, not hard-coded
+  layout constants). -4 for a literal swap.
+- **F-30**: the (7,31)+23-ring stream sits at **LB 995 / fungible 992** and
+  was never walked (it measures 1020 greedy). Same shape as the LB-996/992
+  streams H-056 left unwalked; the F-25 loop (audit -> gmin slide -> walk ->
+  re-audit) is the recipe.
+- **F-31**: 21 windows remain unfundable at every gmin tried — their free
+  words are `anon:23` only, and `anon` is excluded by the H-048 structural
+  rule. Deciding whether any anon class is schedule-independent (i.e. is
+  provably not an emit_any race operand) would unlock the remaining ~1/3 of
+  full retention.
+- **F-32 [de-risk, free]**: mainline's 1015 stream contains an unaudited
+  borrow (section 4). Dropping `parity_ring_plan` there is cycle-neutral and
+  makes the stream audit-clean; if F-29 lands 1011 first this is moot, since
+  the 1011 artifact's plan is re-mined and clean.
+- The **audit-after-walk** rule in section 4 should be applied to every
+  existing artifact that pairs a walked order with a plan mined elsewhere.
