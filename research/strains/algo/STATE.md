@@ -2118,3 +2118,334 @@ organization, both of which are closed by their own artifacts (G-24/G-28,
   above); any composition built on the 1006 plateau. The plateau composes
   fine and never descends — 154,039 interacting pairs return to exactly
   1006 and not one goes below.
+
+---
+
+## H-058 (2026-07-28): solve BACKWARDS for a 940 census — ANSWERED, and the answer is a QUANTIFIED IMPOSSIBILITY for this algorithm: the joint slot floor is **960.8**, and 940 needs **-270 vec-ops** at the floor / **-429 vec-ops** to realize, out of a census that is 78% irreducible hash
+
+New tools (all read-only over shared tools; nothing in dev.py /
+perf_takehome.py / tests/ touched):
+
+| tool | what it produces |
+|---|---|
+| `tools/h058_census.py` | exact purpose x engine x opcode cross-census at 1006 + fungibility decomposition + scratch ledger + a def-use pass that separates gather-address combines from tournament folds and idx-selects from folds |
+| `tools/h058_envelope.py` | the constraint solve: structural cost model, the 1-D design scan, the mechanism ledger, shadow prices, the measured-slope envelope, the scratch/groups-live curve |
+| `tools/h058_marginal.py` | the MEASURED serving-vs-gathering slopes (l4_gmin swept 1..33 served L4 group-rounds) + regret-by-binding-engine |
+| `tools/h058_oracle.py` | multi-class free-slot oracle at a `params.mix` artifact (free_slot_oracle only frees one class and only reads the old schema) |
+
+### 1. The measured 1006 census (the anchor everything else is a delta from)
+
+`python3 tools/h058_census.py`:
+
+```
+alu 11,761 / valu 5,966 / load 1,892 / store 46 / flow 797   (1006 cycles)
+alu+valu lane-ops 59,489 = 7,436.1 VEC-OPS
+  Hash    46,464 lane-ops = 5,808.0 vec-ops  (2,048 madd + 3,760 plain)
+  Idx      7,600           =   950.0
+  Routing  4,809           =   601.1  + 775 flow vselect + 1,832 loads
+  Setup      616           =    77.0  (59 vbroadcast + 16 madd + 16 alu)
+serving: L0 64 free, L1 64, L2 64, L3 64, L4 27/64 served -> 229 gathered
+scratch 1,533/1,536 = 768 state (st/val/nv x 32 groups) + 360 tables + 405 pools
+```
+
+**Unit of account: the VEC-OP.** The machine retires 6 valu + 12 alu slots
+per cycle = **7.5 vec-ops/cycle** for plain ops (a madd is 1 valu slot but
+16 alu slots, so madds go to valu first). 940 cycles = **7,050 vec-ops =
+56,400 lane-ops**. Flow is OUTSIDE that budget: 1 vselect = 8 lane-ops of
+selection for 1 flow slot.
+
+Hash alone is **5,632 vec-ops** (11 fused ops x 512 group-rounds; the 2,048
+madds are exactly 4 x 512, confirming corsix's decoded graph) = **79.9% of
+the entire 940 compute budget.** Everything else must fit in 1,418.
+
+**Def-use finding (new):** of the 775 flow vselects, only 546 are tournament
+folds — **229 are idx/boundary selects** (H-029), exactly one per gathered
+group-round. And gather addresses are produced by a madd (166 group-rounds)
+or a `v-` (60), i.e. the `+forest_values_p` combine is ALREADY fused into
+the position recurrence for most gathers; the free-standing combine is
+~60-90 vec-ops, not 229.
+
+### 2. CORRECTION to H-044 / `tools/ideal_floor.py`: its 931.6 is wrong by ~80 cycles
+
+H-044 re-derived its buckets from the 1038 purpose report and wrote
+`idx 7,448 - 1,848 = 5,600` "minus gather-address combines". The combines
+are classified into **Routing**, not Idx (a slot writing `st{g}` is Idx; a
+slot reading `st{g}` is Routing) — so it subtracted 1,848 lane-ops that were
+never in the bucket, then added the combines back separately. Net ~1,850
+lane-ops of double-subtraction plus a dropped 616-lane-op Setup bucket
+≈ 4,800 lane-ops ≈ 80 cycles of optimism. **`ideal_floor.py`'s layer-2
+numbers must not be used as a target.** H-058's tools work in deltas off a
+census that reproduces exactly (validation prints +6.0 vec-ops on 7,436),
+so the error class cannot recur.
+
+### 3. The design space is ONE INTEGER
+
+Per group-round, from the ISA (validated by the measured slopes in section 4):
+
+| level d | serve on flow | serve on valu | gather |
+|---|---|---|---|
+| 1 | 1 flow slot | 1 vec-op | 8 loads + ~1 vec-op |
+| 2 | 3 | 4 | 8 + 1 |
+| 3 | 7 | 10 | 8 + 1 |
+| 4 | **15** | **22** | 8 + 1 |
+| 5 | 31 | 46 | 8 + 1 |
+| d | 2^d - 1 | 3*2^(d-1) - 2 | 8 + 1 |
+
+(valu spelling: first layer = 1 madd `b + cond*(a-b)` with a STATIC diff;
+inner folds have runtime arms so they cost `v-` + madd = 2 vec-ops.)
+
+Converted to engine-cycles at the machine's rates (flow 1/cyc, compute
+7.5 vec-ops/cyc, load 2/cyc):
+
+| level | flow-serve | valu-serve | gather |
+|---|---|---|---|
+| 1 | 1.00 | **0.13** | 4.13 |
+| 2 | 3.00 | **0.53** | 4.13 |
+| 3 | 7.00 | **1.33** | 4.13 |
+| 4 | 15.00 | **2.93** | 4.13 |
+| 5 | 31.00 | 6.13 | **4.13** |
+| 6 | 63.00 | 12.53 | **4.13** |
+
+**The crossover sits exactly between L4 and L5**, which is where the
+shipped kernel already sits. Levels 1-3 must be served, levels 5-10 must be
+gathered, and the ONLY free variable is `s4` = how many of the 64 level-4
+group-rounds are served. Everything Phase 1 called "the organization" is
+scheduling, not census. Serving deeper is Omega(2^d) and no scratch budget
+changes that; the ISA has **no scratch-indexed read and no permute**, so
+per-lane data-dependent routing is exactly "1 load" or "2^d - 1 selects".
+
+### 4. MEASURED marginal rates (`tools/h058_marginal.py --no-ring`, s4 = 1..33)
+
+```
+d(vec-ops)/d(s4) = +11.66     d(load)/d(s4) = -8.00     d(flow)/d(s4) = +6.31
+d(madd)/d(s4)    =  +7.50     d(scratch)/d(s4) = +0.28  d(cycles)/d(s4) = -2.41
+```
+
+Serving one more level-4 group-round costs 11.66 vec-ops **and** 6.31 flow
+slots and saves exactly 8 loads. The `-8.00` confirms the load model to the
+digit; `+0.28` says the level-4 tables are already resident (the scratch
+axis does not gate L4 serving at all).
+
+### 5. THE ENVELOPE AT 940 (deliverable 1)
+
+Two independent models agree:
+
+| model | joint floor | at |
+|---|---|---|
+| structural (ISA cost table, `h058_envelope.py` [1]) | **962.7** | s4 = 23 |
+| measured-slope (regression on section 4, `h058_envelope.py` [5]) | **960.8** | s4 = 23.3, 187 selects exported valu -> flow |
+
+At that optimum **all three engines bind simultaneously**: compute 960.8 /
+load 960.8 / flow 960.8, i.e. 7,206 vec-ops (57,647 lane-ops), 1,922 loads,
+961 flow slots. This is corsix's 7.5 : 2 : 1 ratio, derived from our census.
+
+**The 940 constraint system, solved:**
+
+```
+load   1,880 slots  ->  gathered <= 227 group-rounds  (levels 5-10 alone force 192 = 1,536 loads = 82%)
+                        => served >= 221 => s4 >= 29
+flow     940 slots  ->  selects on flow <= 938 (L1-L3 alone need 704 = 75% of the budget)
+alu+valu 7,050 vec-ops, of which hash needs >= 5,632 (79.9%)
+                        => non-hash budget 1,418 vec-ops
+                        measured non-hash at s4=29: 1,637 vec-ops
+scratch  <= 1,536 words
+latency  K >= 32*314/940 = 10.7 live groups
+```
+
+**Removal required (measured-slope solve, marginal rate 104 lane-ops/cycle):**
+
+| target floor | vec-ops to remove | lane-ops |
+|---|---|---|
+| 960 | 10 | 82 |
+| 950 | 140 | 1,121 |
+| **940** | **270** | **2,161** |
+| 930 | 400 | 3,200 |
+
+Shadow prices at the optimum: **-0.091 cycles per vec-op removed**
+(= 1 cycle per 104 lane-ops; H-044 guessed 97, close) and **-0.159 cycles
+per load slot removed for the first ~50 slots, then 0** (load stops
+binding). Flow's price is 0 until the compute floor descends to meet it,
+then it becomes co-binding — the joint condition, again.
+
+### 6. Per-mechanism accounting against that envelope (deliverable 2)
+
+`h058_envelope.py` [2], each evaluated at its own best s4:
+
+| mechanism | C | dC | why |
+|---|---|---|---|
+| baseline (prime L4/L5) | 962.7 | 0 | |
+| move the 20 setup `add_imm` off flow to alu | 962.0 | **-0.7** | +20 flow slots for select export |
+| prime L6 in mem as well | 960.8 | **-1.9** | saves 32 `^nv` vec-ops for 8 vec-ops + 8 loads |
+| prime L6 **and** L7 | 962.0 | +0.7 | L7 costs 16 loads for the same 32 saved -> break-even crosses |
+| delete HALF the cond overhead | 956.8 | **-5.9** | 49 of the 97 measured cond vec-ops |
+| delete ALL cond overhead | 952.7 | **-10.0** | all 97 |
+| delete ALL cond AND setup | 946.0 | **-16.7** | physically impossible (the 59 broadcasts ARE the tables) |
+| **relocate forest to fp = 1** (kills every combine) | 990.0 | **+27.3** | -229 vec-ops (-21 cyc) but +252 loads (+126 load-cycles) |
+| relocate + zero overhead | 976.1 | +13.4 | still a loss |
+| serve 8 L5 group-rounds | 972.1 | **+9.4** | 46 vec-ops (6.13 cyc) vs 8 loads (4.00 cyc) -> -2.1 cyc each |
+
+**Index maintenance is at its floor and no STRUCTURE changes the count.**
+G-21 proved the per-step floor is extract + madd. Across the kernel that is
+1 `v&` + 1 madd per group-round for the 512 group-rounds minus round 10
+(level 10 wraps to index 0 for every walker, so its parity is never read):
+2 x (512 - 32) = **960 vec-ops floor vs 950 measured** — we are already
+below the naive floor. Restructuring does not help: building the level-4
+index from its 4 path bits by Horner is 4 madds, exactly the 4 per-round
+madds it would replace, and selecting the index from a 16-entry table would
+cost 15 selects instead of 4 madds.
+
+**The address recurrence.** `a' = 2a + 1 + b` is self-similar with no level
+constant only if the tracked quantity is `idx + 1`, i.e. only if
+`forest_values_p == 1`. Solving `a = alpha*idx + beta` for "addend is
+exactly the parity bit b" gives the unique solution `alpha = beta = 1`.
+Any other base needs `b + (1 - fp)` in the madd's addend slot, and there is
+no single ISA op producing `(val & 1) + K` (the only parity-isolating
+multiplier mod 2^32 is 2^31, G-21). Per-level re-basing does not escape it
+either: `beta_{d+1} = 2*beta_d - 1` forces `beta_d = 2^d*t + 1`, and no `t`
+leaves any gathered level in place. So the combine costs **either** ~1 op
+per gathered group-round **or** a 2,047-word relocation at 256 vload +
+256 vstore — and that is a measured +27.3 cycles.
+
+### 7. Latency-feasibility (deliverable 3) — NOT the wall
+
+`tools/h058_oracle.py tools/h057_best_plan_1006.json ...`, all measured this
+session on the 1006 artifact (edges + the 1-cycle write latency preserved,
+only the slot cost removed):
+
+| slots made free | cycles | delta |
+|---|---|---|
+| — (baseline) | 1006 | |
+| all vec + madd compute | **977** | -29 |
+| gathers only | 1004 | -2 |
+| flow vselects only | 1007 | +1 |
+| compute + gathers | **650** | -356 |
+| compute + selects | 963 | -43 |
+| compute + gathers + selects | **331** | -675 |
+| every slot free (the dependency skeleton) | **314** | -692 |
+
+Plus `tools/f37_bounds.py`: cp 512, all-lags-zero 1004, energetic 996,
+fungible 992, engine LB 995, realized 1006 (regret 11).
+
+**Verdict: a 940 census is latency-feasible with ~600 cycles of margin.**
+The dependency skeleton is 314 cycles. Because a group's 16 rounds are
+strictly serial, with K of the 32 groups live the schedule runs 32/K
+generations of length C*K/32, and each must cover one group's 314-cycle
+span: **K >= 32*314/940 = 10.7, so K >= 11 live groups.** The current
+design's K = 32 has 626 cycles of slack. G-26's "993 with all compute free"
+is now **977** at 1006, and that residual is LOAD bandwidth (load floor
+946), not chain.
+
+**The real schedulability finding is different and it is bad news for 940**
+(`h058_marginal.py`, regret column): regret over the point's own floor is
+**~20 cycles while COMPUTE binds and ~70 cycles once LOAD binds**
+(s4 <= 13: 1072/1088/1104/1120 realized against load floors
+1002/1018/1034/1050). The 960.8 joint optimum sits exactly on that
+boundary. A 940 design must run load at 100%, so it must budget the larger
+number: **realizing 940 needs a census floor near 920, i.e. -429 vec-ops
+(-3,432 lane-ops, 5.8% of the whole census).** With hash fixed at 5,632,
+non-hash would have to fall from 1,637 to 1,208 vec-ops while idx alone is
+950 and the minimum unexportable valu-folds are ~220.
+
+### 8. The scratch / groups-live trade (deliverable 4)
+
+`h058_envelope.py` [6]. Scratch = 24*K (st/val/nv) + 360 (L1-L4 tables and
+static diffs) + 405 (pools/consts) — reproduces the shipped 1,533 exactly.
+
+| K live | state | free words | generation length @940 | latency slack | funds |
+|---|---|---|---|---|---|
+| 32 | 768 | 3 | 940 | +626 | nothing (today) |
+| 24 | 576 | 195 | 705 | +391 | — |
+| 20 | 480 | 291 | 588 | +274 | pair-preload (256w, closed G-18/G-28) |
+| **16** | **384** | **387** | **470** | **+156** | most of full cond retention (512w needed; 387 + ring borrow covers it) |
+| 12 | 288 | 483 | 352 | +38 | FULL cond retention from real scratch (384w) |
+| 11 | 264 | 507 | 323 | +9 | ditto, at the latency limit |
+| 8 | 192 | 579 | 235 | **-79** | INFEASIBLE (generation shorter than one group's chain) |
+
+Per-mechanism scratch demand: an L5 select tree needs 32 broadcast vectors
++ 16 static diffs = **384 words** (affordable from K <= 16) but is
+**arithmetically negative by 2.1 cycles per group-round** regardless — the
+scratch was never the binding reason (G-23 listed it first; it is actually
+third). An L6 tree needs 768 words and is negative by 8.4 cyc/group-round.
+Cond retention needs 4 parity vectors x 8 words per live group at level 4 =
+**32K words**; today `parity_ring` borrows 480 dead-register words and funds
+20 of 32 groups, which is why 97 vec-ops of cond re-extraction survive.
+
+**So the untested axis is real but small: halving groups-live buys the
+remaining cond retention, worth ~97 vec-ops = ~7 cycles, at the cost of a
+second generation seam.** It does not open select-tree serving at any depth.
+
+### 9. Ranked shortlist (deliverable 5)
+
+**D1 — Compute-bound flow-saturation build: s4 ~ 29, K = 16 sliding window,
+full parity/cond retention out of freed scratch, every exportable fold
+spelled on flow.** Modeled floor **~945**, realistic realization ~965-975.
+Feasible because: loads 1,876 <= 1,880; flow 940 with the 20 `add_imm`
+moved to alu; scratch 1,149 + 512 retention <= 1,536 with ring borrow;
+latency slack 156 cycles. **Fails if** flow cannot be kept bubble-free —
+G-27 measured flow's shadow price at exactly 0 on the current stream
+(infinite-width flow = 1022/1023 at 1022; freeing all vselects here = 1007,
++1), so the export only pays after the compute floor has come down to meet
+it. That is G-23's joint condition restated, and it is why D1 must land the
+cond deletion and the export TOGETHER or not at all.
+
+**D2 — Prime level 6 in mem (`c5_primed_gather_levels` (5,) -> (5,6)).**
+-1.9 cycles at the floor, +8 loads, +8 vec-ops, no new scratch. Smallest,
+safest, already flag-shaped. **Fails if** the point is load-bound (the 8
+extra loads then cost 4 cycles); requires s4 >= 25.
+
+**D3 — Move the 20 setup `add_imm` slots from flow to alu.** +20 flow slots
+of export capacity, -0.7 cycles. Trivial; only useful composed with D1.
+
+**D4 — REJECTED with numbers: forest relocation to fp = 1.** +27.3 cycles.
+The 229 combines are worth 21 cycles; the 256 vload + 256 vstore pass costs
+126 load-cycles. Same verdict if fused with a full C5-priming pass.
+
+**D5 — REJECTED with numbers: L5+ select trees under freed scratch.**
+-2.1 cyc per group-round at L5, -8.4 at L6, at ANY scratch budget. This
+closes G-23's "reopen-if 256+ scratch words free up" clause: the scratch
+was never the binding reason.
+
+**D6 — REJECTED with numbers: full-forest C5-priming.** +248 loads to save
+160 vec-ops; break-even is at level 8 (2^d/8 loads vs 32 saved vec-ops), so
+only L6 (and marginally L7) ever pay.
+
+**Build D1 first**, but build it as a MEASUREMENT of the joint condition,
+not as a 940 attempt: the compass says the honest target of this algorithm
+is **~960 floor / ~975 realized**, and 1006 -> ~975 is the whole remaining
+prize. **940 is 270 vec-ops below the floor and 429 below realization, and
+this analysis cannot locate them** — every candidate source is either
+measured at its floor (idx, hash) or measured negative (relocation, deeper
+serving, full priming).
+
+### 10. What would have to be true for 940 to exist under our rules
+
+Exactly one of:
+
+1. a hash under 11 fused ops (four tool classes say no: G-10 MITM, H-025
+   CEGIS, G-20 re-derivation, G-24 cmpsel; and H-043 decoded the frontier
+   running our exact 11 ops);
+2. index maintenance under 2 vec-ops per group-round (G-21, re-derived here
+   from the recurrence algebra);
+3. per-lane data-dependent routing cheaper than "1 load" or "2^d - 1
+   selects" — which needs a scratch-indexed read or a permute, and the ISA
+   (`docs/isa.md` section 6) has neither;
+4. a scheduler that realizes a load-100% stream at regret ~0 when ours
+   measures regret 70 in that regime.
+
+(4) is the only one not closed by our own artifacts, and it is exactly the
+"joint per-cycle selection x scheduling" item H-043 flagged as N-3 and
+attributed to josusanmartin's search-heavy method. **If the loop wants to
+chase 940, the target is not the census — it is the 50-cycle regret gap in
+the load-bound regime.** That is a scheduling hypothesis, not an algorithm
+one, and it should be posed against `tools/backtrack_sched.py` on a
+deliberately load-bound stream (s4 <= 13), where the regret is largest and
+therefore easiest to attribute.
+
+### 11. Do not re-run (measured here)
+
+- `ideal_floor.py`'s 931.6 free-mix optimum — arithmetic error, see section 2.
+- Serving any level >= 5 by select tree, at any scratch budget (sections 6, 8).
+- Relocating the forest / re-basing the address recurrence (section 6).
+- Priming levels >= 8 (section 6).
+- Looking for latency relief: the dependency skeleton is 314 cycles against
+  a 940 target (section 7).
