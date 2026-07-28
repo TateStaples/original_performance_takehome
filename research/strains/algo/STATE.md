@@ -457,3 +457,114 @@ drift this time: cycles matched dev's 1032 on the first build.
 
 Gates: `perf_takehome.py Tests.test_kernel_cycles` CYCLES: 1032 (x2);
 `tests/submission_tests.py` 9/9 green, all CYCLES lines 1032 (x3).
+
+## H-047 (2026-07-27): serving-mix change under joint plan re-search — STRAIN FRONTIER 1023 -> 1022 (-1), G-22's mem_prime(5,6) CONVERTS under order re-search; serve-more-L4 closed at the FLOOR level (greedy spellings); the LP's residual mix prize localized to a floor-990 stream that only flow-saturation can realize
+
+Charter (re-scope per F-14 triangulation): re-evaluate the H-044 LP's mix
+moves (serve more L4, prime L4/L5/L6, gmin composition) WITH the full plan
+toolchain re-run per candidate — emission-plan local search seeded from the
+1023 plan (tools/h049_best_plan.json), spelling fixpoint, stream-floor
+measurement (H-051 bounds) per candidate. Tools (all new, wrappers only —
+emission_order_search.py / backtrack_sched.py untouched):
+tools/h047_search.py (sweep/local/one; patches eos.FRONTIER_OVERRIDES),
+tools/h047_floor.py (per-candidate H-051 any-packing floor),
+tools/h047_flowmax.py (all-flow spelling floor probe),
+tools/h047_verify.py, tools/h047_spellcheck.py.
+
+### Landed frontier (dev.py flags, all default OFF)
+
+    parity_ring=True l4_gmin=(7,30) 4-ring parity_ring_plan (unchanged)
+    c5_primed_gather_levels=(5,6) mem_prime_region_hazards=True
+    mem_prime_dead_reg_staging=True flow_spelling_plan=()
+    emission_plan=tools/h047_best_plan_1022.json      -> **1022** (-1)
+
+Verified: seeds 1,2,3,7,42,99 + unseeded all 1022 correct;
+debug_compares=True 1022 correct; full gate flags-off 9/9 green at 1023
+(perf_takehome.py untouched). Spelling fixpoint on the 1022 order: 1,157
+single flips (flow rev + aux + fwd), ZERO wins — order absorbs spelling,
+third independent confirmation of the H-049 pattern.
+
+### Per-candidate table (mix change x cycles x floor)
+
+All searches seeded from the 1023 plan; "greedy" = candidate at the FIXED
+1023 emission plan; floor = H-051 two-sided any-packing bound of the
+candidate's op stream (greedy spellings).
+
+| candidate (serve counts e0+e1) | greedy | after order re-search | floor | verdict |
+|---|---|---|---|---|
+| baseline (8,30) = 26 served, prime L5 | 1023 | (= frontier) | 1011 | reference |
+| mem_prime(5,6)+rdr + (7,30) = 27 served, prime L5+L6 | 1025 | **1022** (2 descents, ~29k evals; ext. +25k evals window=all plateau) | **1010** | WINNER -1 |
+| gmin(7,30) = 27 served | 1027 | 1023 (tie, 3 descents) | 1012 | serve+1 alone: tie |
+| mem_prime(5,6)+rdr @ (8,30) = prime alone | 1028 | 1023 (tie) | 1011 | prime alone: tie |
+| e1={29,30} (26 served, drain recomposition) | 1024 | 1023 (tie, 18.5k evals) | 1011 | plateau member |
+| e1={27,30} / {26,30} | 1024 / 1028 | not searched | 1011 / 1011 | plateau members |
+| e1 pairs without g30 ({28,29},{27,28}) | 1031-1033 | — | — | plan-incompat, reject |
+| gmin(7,27) = 30 served | 1037 | — | **1018** | floor RISES — reject |
+| set e0={5,6}u{8..31} = 28 served (ring-funded adds) | 1028 | — | 1015 | floor rises — reject |
+| mem_prime(6,) only | 1026 | — | 1013 | dominated |
+| gmin(6,30)/(5,30)/(4,30) (plan-adjusted or unplanned) | 1029-1031 | — | — | reject |
+| any e1 < 27 | CRASH | — | — | omf1_vec/b3l private-register wall (hard assert) |
+| e0 <= 6 with 4-ring plan | CRASH | — | — | plan collision (entries become structurally funded; fixable by dropping entries) |
+
+Attribution (2x2 clean): the -1 needs BOTH legs. Priming L5+L6 deletes
+~184 alu slots (+8 loads, +4 stores) but alone floors at 1011; the relief
+FUNDS the P-3 gmin slide (8,30)->(7,30), and only the composition drops
+valu 6056 -> 6049 slots = floor 1010. Order re-search then recovers the
+same residual regret as baseline (12): 1010 + 12 = 1022. This is G-22's
+"+1 at fixed greedy order" candidate converting to -1 exactly as the
+re-scoped hypothesis predicted — the first order-conditional mix accept.
+
+### Serve-more-L4 leg: CLOSED at the floor level (greedy spellings)
+
+Every reachable added L4 serve RAISES the any-packing floor: +7.2 valu
+slots per served group-round (26->27: 6056->6063; ->30: 6099; floors
+1011->1012->1018). The tournament's selects land on saturated valu/alu
+under greedy races while the freed loads land 60+ cycles below the
+binder. No order search can rescue a raised floor — this closes
+serve-more WITHOUT needing per-candidate walks (the floor measurement is
+the cheap kill-switch the sweep lacked). Reachability is bounded anyway:
+e1 >= 27 (omf1_vec hard wall), e0 >= 7 de-facto (below that, ring-plan
+surgery loses 6-8 cycles at every form tried).
+
+### The LP's residual mix prize, localized (flowmax probe)
+
+Forcing ALL flow-capable race sites to their flow spelling (legal by
+construction, H-042 soundness) and re-counting engine floors:
+
+| config | valu floor | flow floor | max engine floor | actual cycles |
+|---|---|---|---|---|
+| baseline greedy spellings | 1010 | 786 | 1010 | 1023 |
+| baseline all-flow | 995 | 938 | 995 | 1097 (+74) |
+| gmin(7,27) all-flow (serve 30) | 995 | 989 | 995 | 1139 |
+| mp56+(7,30) all-flow | **990** | 955 | **990** | 1104 |
+| mp56+(7,27) all-flow | 991 | 997 | 997 (flow binds) | 1145 |
+
+The LP's mechanism is REAL at the stream level: at flow-heavy spellings,
+serve-more is floor-NEUTRAL (the added selects ride flow, 989 vs valu
+995 = the balanced frontier, corsix's ratio again) and priming lowers
+the binder to 990. A floor-990 op stream (33 below the 1023 realization)
+is flag-reachable TODAY — but its actual schedule is 1104: the entire
+prize is locked behind the select-readiness x flow-bubble
+anti-correlation (G-4/G-12/H-042), now quantified from the floor side.
+Serve-past-27 only makes sense AFTER flow saturation exists (at greedy
+spellings it burns valu; at flow spellings it is free). Realized LP
+mix prize this iteration: 1 cycle of the modeled ~20.
+
+### Follow-ups (driver)
+
+- F-15 [mainline flip candidate]: the 1022 config (needs porting
+  mem_prime(5,6) + region-hazards + dead-reg staging + gmin (7,30) +
+  the new 512-entry emission plan into perf_takehome.py's flag-free
+  form; same shape guard as F-12).
+- F-16: the omf1_vec e1>=27 wall is the only hard blocker on the e1
+  serving axis; funding r15 served groups' private temps (H-048-class
+  audited words) would unlock it — but only worth doing after F-17.
+- F-17 [the strategic one]: any future flow-cadence mechanism (emission
+  machinery that de-synchronizes round cadence from flow windows, N-3
+  class) must be evaluated at mp56+(7,30..27)+flow-heavy spellings, not
+  at the baseline mix — the floor-990 stream is the right target board;
+  baseline-mix evaluation understates the prize by ~15 floor cycles.
+- F-18: e1 composition {29,30}/{27,30} tie 1023 after re-search — free
+  plateau for drain restructures (H-052 site 3).
+- Plans remain config-specific artifacts: h047_best_plan_1022.json is
+  measured at its exact config; re-derive after any change (~15 min).
