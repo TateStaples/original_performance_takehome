@@ -534,3 +534,50 @@ from the design rather than swept. Until it reports, the honest status is:
 > a cell whose self-consistency is unverified.** The defensible claim today is
 > the range 946-965: 946.0 if all serving support arithmetic can be removed at
 > 100% ring coverage, 964.8 if it cannot. Both are above 940.
+
+### P3-B ROUND 2 (2026-07-28): C9 is dead -- the floor stays 939, not 920
+
+**VERDICT: IMPOSSIBLE.** The `omf` select cannot be eliminated. P3-A's C9
+(floor 920) is not a valid design.
+
+The mechanism: the `omf` op is **fungible flow-or-valu** (spell it
+`madd(par, one_vec, omf_vec)` and it leaves flow entirely), exactly like the
+tournament nodes in P3-A's T1. The only representations that remove it
+(`idx+1`, `idx+3`) replace it with a *valu-only* address-recovery op. My
+break-even arithmetic in the dispatch was right in the numbers and wrong in
+the conclusion: **the 1,816 lane-ops freed on the fold side are exactly the
+1,816 spent recovering `A = S+4`.** Reproduced inside P3-A's own model
+(`tools/p3b_omf.py` imports `p3a_model.py` unmodified): C1* and a corrected
+C9 are **bit-identical -- 56,272 / 1,880 / 940, floors 937.9/940.0/940.0**.
+At C=920 both need 56,432 lane-ops against a 55,200 cap and 1,880 loads
+against an 1,840 cap: fails on two engines.
+
+The tell that the representation change does no work: those same 1,816
+lane-ops are buyable *without* changing representation at all, just by
+re-spelling the 227 `omf` selects as madds.
+
+**Dominance theorem (any design, any cycle target).** Shipped pool cost is
+`max(0, L+g-rem)`; biased-representation cost is `g + max(0, L-rem)`. If
+`L >= rem` they tie; if `L < rem` the shipped form strictly wins. At the
+optimum L=680 > rem=479, hence the exact tie. There is no cycle target at
+which the rebias wins.
+
+**Lemma 1 upgraded to all 2^32 constants** by closed-form conditions per
+opcode: the complete one-op parity output set is exactly **{p, p-2, p*2^31}**,
+and parity always enters with coefficient +1 (so complement forms are closed
+too). For state `idx+b` the addend is `p+(1-b)`, free only for b=1 or b=3;
+but loadability pins b=7, giving addend `p-6`, and `-6` is not in {0,-2}.
+**Jointly unsatisfiable.** Per-level re-bias is refuted the same way: the
+addend is free iff `b_{d+1} in {2b_d-1, 2b_d-3}`, but every gathered level
+pins `b_d=7`, requiring 13 or 11; levels 5-10 gather consecutively so all
+five transitions are pinned simultaneously.
+
+The Horner exit was also checked for shavings: its residual constant is +38
+and the free per-stage injections are only 0 and -2 (all non-positive), so
+exits pay one fungible op too. `idx_selects = g = 227` is correct.
+
+**Consequence for the record.** The best floor now defensible is 939 (if the
+cell survives P3-D), which realizes ~950-960. **We do not have a design that
+would realize 940.** The index axis is closed as a source of further margin:
+any additional headroom must come from REMOVING COMPUTE, not from re-spelling
+the recurrence. Full detail: research/strains/p3b/STATE.md §9.
