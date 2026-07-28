@@ -1196,3 +1196,65 @@ spelling leg is worth **0** and is now closed at this organization too.
   the 1011 artifact's plan is re-mined and clean.
 - The **audit-after-walk** rule in section 4 should be applied to every
   existing artifact that pairs a walked order with a plan mined elsewhere.
+
+## F-29 (2026-07-28): F-25 mainline port — perf_takehome.py 1015 -> 1011, and the ring-borrow defect is gone
+
+Ported the verified F-25 frontier into the flag-free submission, three
+coupled edits (the plan is only worth 1011 as a unit):
+
+1. `_EMISSION_ORDER` <- F-25's 512 entries (bit-for-bit equal to
+   `tools/f25_best_plan.json`'s `plan`; all plain `(r, g)`).
+2. `l4_gmin` (7,30) -> (6,30).
+3. `build_parity_ring_map`'s appended plan: H-048's 4 rings -> F-25's
+   **23** rings. Per F-6 house style no raw addresses are baked; each
+   donor is derived from its named vector, verified equal to the audited
+   raw addresses in `params.mix.parity_ring_plan` by instrumenting
+   `alloc_scratch` (all 23 triples matched exactly). Mapping:
+
+       (0, 3)  st6, st7, st14        (1, 0)  st4, st25, nv31
+       (0, 4)  st9, st10, st11       (1, 4)  st0, st3, nv10
+       (0, 5)  lv+16, st8, st12      (1,11)  st4, nv2, nv3
+       (0,13)  st23, nv17, nv18      (1,12)  root_nv_vec, lv, st19
+       (0,14)  nv20, nv22, nv23      (1,14)  st8, st18, st22
+       (0,15)  lv, lv+8, nv31        (1,15)  st11, st20, nv5
+       (0,18)  st27, nv24, nv27      (1,21)  st9, st10, st26
+       (0,20)  st29, st30, st31      (1,22)  st12, st13, nv14
+       (0,23)  lv+16, nv29, nv30     (1,23)  root_nv_vec, lv, lv+8
+       (0,25)  lv, lv+8, nv31        (1,27)  lv+16, st16, st17
+       (0,30)  st1, st2, nv0         (1,28)  st0, st1, st2
+                                     (1,29)  st18, st19, st20
+
+   New named donor class vs F-6: `root_nv_vec` (the primed root's
+   broadcast vector), epoch-1 only. `lv+24` (two_minus_fp_vec) still
+   untouched; donors remain structural classes only (st/nv/lv/root_nv).
+   The code comment records that the plan is ORDER-SPECIFIC and
+   ALL-OR-NOTHING (F-25: leave-one-out of (0,25) alone miscompiles).
+
+`flow_spelling_plan` stays empty (F-25 re-derived it as empty at this
+order; F-9's pin was already reverted by F-12). No other edit.
+
+**Defect fixed.** `tools/audit_ring_windows.py`, run at each config's
+exact dev flags:
+
+- pre-port mainline (H-056 order + H-048's 4-ring plan, gmin (7,30)):
+  **16 LIVE-ACROSS violations over 24 rings** — donors st9/st11 of ring
+  (0,6), which H-056's reorganization invalidated while carrying H-048's
+  plan forward unchanged. That plan was worth ZERO cycles at that order.
+- ported mainline (F-25 order + 23-ring plan, gmin (6,30)):
+  **OK over 43 rings**, zero LIVE-ACROSS lines.
+
+**Equivalence proof.** The ported mainline's emitted bundle stream is
+BIT-IDENTICAL to `dev.py`'s under the F-25 config (1011 bundles each,
+`main.instrs == dev.instrs`), so the named-vector derivation and the
+mix are exactly the measured artifact — no re-derivation drift.
+
+Gates (each run twice): `perf_takehome.py Tests.test_kernel_cycles`
+CYCLES: 1011, 1011; `tests/submission_tests.py` 9/9 green with all nine
+CYCLES lines 1011, both runs. Ten-seed sweep (0/1/2/3/7/42/99/123/2026/
+31337) via `do_kernel_test`: 1011 and correct on every seed, with the
+debug/vcompare path LIVE (`perf_takehome`'s own harness leaves
+`enable_debug=True`, so every node_val/hashed_val vcompare slot is
+checked against the reference trace). No divergence.
+
+F-32 is now moot, as anticipated: the 1015 stream's unaudited borrow is
+gone with the stream itself.

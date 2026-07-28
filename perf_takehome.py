@@ -48,36 +48,38 @@ from problem import (
 _SCALARIZABLE = {"+", "-", "*", "^", "&", "|", "<<", ">>", "<", "=="}
 
 
-# H-049/H-047 emission order (2026-07-27): explicit (round, group) emission
-# plan replacing the (4,3)-skew diagonal step loop for the graded 32-group,
-# 16-round shape. Found by tools/emission_order_search.py (windowed
-# single-entry local search + sideways plateau walk from the default
-# diagonal order; committed artifact tools/h049_best_plan.json): 1031 ->
-# 1023 cycles. H-047 then re-searched the plan jointly with the serving-mix
-# change below (mem-prime levels {5,6} + l4_gmin (7,30)) and descended a
-# further 26 entries to 1022 (artifact tools/h047_best_plan_1022.json).
+# F-25/H-056/H-049 emission order (2026-07-28): explicit (round, group)
+# emission plan replacing the (4,3)-skew diagonal step loop for the graded
+# 32-group, 16-round shape. Found by tools/emission_order_search.py
+# (windowed single-entry local search + sideways plateau walk); H-049
+# reached 1023 from the default diagonal order, H-047 re-searched it
+# jointly with the serving mix to 1022, H-056 re-organized it
+# (even8/stag2/zip/rev/asc) and F-25 re-walked that organization at the
+# F-25 mix -- l4_gmin (6,30) plus the RE-MINED 23-entry parity-ring plan
+# below -- to 1011 (committed artifact tools/f25_best_plan.json).
 # Order-load-bearing, MIX-matched AND ring-liveness-timed -- the plan is
-# only worth 1022 at exactly that op mix, and the parity rings' borrow
-# windows are validated against THIS order -- so do not regenerate,
-# simplify, or locally reorder it; re-derive via the search driver after
-# any kernel change. Covers every (round, group) exactly once with
-# per-group rounds ascending (asserted at use).
+# only worth 1011 at exactly that op mix, and the parity rings' borrow
+# windows are validated against THIS order (tools/audit_ring_windows.py
+# reports OK over 43 rings here) -- so do not regenerate, simplify, or
+# locally reorder it; re-derive via the search driver after any kernel
+# change. Covers every (round, group) exactly once with per-group rounds
+# ascending (asserted at use).
 _EMISSION_ORDER: tuple[tuple[int, int], ...] = (
     (0, 0), (0, 3), (0, 1), (0, 4), (0, 2), (1, 4), (1, 1), (1, 2),
     (1, 0), (2, 0), (1, 3), (2, 2), (0, 5), (3, 0), (0, 7), (1, 5),
-    (1, 7), (2, 1), (0, 6), (2, 3), (1, 6), (3, 1), (3, 3), (0, 10),
-    (2, 4), (0, 8), (3, 2), (4, 0), (4, 1), (5, 1), (3, 4), (4, 2),
-    (4, 3), (2, 6), (2, 5), (5, 2), (0, 12), (5, 3), (3, 5), (0, 11),
-    (0, 9), (2, 7), (0, 14), (1, 9), (1, 8), (1, 11), (5, 0), (1, 10),
-    (6, 0), (0, 15), (3, 6), (4, 4), (2, 11), (2, 9), (3, 7), (6, 3),
-    (4, 6), (4, 5), (0, 13), (2, 10), (5, 6), (3, 9), (7, 0), (2, 8),
-    (3, 8), (6, 1), (4, 7), (5, 4), (1, 12), (1, 13), (7, 1), (5, 5),
-    (3, 10), (2, 13), (5, 7), (6, 2), (1, 15), (7, 2), (0, 17), (8, 1),
-    (0, 22), (0, 16), (0, 19), (6, 7), (3, 11), (4, 9), (8, 2), (7, 3),
-    (2, 12), (2, 15), (8, 0), (9, 0), (1, 14), (5, 9), (0, 18), (3, 12),
-    (4, 10), (6, 4), (6, 5), (2, 14), (9, 2), (5, 10), (9, 1), (4, 11),
-    (1, 16), (4, 8), (6, 10), (0, 21), (3, 14), (3, 13), (5, 11), (10, 0),
-    (10, 2), (5, 8), (7, 7), (6, 6), (6, 9), (1, 21), (1, 19), (6, 8),
+    (1, 7), (2, 1), (0, 6), (2, 3), (1, 6), (3, 1), (3, 3), (0, 8),
+    (0, 10), (2, 4), (3, 2), (4, 0), (4, 1), (3, 4), (4, 2), (4, 3),
+    (2, 6), (2, 5), (5, 2), (0, 12), (5, 3), (3, 5), (0, 11), (1, 8),
+    (0, 9), (2, 7), (1, 11), (0, 14), (5, 0), (1, 10), (6, 0), (0, 15),
+    (3, 6), (4, 4), (6, 2), (1, 9), (2, 11), (5, 1), (2, 10), (2, 9),
+    (3, 7), (6, 3), (4, 6), (4, 5), (0, 13), (5, 6), (3, 9), (7, 0),
+    (2, 8), (3, 8), (6, 1), (4, 7), (5, 4), (1, 12), (1, 13), (7, 1),
+    (5, 5), (2, 13), (3, 10), (5, 7), (1, 15), (0, 22), (8, 1), (0, 16),
+    (0, 17), (0, 19), (6, 7), (7, 2), (3, 11), (4, 9), (8, 2), (7, 3),
+    (2, 12), (2, 15), (8, 0), (9, 0), (1, 14), (4, 10), (9, 2), (3, 12),
+    (6, 4), (6, 5), (4, 11), (0, 18), (2, 14), (1, 16), (4, 8), (5, 10),
+    (9, 1), (6, 10), (0, 21), (3, 14), (5, 11), (5, 8), (5, 9), (10, 0),
+    (10, 2), (3, 13), (6, 9), (6, 6), (1, 19), (1, 21), (7, 7), (6, 8),
     (0, 20), (7, 4), (4, 13), (1, 17), (4, 12), (8, 3), (8, 4), (9, 3),
     (0, 23), (7, 5), (1, 18), (2, 16), (10, 1), (7, 6), (8, 7), (2, 19),
     (2, 18), (3, 15), (4, 14), (0, 28), (8, 6), (10, 3), (8, 5), (7, 9),
@@ -112,10 +114,10 @@ _EMISSION_ORDER: tuple[tuple[int, int], ...] = (
     (14, 8), (8, 24), (9, 22), (15, 9), (15, 10), (11, 14), (13, 12), (15, 6),
     (5, 28), (6, 28), (5, 29), (15, 8), (4, 31), (5, 30), (7, 26), (10, 20),
     (12, 14), (5, 31), (12, 15), (13, 14), (13, 15), (11, 17), (8, 21), (14, 12),
-    (11, 18), (9, 23), (12, 16), (6, 29), (9, 21), (10, 21), (7, 27), (6, 31),
-    (8, 25), (6, 30), (8, 26), (12, 17), (14, 13), (12, 19), (8, 27), (12, 18),
-    (14, 15), (14, 14), (10, 23), (10, 22), (7, 28), (15, 13), (11, 20), (9, 24),
-    (9, 26), (15, 12), (13, 16), (11, 21), (9, 25), (13, 17), (7, 29), (7, 30),
+    (9, 23), (12, 16), (11, 18), (6, 29), (9, 21), (10, 21), (7, 27), (12, 17),
+    (6, 31), (8, 25), (8, 26), (14, 13), (12, 19), (6, 30), (8, 27), (12, 18),
+    (14, 15), (14, 14), (10, 23), (10, 22), (7, 28), (11, 20), (9, 24), (9, 26),
+    (15, 13), (15, 12), (11, 21), (13, 16), (9, 25), (13, 17), (7, 29), (7, 30),
     (11, 23), (15, 14), (11, 22), (7, 31), (13, 18), (9, 27), (13, 19), (15, 15),
     (12, 20), (8, 28), (14, 16), (10, 25), (12, 21), (8, 29), (10, 24), (12, 22),
     (14, 17), (8, 30), (10, 26), (14, 18), (8, 31), (10, 27), (12, 23), (9, 28),
@@ -582,17 +584,19 @@ class KernelBuilder:
           sees identical values. The ring registers are BORROWED from other
           skew blocks' st/nv vectors whose real accesses sit strictly on the
           other side of the ring's accesses in EMISSION order (see
-          `build_parity_ring_map`). Four more rings come from an
-          offline-audited word-level donor plan (H-048): scratch runs
-          (level-table words, dead-window st/nv of other blocks) whose real
-          accesses were trace-verified emission-order-disjoint from the
-          ring's access window -- structural donors only, never
-          trace-liveness of emit_any-raced operands (the losing encoding's
-          reads never land in the trace, so such liveness is unsound).
-          This combined relief funds the epoch-0 `l4_gmin` slide from 9 to
-          8 (+1 served L4 group-round vs the ringless 9), and -- once the
-          level-6 mem priming below deletes another ~184 alu slots -- on
-          to 7 (H-047).
+          `build_parity_ring_map`). Twenty-three more rings come from an
+          offline-audited word-level donor plan (H-048, RE-MINED at the
+          H-056/F-25 emission order by F-25): scratch runs (level-table
+          words, the primed root's broadcast vector, dead-window st/nv of
+          other blocks) whose real accesses were trace-verified
+          emission-order-disjoint from the ring's access window --
+          structural donors only, never trace-liveness of emit_any-raced
+          operands (the losing encoding's reads never land in the trace,
+          so such liveness is unsound). This combined relief funds the
+          epoch-0 `l4_gmin` slide from 9 to 8 (+1 served L4 group-round vs
+          the ringless 9), and -- once the level-6 mem priming below
+          deletes another ~184 alu slots -- on to 7 (H-047) and, with the
+          re-mined 23-ring plan's retention relief, to 6 (F-25).
 
         - alu offload: elementwise vector ops are split into 8 scalar alu
           slots when that retires them no later (see `_sched_vec`), raising
@@ -616,7 +620,8 @@ class KernelBuilder:
           in the dependency-idle cycle-0..50 load window, its stores stay
           off the coarse whole-mem write clock (exact per-level gather
           gating instead), and the ~184 alu slots it frees are what fund
-          the `l4_gmin` (8,30) -> (7,30) slide. Neither leg wins alone.
+          the `l4_gmin` (8,30) -> (7,30) slide (and, with F-25's re-mined
+          ring plan, (6,30)). Neither leg wins alone.
 
         - Newest-parity-last fold at the final round: fold the level-4 E/D
           tables by the OLDER bits b0,b1,b2 (already in `st` at round start)
@@ -655,7 +660,7 @@ class KernelBuilder:
         # --- shape/tuning constants (not toggles; they define the kernel) ---
         # Levels 1..k folded as "tournaments" (broadcast tables + position accumulator), not gathered; l4_gmin = per-epoch group threshold (or explicit set) for two-stage level-(k+1) "pair" tournament; temp_and_cond_pool_sizes/skew size scratch pools + software-pipeline diagonal.
         tournament_levels = (1, 2, 3)
-        l4_gmin = (7, 30)
+        l4_gmin = (6, 30)  # F-25: 7 -> 6, funded by the 23-ring parity plan
         temp_and_cond_pool_sizes = (16, 4)
         skew = (4, 3)
         # Deeper gather levels primed in mem; a level only exists to prime
@@ -1326,30 +1331,63 @@ class KernelBuilder:
                     if len(donors) < 3:
                         continue
                     parity_ring_map[(epoch, g)] = (donors.pop(0), donors.pop(0), donors.pop(0))
-            # H-048: four extra rings from an offline-audited window-disjoint
-            # donor plan. Each triple borrows three 8-word scratch runs whose
-            # REAL accesses were trace-verified emission-order-disjoint from
-            # the ring's access window (rounds 0-4 of the group, all epoch 0),
-            # with no live range spanning it -- the same borrow-safety
-            # criterion as the block slices above, mined word-by-word across
-            # scratch classes instead of whole dead blocks. Donors are named
-            # STRUCTURAL vectors (their reads are schedule-independent), never
-            # trace-liveness of emit_any-raced operands; lv words share
-            # between entries only because the two ring windows are
-            # emission-order disjoint (group 5's ring accesses end before
-            # group 16's window opens). lv+24 (two_minus_fp_vec's slot) is
-            # deliberately NOT used.
+            # H-048 word-level donor plan, RE-MINED by F-25 at the current
+            # _EMISSION_ORDER: 23 extra rings. Each triple borrows three
+            # 8-word scratch runs whose REAL accesses were trace-verified
+            # emission-order-disjoint from the ring's access window (rounds
+            # 0-4 for epoch 0, 11-15 for epoch 1), with no live range
+            # spanning it -- the same borrow-safety criterion as the block
+            # slices above, mined word-by-word across scratch classes
+            # instead of whole dead blocks. Donors are named STRUCTURAL
+            # vectors (their reads are schedule-independent), never
+            # trace-liveness of emit_any-raced operands. Donor runs repeat
+            # across entries only where the two ring windows are themselves
+            # emission-order disjoint (a ring's first access is its P0
+            # write, so the earlier ring acts like a donor access before the
+            # later window). lv+3*VLEN (two_minus_fp_vec's slot) is
+            # deliberately NOT used, and the b3l leaf temps that ride
+            # lv/lv+VLEN only write after the last ring read in this order.
+            # root_node_val_vec is epoch-1-only: its last real read is block
+            # 3's round-0 fold, before any epoch-1 ring write.
+            #
+            # ORDER-SPECIFIC AND ALL-OR-NOTHING. The windows are indices
+            # into _EMISSION_ORDER, so this plan is valid only at exactly
+            # that order -- re-mine it (tools/audit_ring_windows.py) after
+            # any emission-order or op-mix change, and never drop or
+            # reorder individual entries: leave-one-out of (0, 25) alone
+            # makes the kernel INCORRECT. Audit at this order: OK, zero
+            # LIVE-ACROSS violations over all 43 rings.
             assert level_table is not None
             lv = level_table
-            h048_plan: tuple[tuple[tuple[int, int], tuple[int, int, int]], ...] = (
-                ((0, 5), (lv + VLEN, lv + 2 * VLEN, state_vecs[8])),
-                ((0, 6), (state_vecs[9], state_vecs[10], state_vecs[11])),
-                ((0, 15), (lv, node_val_vecs[22], node_val_vecs[23])),
-                ((0, 16), (lv + VLEN, lv + 2 * VLEN, node_val_vecs[31])),
+            st, nv = state_vecs, node_val_vecs
+            f25_ring_plan: tuple[tuple[tuple[int, int], tuple[int, int, int]], ...] = (
+                ((0, 3), (st[6], st[7], st[14])),
+                ((0, 4), (st[9], st[10], st[11])),
+                ((0, 5), (lv + 2 * VLEN, st[8], st[12])),
+                ((0, 13), (st[23], nv[17], nv[18])),
+                ((0, 14), (nv[20], nv[22], nv[23])),
+                ((0, 15), (lv, lv + VLEN, nv[31])),
+                ((0, 18), (st[27], nv[24], nv[27])),
+                ((0, 20), (st[29], st[30], st[31])),
+                ((0, 23), (lv + 2 * VLEN, nv[29], nv[30])),
+                ((0, 25), (lv, lv + VLEN, nv[31])),
+                ((0, 30), (st[1], st[2], nv[0])),
+                ((1, 0), (st[4], st[25], nv[31])),
+                ((1, 4), (st[0], st[3], nv[10])),
+                ((1, 11), (st[4], nv[2], nv[3])),
+                ((1, 12), (root_node_val_vec, lv, st[19])),
+                ((1, 14), (st[8], st[18], st[22])),
+                ((1, 15), (st[11], st[20], nv[5])),
+                ((1, 21), (st[9], st[10], st[26])),
+                ((1, 22), (st[12], st[13], nv[14])),
+                ((1, 23), (root_node_val_vec, lv, lv + VLEN)),
+                ((1, 27), (lv + 2 * VLEN, st[16], st[17])),
+                ((1, 28), (st[0], st[1], st[2])),
+                ((1, 29), (st[18], st[19], st[20])),
             )
-            for key, bases in h048_plan:
+            for key, bases in f25_ring_plan:
                 assert key not in parity_ring_map, \
-                    f"H-048 plan entry {key} already ring-funded"
+                    f"parity ring plan entry {key} already ring-funded"
                 parity_ring_map[key] = bases
 
         # --- rounds ---
