@@ -1435,3 +1435,139 @@ No artifact written: tools/f18_best_plan_*.json would have been a
 duplicate of f13_best_plan_1020.json. No verification sweep, l4_gmin
 re-sweep or regret re-profile was run — all three were conditioned on an
 improvement that did not occur; the F-13 numbers stand.
+
+## F-39 (2026-07-28): PACKING AXIS RE-TESTED AT THE 1006 STREAM — G-25's
+## closure HOLDS. 386,090 full re-schedules, zero below 1006; open window
+## vs the any-packing floor is 10, and every one of the 11 regret cycles
+## is chain-shaped, not packing-shaped.
+
+Charter: G-25 (H-051) closed packing/placement, but it measured the
+**1031** stream. Since then the stream changed completely (F-24's
+non-uniform lag diagonal, a re-mined 20-ring parity plan, l4_gmin (6,31),
+a fully re-walked emission order). This loop has been burned three times
+by stale closures flipping sign under a regime change (G-22 -> H-047,
+"convergence" -> H-056, F-24's phantom prize), and packing was the one
+axis never re-measured. Re-run, not re-derived.
+
+### Method (shared tools called, not modified)
+
+`tools/f39_pack.py` + `tools/f39_par.py` (new; nothing under tools/ was
+edited). f39_pack imports `backtrack_sched` and patches its module
+globals in-process: `H51_OVERRIDES` <- the 1006 mix loaded straight from
+`tools/h057_best_plan_1006.json` (`params.mix` = parity_ring,
+l4_gmin (6,31), the 20-ring parity_ring_plan, c5_primed_gather_levels
+(5,6), mem_prime_region_hazards, mem_prime_dead_reg_staging,
+flow_spelling_plan ()) plus `emission_plan` = the 512-entry `plan`;
+`CAPTURE_PATH` <- a separate f39 pickle so the H-051 capture is not
+clobbered. f39_par forks 8 workers over the same captured DAG; every
+trial is a full offline greedy re-schedule with forced min_cycle floors
+(the H-051 deviation model), ~11 ms serial / ~430 trials/s at 8-way.
+
+Config sanity: `run_variant.measure(OVERRIDES)` -> **1006, correct=true**.
+
+### Model soundness on the NEW stream: still bit-exact
+
+- `capture`: **20,462 ops** (was 20,562 at 1031), span 1006, n_cycles
+  1006, pair_writes=True.
+- `validate`: offline greedy in emission order reproduces **all 20,462
+  captured placements exactly** — `exact_match: true, n_mismatch: 0`,
+  offline_cycles 1006 == captured_cycles 1006. The constraint model did
+  NOT drift with the organization/order change; no mismatch finding.
+- `verify` (frozen-grader reconstruction of the identity placement):
+  feasible=True, 1006 / correct=true on seeds 1, 2, 3, 7, 42, 99. The
+  whole capture -> DAG -> re-place -> rebuild-bundles -> grade path is
+  live at this config, so any future win found here is landable-checkable.
+
+### Bounds at 1006 (independently recomputed, matches F-37's stack)
+
+| bound | value |
+|---|---|
+| realized | 1006 |
+| engine LB (valu 995, alu 981, load 946, flow 797, store 23) | **995** |
+| dependency CP | 512 |
+| staircase [release(est)] | 996 (valu, t=4, 5947 ops beyond) |
+| staircase [tail(h)] | 995 (valu, t=1, 5959 ops beyond) |
+| **energetic interval LB (ANY packing of this stream)** | **996** |
+| fungible (H-044 alu/valu re-assignment) LB | 992 |
+
+**Open window = 1006 - 996 = 10.** (At 1031 it was 16.) The theoretical
+maximum any repacking of this op stream can pay is 10 cycles, and the
+regret profile says where they are.
+
+### Regret profile at 1006: 11 = ramp 4 + mid 3 + drain 4
+
+| c | +d | F | engLB | cpLB | rounds at c |
+|---|---|---|---|---|---|
+| 0 | +1 | 996 | 995 | 512 | (setup) |
+| 1 | +1 | 997 | 995 | 512 | (setup) |
+| 3 | +1 | 998 | 994 | 510 | (setup) |
+| 7 | +1 | 999 | 991 | 508 | r0 |
+| 805 | +1 | 1000 | 194 | 112 | r7,8,11,12,15 |
+| 864 | +1 | 1001 | 136 | 99 | r7,8,9,12,13,14 |
+| 915 | +1 | 1002 | 86 | 70 | r9,10,11,12,13 |
+| 978 | +1 | 1003 | 23 | **24** | r14,15 |
+| 984 | +1 | 1004 | 17 | **19** | r14,15 |
+| 993 | +1 | 1005 | 8 | **11** | r14,15 |
+| 997 | +1 | 1006 | 8 | 8 | r15 |
+
+Shape vs 1031/1023: the r9-11 epoch-seam CLUSTER (5 cycles at 1031, 5 at
+1023) is down to 3 isolated unit jumps spread over c=805/864/915, and the
+drain is 4 (was 7 at 1031). The drain is CP-bound — cpLB strictly exceeds
+engLB from c=978 on — i.e. the last 3-4 cycles are provably latency, and
+no packing decision can touch them. That alone caps the packing-shaped
+share of the 11 at <= 7-8, and the energetic bound independently caps it
+at 10.
+
+### Search battery on THIS stream — 386,090 trials, zero improvement
+
+Incumbent 1006 throughout. Every trial = a full DAG re-schedule.
+
+| tier | scope | trials | best |
+|---|---|---|---|
+| priority-list (parallel SGS) | tail_height | 1 | 1046 |
+| priority-list | est+tail (CP) | 1 | 1229 |
+| priority-list | reverse emission | 1 | 1024 |
+| priority-list | forward emission | 1 | 1329 |
+| **discrepancy-1, ENTIRE stream** | all 20,462 ops x d in {1,2} | **40,924** | **1006** |
+| **discrepancy-1, ENTIRE stream** | all 20,462 ops x d in {3,5,8} | **61,386** | **1006** |
+| **discrepancy-2 pairs** | radius 3 around all 11 regret jumps (incl. c=0), all engines, d in {1,2}^2 | **283,780** | **1006** |
+| total | | **386,090** | **1006** |
+
+Notes on coverage: disc-1 over the ENTIRE stream at five delay values is
+the COMPLETE first level of the bounded backtrack (delay one op that
+greedy placed earliest, let greedy complete) — not a sampled window. The
+pair tier's per-jump candidate sets were 24-148 ops each (24 @ c=0, 119 @
+c=7, 136 @ 805, 130 @ 864, 133 @ 915, 146 @ 978, 148 @ 984, 124 @ 993,
+101 @ 997). Priority-list scheduling with global lookahead is again
+sharply NEGATIVE (best alternative 1024, +18): the emission order remains
+a much stronger spine than any height-based priority.
+
+k=3 sampling was deliberately NOT run: per the loop's diminishing-returns
+rule, an empty exhaustive discrepancy-1 over the whole stream plus an
+empty exhaustive pair sweep at every regret jump is where this stops.
+
+### Verdict
+
+**G-25's packing closure survives the regime change.** The one axis that
+had never been re-measured on the current stream re-measures the same
+way, and it is now a tighter negative than it was at 1031: the open
+window shrank 16 -> 10, the search was denser relative to the stream
+(386k trials over 20,462 ops), and the drain — 4 of the 11 residual
+cycles — is provably CP-bound rather than slot-bound. Nothing beat 1006,
+so there is no artifact to land and no port to schedule.
+
+Composition with the rest of the strain map: order is closed by
+enumeration (G-30/G-31, 26,415 exhaustive single-entry displacements at
+1020 + re-walk at this mix), spelling is closed (H-042/F-25, empty
+flow_spelling_plan at 1006), packing is closed here. All three scheduler
+axes are measured-closed at the 1006 mix, for the second regime running.
+The residual 11 is dependency-chain structure: ramp 4 (setup vbroadcast
+RAW), mid 3 (three isolated r7-r13 seam jumps, no longer a cluster),
+drain 4 (CP-bound r14/r15 chains). Only chain shortening (H-052/H-055) or
+a mix change can move it — re-confirmed, not re-argued.
+
+Reusable: `tools/f39_pack.py` (capture/validate/regret/bound/probe/
+verify at the 1006 config, config read live from the plan JSON so it
+follows the frontier) and `tools/f39_par.py` (8-way parallel disc-1 /
+pairs / triples). Re-running the full battery at a future stream is
+~15 min of wall clock; re-running measure+validate+bound+regret is ~10 s.
