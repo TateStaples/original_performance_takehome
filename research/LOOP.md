@@ -16,6 +16,13 @@ continue from whatever step the state implies.
    in one run and would have closed H-053 immediately. Corollary: "lowers
    the floor but cycle-neutral" is NOT automatically a win — the CP-bound
    ramp absorbs floor relief 1:1.
+0a2. **STANDING PRE-SCREENS (run before prototyping ANY mechanism).**
+   tools/free_slot_oracle.py (op-migration class ceiling),
+   tools/h054_shadow.py (per-engine resource ceilings — ALWAYS read its
+   joint numbers against each relaxed machine's OWN floors; G-27 was
+   misread as superadditivity when it was max-of-floors, see G-28),
+   tools/h055_preload_oracle.py (structural/DAG-surgery ceiling, ~2s),
+   tools/backtrack_sched.py regret (friction decomposition).
 0b. **RESEARCH MODE (user directive 2026-07-27): ALGO-FIRST under an
    idealized machine.** Evaluate hypotheses assuming INFINITE SCRATCH and
    PERFECT SLOT ALLOCATION: what matters is the op multiset (per-engine

@@ -446,7 +446,7 @@ Seeded 2026-07-23 from the 2148->1140 campaign's measured rejections.
   over 19 order families x 6 biases (1022 incumbent, bias monotone-
   negative on every family), order re-search on the migrated stream
   (1023/1025).
-- **THE REAL FINDING — per-engine shadow prices** (tools/h054_shadow.py):
+- **[CORRECTED BY G-28 — the joint number below is max-of-floors, NOT superadditivity; reachable share is ZERO. Read shadow prices against each relaxed machine's own floors.]** per-engine shadow prices (tools/h054_shadow.py):
   flow 0, store 0, alu 12->16/24 = -2/-7, valu 6->8/12 = -6/-8,
   load 2->3 = **-7**. JOINT: valu8+alu16 = -14, alu16+load4 = -48,
   **valu8+load4 = -181 (841 cycles)**, all doubled = 612. Single-resource
@@ -457,3 +457,51 @@ Seeded 2026-07-23 from the 2148->1140 campaign's measured rejections.
   either alone does nothing.
 - reopen-if: never for the flow axis. The successor is F-20 (find and
   shorten the alternating valu/load chain).
+
+### G-28 Chain shortening + the valu<->load alternation (H-055) -- AND A CORRECTION TO G-27
+- **CORRECTION FIRST: G-27's "-181 superadditivity" was a MISREADING.**
+  h054_shadow.py's joint number is max-of-floors arithmetic, not a
+  synergy. Read against each relaxed machine's OWN floors:
+  baseline 6052 valu/11761 alu/1892 load -> floors 1009/981/946, max 1009;
+  valu6->8 -> 805/753/**946**, max 946 (re-binds on LOAD);
+  load2->4 -> **1008**/989/473, max 1008 (re-binds on VALU);
+  valu8+load4 -> 803/788/473, max 803. The two floors sit 63 apart, so
+  relieving both drops the max by 206. **Reachable share by chain
+  shortening: ZERO.** Standing rule: always read shadow-price output
+  against the relaxed machine's own floors (F-23).
+- **The ceiling on chain shortening of ANY kind: 3 cycles.** Greedy with
+  EVERY RAW/WAW lag set to 0 gives 1017 at the 1020 mainline (1016 at
+  1022). Bound stack @1020: realized 1020 / all-lags-zero 1017 / valu
+  slot floor 1006 / fungible 1000 / all-compute-free 993 / load floor
+  946 / pure CP 541. CP is 541 levels vs 1020 realized = 479 slack.
+- chain characterization (tools/h055_chain.py): CP has 719 ops --
+  valu 499, flow 115, alu 91, **load 11**, store 3; only 17 valu<->load
+  transitions total. The steady per-round chain is 13 levels with exactly
+  ONE valu->load->valu handoff; 9 of 13 levels are hash.
+- **PAIR-PRELOAD (the user's mechanism) CLOSED, stronger than G-18.**
+  tools/h055_preload_oracle.py does DAG surgery at any subset of the 229
+  gather sites. Two findings: (a) no memory re-layout is needed at all --
+  `base = 2*gaddr+omf` is ALREADY parity-free and already hoisted a full
+  round by race_idx_madd, and heap children are contiguous, so
+  "deinterleaved left/right" is just `base` and `base+1`; (b) measured at
+  1020 with real loads / with loads made FREE: 1 site +5/+3, 2 +9/+2,
+  8 +14/+9, 16 +45/+9, 48 +173/+8, 128 +493/+17, all 229 +883/+78 --
+  **positive at all 13 subset sizes in BOTH columns.** G-18 rejected it
+  on load count; this rejects it with the load cost removed entirely.
+  The latency prize is <= 0.
+- secondary sites re-diagnosed: the DRAIN is NOT chain-bound (zeroing all
+  lags among drain ops gives +0 at 1022, -2 at 1020) -- it is the last
+  group's serial r14->r15 hash unable to start earlier because valu is
+  saturated. The RAMP's 4 cycles are LOAD BANDWIDTH, not chain (c=0-5 run
+  load 2/2 while valu takes 0/1/1/3/6/4; every valu op needs a scratch
+  word only the 2-wide load engine can create); floor on that deficit ~2.
+- load budget: 152 free load slots schedule-wide, **ZERO across cycles
+  85-960** (876 consecutive saturated cycles). Scratch: 3 free; buying 16
+  via pool sizes costs +17.
+- ENVELOPE: at this op stream the reachable range is 1020 -> 1006 (slot
+  floor) / 1000 (fungible). Everything remaining is <= 20 cycles and is
+  ORDER/PACKING-shaped -- F-13-style order walks are the right and only
+  remaining machine. Below 1006 needs fewer valu slots (hash closed
+  G-20/G-24, idx closed G-21); below 993 needs fewer loads (contiguity
+  0.00%, G-16). Both legs closed inside this organization.
+- reopen-if: a different program organization (not this one's schedule).
