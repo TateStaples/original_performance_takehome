@@ -160,5 +160,11 @@
     "label": "mem_prime_L6",
     "cycles": 1022,
     "note": "H-047 prime L5+L6 + gmin(7,30) + re-searched order; F-15 port"
+  },
+  {
+    "step": "1020",
+    "label": "order_radius",
+    "cycles": 1020,
+    "note": "F-13 restart portfolio, jump radius +/-16/32 (the +/-8 set was a local optimum); driver-ported literal"
   }
 ]
