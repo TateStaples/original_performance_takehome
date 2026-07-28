@@ -612,3 +612,169 @@ lines 1022. Extra: seeds 1/2/3/7/42/99/123/2026 all correct at 1022,
 `test_kernel_trace` (debug vcompares) green. Off-shape sweep at
 batch 256 / 16 rounds moved with it, no regressions: h5 1043->1042,
 h6 1020->1014, h7 1125 (=), h8 1079->1077, h9 1062->1060.
+
+---
+
+## H-055 (2026-07-27): "shorten the alternating valu<->load chain" — CLOSED NEGATIVE. The premise is false: the chain is worth <= 6 cycles and the -181 joint shadow price is max-of-floors arithmetic, not superadditive chain structure.
+
+Baseline for everything below: mainline/frontier **1022**, `correct: true`
+(`tools/h054_common.frontier_kwargs()`); `tests/submission_tests.py` 9/9
+green, all nine CYCLES lines 1022. **No dev.py / perf_takehome.py change was
+made** — H-055 is entirely measurement. New tools: `tools/h055_chain.py`,
+`tools/h055_balance.py`, `tools/h055_preload_oracle.py`.
+
+### 1. The bound stack at 1022 (all reproduced this session)
+
+| bound | cycles | what it relaxes |
+|---|---|---|
+| realized | **1022** | — |
+| greedy with **every RAW/WAW lag set to 0** | **1016** | ALL dependency latency, everywhere |
+| valu-slot floor (any packing, G-25 two-sided) | **1009** | packing + order |
+| fungible bound (perfect valu/alu respelling) | **1003** | + per-op engine choice |
+| all vector ops free (G-26 `free_slot_oracle`) | **993** | the entire compute census |
+| load floor (1892 loads / 2) | 946 | — |
+| pure critical path (infinite slots) | **516** | all resources |
+
+Census: valu 6052 (floor **1009, the binder**), alu 11761 (981), load 1892
+(946), flow 796 (796), store 46 (23).
+
+**Headline: zeroing every dependency lag in the whole kernel buys 6 cycles
+(1022 -> 1016).** The rigorous ceiling on chain shortening is 13 (to the
+1009 slot floor, which no dependency change can beat without changing the
+op multiset); under the current emission order + greedy policy only 6 of
+those 13 are latency at all — the other 7 are packing/order friction, which
+G-25 (packing) and H-049 (order) already closed.
+
+### 2. The valu<->load "alternation", named and counted (`h055_chain.py cp`)
+
+Critical path = 516 ops over 516 cycles; **708 ops lie on it**. Engine
+census ON the CP: valu 498, flow 113, alu 84, **load 10**, store 3.
+Transitions on the CP: valu<->flow 149, valu<->alu 87, **valu<->load 15**.
+
+So the alternation exists but is 10 loads in 516 levels. The per-round
+steady-state chain (13 dependency levels, e.g. tag (4,4) est 79->91) is:
+
+    ^ fold-in | madd stage0 | >>,^ stage1 | ^ | madd,madd stage2+3 | ^ |
+    madd stage4 | >>,^ stage5 | ^ | & parity | vselect (flow, idx_select)
+    | madd (2*gaddr + omf) | 8x scalar gather load
+
+i.e. exactly ONE valu->load->valu hand-off per round, 3 levels wide
+(parity -> address -> gather). 9 of the 13 levels are the hash.
+G-27's reading ("the critical structure ALTERNATES vector compute with
+gathers, which is why relieving either engine alone does nothing") is
+**not what binds**: the CP is 516 against a 1022 realization — 506 cycles
+of slack.
+
+### 3. Why the -181 is not superadditivity (reconciliation of G-27)
+
+Re-ran `tools/h054_shadow.py`. Reading the printed slot counts against each
+relaxed machine's OWN floors dissolves the "wild superadditivity":
+
+| machine | valu/alu/load slots | own floors v/a/l/f | max floor | actual |
+|---|---|---|---|---|
+| baseline | 6052 / 11761 / 1892 | 1009 / 981 / 946 / 796 | **1009** | 1022 (+13) |
+| valu 6->8 | 6434 / 9033 / 1892 | 805 / 753 / **946** / 721 | **946** | 1016 (+70) |
+| load 2->4 | 6045 / 11865 / 1892 | **1008** / 989 / 473 / 787 | **1008** | 1016 (+8) |
+| valu8 + load4 | 6422 / 9449 / 1892 | **803** / 788 / 473 / 699 | **803** | 841 (+38) |
+
+Relieving valu alone re-binds on the load floor (946); relieving load alone
+re-binds on the valu floor (1008); the two floors are only 63 apart, so
+relieving both drops the *max* by 206. That is a `max()`, not a chain.
+**Reachable-by-chain-shortening share of the -181: zero.** Reaching 841
+means deleting ~1230 valu slots AND ~950 loads at the current widths — the
+valu census is 80% hash (closed G-20/G-24) and the loads are 1 scalar
+gather/lane at 0.00% contiguity (closed G-16).
+
+The one knob that runs the valu<->load trade directly is `l4_gmin`
+(`h055_balance.py gmin`): each L4 group-round dropped from pair-tournament
+service sheds ~3.6 valu + ~59 alu slots and pays +8 loads. Joint floor does
+dip (1009 -> 1003 at gmin (20,30)) but realized cycles rise monotonically
+(1022 / 1025 / 1033 / 1057 / **1073** / 1089 / 1105 for e0 = 7/8/10/16/20/
+24/28), regret 13 -> 75. The floor-equalisation prize is 6 and it is not
+realizable. (gmin e0 in {4,5,6,12} asserts on `parity_ring_plan` funding;
+e0=32 is `correct:false`.)
+
+### 4. Pair-preload (the user's primary mechanism) — REJECTED, this time with the load cost REMOVED
+
+`tools/h055_preload_oracle.py` rewrites backtrack_sched's exact captured op
+stream (whose offline greedy reproduces the real 1022 schedule
+cycle-for-cycle) at any subset of the **229 gather sites**, replacing
+
+    par(&) -> A: st = base -/+ par -> 8x load -> fold-in ^        (3 levels)
+
+with the deinterleaved form
+
+    M: base -> 8x load(nv)        [hoisted, parity-free]
+       base2 = base-/+1 -> 8x load(nv2)
+    par(&) -> vselect(nv, par, nv2, nv) -> fold-in ^              (2 levels)
+
+Note `base` is ALREADY parity-free and already hoisted a full round in the
+1022 build (`race_idx_madd` emits it before the parity), so no memory
+re-layout is needed at all — the children of a heap node are contiguous, so
+the "deinterleaved left/right array" is just `base` and `base+1`. The rewrite
+is valu-neutral (the dropped `-` pays for `base2`), costs +1 flow and +8
+loads per site, and 16 scratch words per site.
+
+Measured (`sweep`), sites taken from the drain backwards:
+
+| sites | real load engine | **loads made FREE (64-wide oracle engine)** |
+|---|---|---|
+| 1 | 1027 (+5) | **1023 (+1)** |
+| 2 | 1031 (+9) | 1025 (+3) |
+| 8 | 1030 (+8) | 1031 (+9) |
+| 16 | 1062 (+40) | 1030 (+8) |
+| 48 | 1190 (+168) | 1027 (+5) |
+| 128 | 1510 (+488) | 1041 (+19) |
+| 229 (all) | 1899 (+877) | 1095 (+73) |
+
+**Negative at every subset size even with load throughput removed.** G-18
+rejected the general form on load count (+3,472 loads); the sharper
+statement now is that the mechanism's *latency* payoff is worth <= 0 because
+the CP has 506 cycles of slack. Two supporting facts:
+- free load slots schedule-wide = **152** (2*1022 - 1892), and **zero across
+  cycles 85-960** (876 consecutive fully-load-saturated cycles;
+  `h055_balance.py loadbudget`). The full mechanism needs +1832.
+- free scratch = **3 words** (`scratch_next_addr` 1533/1536) and buying 16
+  more by shrinking `temp_and_cond_pool_sizes` costs +17 cycles:
+  (16,4) 1022 / (15,4) 1039 / (14,4) 1039 / (13,4) 1053 / (12,4) 1051 /
+  (16,3) 1049.
+
+### 5. The drain is not latency-bound either (refutes the H-052 premise)
+
+The F-14/H-052 reading was "drain 4 cyc, CP-bound (cpLB >= engLB from
+c=996), so latency relief pays most there". Regret profile re-measured at
+1022: ramp 4 (c=0,1,2,5), epoch seam 5 (c=812/847/904/918/926), drain 4
+(c=995/996/1001/1013) — 13 total, matching F-14's shape. But **zeroing every
+dependency lag among the ops placed in cycles 950-1022 (or 980-1022) leaves
+the schedule at exactly 1022**. The drain tail is the last group's r14->r15
+serial hash (c=988..1019, ~1 op/cycle, machine near-empty); it cannot start
+earlier because the valu engine is saturated up to that point in emission
+order, not because its chain is long. (Windowed lag-zeroing is not monotone
+under greedy — `ramp 0-100` -> 1032, `steady 100-800` -> 1029, both WORSE —
+so only the global 1016 and the +0 drain result are load-bearing.)
+
+The ramp's 4 cycles are a **load-bandwidth** ramp, not a chain: cycles 0-5
+run load 2/2 (12 const/load slots) while valu takes 0/1/1/3/6/4, because
+every valu op needs a scratch word that only the 2-wide load engine can
+create. Theoretical minimum deficit (valu usable <= 2c slots by cycle c) is
+12 slots = 2 cycles vs today's 24 slots = 4, so the ramp's reachable share
+is ~2.
+
+### Verdict / follow-ups
+
+H-055 is **closed negative**, and with it the F-20 axis. The op multiset —
+not any dependency structure — is the only remaining lever, and it must move
+valu AND load together:
+- **F-21**: the reachable envelope at this op stream is 1022 -> 1009 (slot
+  floor) / 1003 (fungible). Everything from here is worth <= 19 and is
+  order/packing shaped, i.e. F-13's walks.
+- **F-22**: to go below 993 the LOAD count must fall (contiguity is 0.00%,
+  G-16), and to go below 1009 the VALU count must fall (hash closed G-20/
+  G-24, idx closed G-21). Both legs are closed inside this organization —
+  consistent with G-23's joint condition. Any future 892-gap work should
+  target a different program organization, not this one's schedule.
+- **F-23** (tool): `h055_preload_oracle.py`'s rewrite+greedy harness costs a
+  structural mechanism in ~2 s without implementing it. Generalize it (edge
+  surgery on the captured stream) as the standing pre-screen for any future
+  chain/structure hypothesis, alongside `free_slot_oracle` (op-migration)
+  and `h054_shadow` (resource).
