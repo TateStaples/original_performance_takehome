@@ -831,3 +831,100 @@ and more decisive question it raised itself: **is there a LOWER BOUND
 argument?** If >=4 madds are provably necessary, then combined with the two
 irremovable xors the 10-op question closes outright -- a proof, not another
 exhausted region. That is now the phase's open item.
+
+## Phase 3 closing summary (2026-07-28): 940 is out of reach; here is exactly why
+
+**Result: no design in this space theoretically matches 940.** The
+structural floor is **944-952**, realizing ~965-970. Mainline stays at
+**1006**, grader 9/9 — Phase 3 was theory-only by charter and shipped no
+cycle change.
+
+### The three-model convergence
+
+| model | route | floor |
+|---|---|---|
+| P3-C | independent enumeration, ~405k designs | 946.0 |
+| P3-D | joint model, index derived per-round, penalty measured | 945-946 |
+| P3-E | measured ring ceiling + measured K penalty | 948 |
+
+Built from different directions, disagreeing at every intermediate step,
+converging at the end. The record of 940 REALIZED needs a floor near 925 —
+**157 vec-ops (0.31 per group-round) below anything this space contains.**
+
+### Why nothing but the hash can close it
+
+At 940 the budget is 7,050 vec-ops. **The hash alone is 5,808 — 82.4%.**
+Index at its proved floor is 826. Serving needs 1,139 folds plus 227 `omf`
+selects = 1,366 flow-eligible ops against at most 940 flow slots, forcing
+>=426 onto valu. Total 7,130 before setup, and the load engine fails
+independently (1,876 loads against 1,840). Every term individually closed:
+
+| term | closed by |
+|---|---|
+| index recurrence | 1,548,224 structural forms, 0 solutions; parity set {p, p-2, p*2^31} over ALL 2^32 constants |
+| `omf` select | algebraic dominance theorem: tie when L>=rem, strict loss otherwise, at every cycle target |
+| served-level shape | exhaustive over ~405k designs; every optimum is the shipped shape |
+| serving mechanism | sum-of-products isomorphic to select trees; T1/T2/T3 costed |
+| ring coverage | measured ceiling 40/64 = 62.5%, three independent checks |
+| K (live groups) | census-neutral (model) AND +75 realized cycles at K=16 (measured) |
+| hash | 11 ops; no 10-op form found, no lower bound provable |
+
+### The one honest opening, and why it is not closable here
+
+**If 940 exists under these rules, the hash must be shorter than 11 ops.**
+A 10-op body is 528 vec-ops ~ **70 cycles**: floor 944-952 -> ~874-882.
+
+P3-F narrowed but did not close it:
+- Prior closure stated precisely at last: G-10 exhaustive PER ADJACENT
+  SEGMENT; H-016 MITM over all 10 boundaries; H-025 full-hash MITM at depth
+  <=7 forward / 10 total.
+- Vocabulary gap closed negative (`//`, `%`, `cdiv` were absent from
+  `fusion_search.rs` BIN_OPS): 16,200 questions, exhaustive, 4 hits all
+  definitional.
+- **Lemma: `exists c: y^K == y+c (mod 2^32) for all y` iff K in {0, 2^31}.**
+  A madd's addend is its only additive slot, so **no xor can cross a madd**
+  — proving the fold-in `^nv` and stage-2 `^C1` irremovable across the whole
+  conjugation / basis-transform / node-table-transform family, the family
+  `c5_prexor` belongs to.
+- O1 additionally survives on a structural argument: the kernel is built from
+  `(forest_height, n_nodes, batch_size, rounds)` only, so the op stream can
+  **never be specialised on a node value** — and the transformed node table
+  `T(nv) = g16(C5^nv)` leaves no residual freedom.
+
+**A lower-bound proof is formally barred.** All three invariant routes are
+saturated by 1-2 op programs, with explicit witnesses (`tools/p3f_bound.py`):
+bit-dependency — `out = (s < 0xB3A7F001)` makes output bit 0 depend on 32/32
+bits of `s` in ONE op (cap <=1); degree/2-adic — `deg(s*s) >= 11/12` vs
+target 12/12 (cap <=2); XOR/ADD alternation — the target has fan-out, so the
+chain-of-bijections model does not apply; counting — non-constructive.
+**Unconditionally provable: N >= 2. N >= 11 holds only under a
+stage-respecting hypothesis that is exactly the thing in question.**
+
+**Therefore "940 via a shorter hash" is OPEN BUT UNFALSIFIABLE at this
+budget.** The only sound route left is exhaustive refutation via the kf>=3
+global MITM, ~1000x the compute spent so far. Not funded; the user's call.
+
+### Corrections this phase made to our own record
+
+1. Charter's index floor 8,192 -> **6,608**; design-floor line 911 -> 884.5.
+   Only 448 of 512 group-rounds emit index work.
+2. Routing's 504 madds are **tournament selects**, not address arithmetic.
+3. **G-33's K-penalty table mixed bases** (ringed W=32 against ring-free
+   W<32), overstating the penalty by ~20 cycles: true +21/+45/+75.
+4. P3-D's round-15 corollary **retracted** after measurement (G-38).
+5. P3-F corrected its own O1 range claim mid-phase; the obstruction survives
+   on stronger grounds.
+6. **Latent miscompile found and contained**: with partial b3l funding
+   reachable, the dead-register pool's tail is not dead — `l4_gmin=(32,24)`
+   built a kernel that ran and returned the WRONG ANSWER. Unreachable behind
+   the flag's preserved all-or-nothing invariant; `perf_takehome.py` never
+   exposed. Filed separately.
+
+### Methodology note
+
+Phase 3's headline number was wrong twice before it was right, and both
+times two models agreed while sharing an unexamined assumption. 939 survived
+one adjudication and died to a measurement (G-38). **Convergence between
+models is not evidence when the models share a frame; only measurement
+broke it.** That is the sixth rule this project has bought with a wrong
+answer.

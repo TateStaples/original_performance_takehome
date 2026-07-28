@@ -98,7 +98,7 @@ Applying the lemma to each of the two remaining "spare" xors:
 
 | # | op we would remove | move | required condition | actual value | verdict |
 |---|---|---|---|---|---|
-| O1 | op 1, `x = s ^ nt` | absorb `nt` into the previous round's stage-5 madd addend (per-node runtime addend is legal!) | `g16^-1(C5 ^ node_val) in {0, 2^31}`, i.e. `node_val in {0xB55A4F09, 0x355ACF09}` | node values are uniform in `[0, 2^30)` (`problem.py:449`) | **impossible for every node** |
+| O1 | op 1, `x = s ^ nt` | absorb `nt` into the previous round's stage-5 madd addend (per-node runtime addend is legal!) | `g16^-1(C5 ^ node_val) in {0, 2^31}`, i.e. `node_val in {0xB55A4F09, 0x355ACF09}` | see **CORRECTION** in section 8 | **impossible** (build-time argument, not a range argument) |
 | O2 | op 4, `b = a ^ C1` | push backward through `g19` into the stage-1 madd addend | `g19^-1(C1) in {0, 2^31}` | `g19^-1(0xC761C23C) = 0xC761DAD0` | **no** |
 | O3 | op 4, `b = a ^ C1` | push forward into the stage-3/4 madd addends | `C1 in {0, 2^31}` | `0xC761C23C` | **no** |
 
@@ -213,3 +213,116 @@ PHASE-3 ANSWER is arithmetically correct. **No such body was found.**
   three obstruction constants, the extended 1-op probe.
 * `/Users/tatestaples/Code/original_performance_takehome/tools/p3f_depth2.py`
   — depth-2 slice with `//`/`%`/`cdiv` + POOL constants + positive controls.
+
+---
+
+# PART 2 — the lower-bound attempt (coordinator's follow-up)
+
+Tool: `tools/p3f_bound.py` (read-only). Everything below is either proved or
+labelled as verified-by-enumeration with the enumeration stated.
+
+## 8. CORRECTION to section 3 (O1)
+
+**My first report was wrong on one detail.** I said the two node values that
+would let the fold-in be absorbed are out of range. In fact
+
+* `0xB55A4F09 = 3,042,594,569 >= 2^30` — out of range, as stated;
+* **`0x355ACF09 = 895,143,689 < 2^30` — IN RANGE.** A single tree node can
+  carry it, with probability `2^-30`.
+
+The conclusion survives, but the *reason* must be replaced by a stronger one:
+
+> The kernel is built from `(forest_height, n_nodes, batch_size, rounds)`
+> **only** (`tests/submission_tests.py:24-26`); node *values* live in memory
+> and are never available to the builder. So the emitted op stream cannot be
+> specialised on a node value at all, and even a runtime specialisation would
+> save 1 op on 1 node out of `2^(h+1)-1`.
+
+Also checked (`p3f_bound.py` section A): the node table is *already*
+maximally free — `T(nv) = g16(C5 ^ nv)` uses the whole transform freedom, and
+the required entry `M` is then **uniquely determined** by `nv`, so there is no
+residual choice a cleverer table could exploit. The madd's *multiplier* slot
+is no help either (`e*B + A` is Z-affine in `e`, so the same lemma applies).
+Positive controls confirm that `M in {0, 2^31}` really would be absorbable.
+**O1 stands.**
+
+## 9. THE BOUND
+
+### 9a. Unconditional: **N >= 2**, proved.
+
+For fixed `nt`, `R(., nt)` is a bijection of `Z/2^32` (a composition of
+bijections). Every 1-op form is therefore either non-injective — `u%c`,
+`u//c (c>=2)`, `u&c`, `u|c`, `u<<k`, `u>>k (k>=1)`, `u<c`, `u==c`, `cdiv`,
+`u*c (c even)` — and immediately excluded, or it is Z-affine / GF(2)-affine in
+`s`: `s^c`, `s+c`, `c-s`, `s-c`, `s*c (c odd)`, `madd(s,c,c')`, plus the
+`nt`-mixing forms. `p3f_bound.py` section D refutes all of these by
+constant-solving (0 hits for the whole round; both positive controls —
+`s^nt` and `4097x+C0` — are rediscovered). **This is the strongest bound I
+can prove by invariant reasoning, and it is useless for the 940 question.**
+
+### 9b. Conditional: **N >= 11**, modulo one explicit hypothesis.
+
+**Hypothesis (S).** *P is stage-respecting*: for each `i in 1..6` some value
+of `P` equals `phi_i(stage_i)` for a GF(2)-affine bijection `phi_i`, and no
+op of `P` is shared between two different stage segments.
+
+**Claim.** Under (S), `|P| >= 11`, so the shipped program is optimal.
+
+Ingredients, each independently verified:
+
+1. **Stages 1, 3, 5 cost >= 1.** Trivial. They are met at 1 (madd), because
+   `v + (v<<S) + C = madd(v, 2^S+1, C)`.
+2. **Stages 2, 4, 6 cost >= 2.** Their combine is `^`, which no madd can
+   absorb. Verified by depth-1 refutation *with full availability of every
+   earlier trace value* (`p3f_bound.py` section D):
+   `a -> g19(a)^C1`, `a -> g19(a)`, `f -> g16(f)`,
+   `d -> (33d+ap)^(16896d+aq)`, and the same three targets given
+   `{s,nt,x,a,t1,b,d,p,q,e,f}` — **0 one-op forms in every case**.
+   Met at 2 in the shipped program.
+3. **The fold-in `^nv` costs 1 and is irremovable** — O1, section 8.
+4. **Stage 2's constant `^C1` costs 1 and is irremovable** — O2/O3,
+   section 3. (Stage 4's constant is absorbed into `ap`/`aq`; stage 6's is
+   absorbed by `c5_prexor`; stages 1/3/5's ride the madd addend.)
+
+Sum: `1 + 2 + 1 + 2 + 1 + 2` (stages) `+ 1` (fold-in) `+ 1` (C1) = **11**.
+
+**What (S) does NOT cover — and this is the whole gap.** A program that never
+materialises any stage output, or that shares an op between segments. That
+is exactly the region G-10 called "inexhaustive at global scale" and the
+region H-025's MITM left open at forward depth `kf >= 3`. **The 10-op
+question is still open, and (S) is a real assumption, not a technicality.**
+
+## 10. BARRIERS — why the three proposed invariant lines cannot close it
+
+Each is refuted by an explicit short program with the same invariant value as
+the target, so the invariant cannot separate 10 from 11.
+
+| line | barrier witness | cap |
+|---|---|---|
+| 3. bit-dependency / downward reach | `out = (s < 0xB3A7F001)`: bit 0 of the output depends on **32/32** bits of `s` after ONE op (verified with targeted witnesses, `p3f_bound.py` C). And section B shows the target's maximum required net downward displacement is exactly 31, which a single `>>31` realises. | **<= 1 op** |
+| 1. degree / 2-adic filtration | GF(2) algebraic degree, exact on a random 12-variable restriction: `deg(s*s) >= 11/12` vs `deg(target) = 12/12`. One or two ops already reach the target's degree. Any Z/2^32-degree or associated-graded invariant is dominated by the same effect: a single `*` is already maximally nonlinear. | **<= 2 ops** |
+| 2. XOR<->ADD alternation, applied globally | The lemma gives a group-theoretic separation (`Aff_Z ∩ Aff_GF2 = {id, +2^31}`, order 2), so a *chain* of bijections would be bounded by alternation length. But the target is **not** a chain: `g19(a)` reads `a` twice, `Phi(d)` reads `d` twice, `g16(f)` reads `f` twice. Straight-line programs are DAGs, and word-level fan-out breaks the group-word model entirely. | **not applicable without a fan-out theory** |
+
+Counting is also barred: with free 32-bit constants there are at most
+`(14 * 13^3 * 2^32)^10 ~ 2^510` ten-op programs against `2^(32*2^64)`
+functions — counting shows *almost every* function is hard and says nothing
+about a named one.
+
+**Honest conclusion.** Proving `N >= 11` for a named function over a
+word-level ISA with free constants is a circuit lower bound of a kind no
+known technique delivers; every invariant that is cheap enough to compute is
+saturated by a 1- or 2-op program. **The only sound route to `N >= 11` is
+exhaustive refutation of the 10-op space**, i.e. exactly the kf>=3 MITM. I
+recommend the coordinator treat "is 940 reachable via a shorter hash" as
+*open but unfalsifiable within this project's compute budget*, and price
+decisions on the 944-952 floor.
+
+## 11. What Part 2 changes
+
+* O1's justification is repaired and strengthened (build-time, not range).
+* The shipped 11 ops are now proved optimal **under hypothesis (S)**, with
+  every ingredient separately verified — that is a materially stronger
+  statement than G-10/G-20/G-24 (which were per-segment enumerations with no
+  stated hypothesis).
+* Three invariant families are formally barred, so no further effort should
+  be spent on them.
