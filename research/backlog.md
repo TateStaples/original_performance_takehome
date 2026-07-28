@@ -1446,3 +1446,46 @@ correct, measured worse at every configuration tried]
   walk the LB-995/fungible-992 (7,31)+23-ring stream (unwalked); F-31
   decide whether any `anon`-class word is schedule-independent (last
   third of full retention); F-32 subsumed by F-29.
+
+### F-24 result [TIE at 1011 by an independent route; CORRECTS the LB-992 claim; new axis found]
+- **CORRECTION to H-056's headline: the "LB 992 stream" prize DOES NOT
+  EXIST.** h056_screen already computes ENERGETIC STAIRCASE bounds
+  (equally valid for any packing); H-056 ranked on lb_total alone and
+  missed them. gmin>=16 streams: LB 992/991 but **energetic 1011**, and
+  realized 1069-1070. gmin 16 buys ~50 valu slots for 66-88 extra loads
+  — it lowers the slot floor while RAISING the release staircase. Zero
+  further budget; re-confirmed at the new organization (LB 993 /
+  energetic 1011 / realized 1054, and a walk found ZERO moves).
+  STANDING RULE: screen on max(lb_total, energetic), never lb_total.
+- **Greedy cycles predict walk outcome far better than LB.** LB-996/997
+  streams walk to 1018-1019; greedy-1019/1022 streams (LB 1000-1002)
+  walk to 1011-1015. A plain measure is 0.20 s vs ~4 s for an LB screen,
+  so rank organizations on GREEDY CYCLES and LB-screen only survivors
+  (29,296 organizations in ~28 min this way).
+- **NEW AXIS: the lag diagonal should be NON-UNIFORM.** Every H-056
+  candidate used lags = s*b. F-24's winner is 8 blocks of 4 with lags
+  (0,3,6,6,10,10,13,14), zip/default/asc -> 1011 (LB 1000 / energetic
+  1002 / fungible 997 / cp 490), correct on 7 seeds + debug_compares,
+  ring audit clean (0/24), gmin (7,30) still optimal, port dry-run
+  grades 1011. Artifact tools/f24_best_plan_1011.json (+ a second
+  independent diagonal at 1012). The diagonal search was STILL producing
+  new bests when budget ran out (greedy 1022->1021->1020->1019).
+- NOT ADDITIVE AS TESTED with F-25/F-29's 1011: gmin(6,30) does not
+  transfer (1015 here), the 23-ring plan asserts out at this order, and
+  a re-mined 20-ring plan costs +5 before re-walking and only ties after
+  37k evals. Not ported (tie, no gain).
+- f18_exhaust1 at F-24's 1019 plan: 94% neutral (vs G-29's 55%) — order
+  search on a fixed organization saturates almost instantly.
+
+### H-057 [strain: algo] [status: testing] (the joint chain on F-24's diagonal)
+- statement: run the FULL F-25 recipe on F-24's non-uniform-diagonal
+  organization: re-mine the ring plan at that order (audit -> add ->
+  re-audit fixpoint, structural donors only), re-slide l4_gmin on the
+  resulting retention relief, then re-walk the order — the exact chain
+  that earned F-25 -4 at a WORSE organization (LB 1003 -> 998 -> slide
+  -> re-walk). F-24 stopped before this. Also continue the non-uniform
+  diagonal search itself (still descending: greedy 1022->1019).
+- predicted_gain: F-25's chain was worth -4 from a worse base; F-24's
+  diagonal has LB 1000 / energetic 1002 vs the current 1011 realized.
+- method: rank on GREEDY CYCLES, LB-screen survivors on
+  max(lb_total, energetic).
