@@ -1258,3 +1258,212 @@ checked against the reference trace). No divergence.
 
 F-32 is now moot, as anticipated: the 1015 stream's unaudited borrow is
 gone with the stream itself.
+
+## F-24 (2026-07-28): walk the low-LB organization streams — 1015 -> **1011**, but F-25/F-29 reached 1011 independently in parallel (section 6), so this is a TIE ON CYCLES and an ACCEPT ON METHOD; H-056's "LB 992" is an ARTEFACT of reading the wrong bound, and the real lever is a NON-UNIFORM lag diagonal
+
+Baseline: mainline **1015** (`tools/h056_best_plan.json` baked into
+`perf_takehome.py`'s `_EMISSION_ORDER`); `tests/submission_tests.py` re-run
+green at the end of this session, all nine CYCLES lines 1015.
+
+**No dev.py, no perf_takehome.py and no shared-tool change.** Like H-056 the
+whole result is expressible through `emission_plan`, so the port is again a
+512-tuple literal swap. New artifacts: `tools/f24_best_plan_1011.json`
+(the accept), `tools/f24_best_plan_1012.json` (an independent second
+organization below 1015), `tools/f24_seed_even16_stag1.json`,
+`tools/f24_seed_even8_rev.json` (H-056 stream seeds, reproduced exactly:
+1029 / 1028).
+
+### 1. The headline correction: read LB_energetic, not LB
+
+H-056 ranked its streams on `lb_total` (the any-packing slot/CP bound) and
+handed F-24 an "LB 992" stream as the top prize. `h056_screen` already
+computes the two ENERGETIC STAIRCASE bounds, which are equally valid for any
+packing, and on exactly those streams they are far higher:
+
+| stream | LB | **LB_energetic** | fungible | realized |
+|---|---|---|---|---|
+| even8/zip + l4_gmin(16,32) | 992 | **1011** | 990 | 1070 |
+| even16/stag1 + l4_gmin(16,32) | **991** | **1011** | 990 | 1069 |
+| 1015 plan + l4_gmin(16,32) | 995 | **1011** | 990 | 1058 |
+| 1015 plan + l4_gmin(16,31) | 997 | 1007 | 986 | 1055 |
+| even16/stag1/zip/rev/asc | 996 | **997** | 991 | 1029 |
+| even16/stag1 + revfold() | 994 | **996** | 989 | 1037 |
+| even8/stag2/zip/rev/asc | 1001 | 1002 | 994 | 1028 |
+| 1015 mainline plan | 1003 | 1004 | 998 | 1015 |
+
+**Every l4_gmin>=16 stream has an energetic bound of 1007-1015.** gmin 16
+trades 66-88 extra loads for ~50 fewer valu slots: it lowers the *slot* floor
+and raises the *release-staircase* floor, so the low `lb_total` is real but
+unreachable. The LB-992 stream can therefore never beat 1011 — which is what
+this session reached WITHOUT it. Re-confirmed on the new winning
+organization (`l4_gmin` re-sweep, section 4): gmin(16,32) there is
+LB 993 / **energetic 1011** / realized 1054.
+
+Practical consequence: **rank organization candidates on
+`max(LB, stair_release, stair_tail)`, never on `lb_total` alone.** H-056's
+section-5 table is invalid as a priority list.
+
+### 2. Walking the H-056 streams (the assigned job) — 1019 / 1026, and a 94% plateau
+
+`emission_order_search.py local` under chained re-seeding (fresh RNG seed +
+fresh `EOS_JUMPS` + fresh window per chain, per H-056's tactic).
+
+| stream | LB / LB_e | seed cyc | evals | best | walked LB / LB_e | regret (ramp/mid/drain) |
+|---|---|---|---|---|---|---|
+| even16/stag1/zip/rev/asc | 996 / 997 | 1029 | 22,519 | **1019** | 994 / 995 | 25 = 4/12/9 |
+| even16/stag1 + revfold() | 994 / 996 | 1037 | 18,078 | 1026 | 995 / 996 | 31 = 4/19/8 |
+| l4_gmin(16,32) ("LB 992") | 993 / 1011 | 1054 | 5,193 | 1054 (**zero moves**) | — | 55 |
+
+- The LB-996 stream descends 1029 -> 1022 in 2 min / 1.5k evals and 1029 ->
+  1019 in ~20 min, versus H-056's 45 min to 1023 — the "lower LB = better
+  conditioned" finding holds. But it then STOPS at 1019.
+- **`tools/f18_exhaust1.py` at the 1019 plan: 12,000 of the 25,575 valid
+  single-entry displacements measured, ZERO below 1019, and 10,418/11,077
+  correct neighbours (94%) measure exactly 1019.** G-29's plateau was 55% at
+  the mainline mix; on this stream the 1-move neighbourhood is nearly flat.
+  Order search on a fixed organization saturates almost immediately here.
+- The gmin(16,32) stream is *rigid*: 5.2k evals over three re-seeded chains
+  moved it not one cycle off 1054. Its regret is 55 and 35 of it is in the
+  RAMP (the extra 88 loads have to drain before anything else starts), which
+  no reordering of the 512 group-emissions can touch.
+- **Contrary to H-056's "walks spend floor for cycles"**: these walks LOWERED
+  the LB (996 -> 994). That warning does not generalize.
+
+### 3. What actually paid: cheap greedy-cycle organization search
+
+The organization, not the order, is the live axis — but H-056 swept it at
+~4 s/candidate because it LB-screened every one. A plain grader `measure` is
+**0.20 s**, so ranking on greedy cycles first and LB-screening only the
+survivors sweeps the space 20x wider (scratch driver, elitist perturbation of
+the lag diagonal at a k-block even partition x wave/group order x
+interleave):
+
+**29,296 organizations screened in ~28 min** (H-056: 28,316 in ~20 min *with*
+LB, but only over structured/uniform diagonals).
+
+The finding: **the lag diagonal should be NON-UNIFORM.** Every organization
+H-056 measured used a uniform stagger (`lags = s*b`); the whole low-greedy
+frontier here is irregular.
+
+| k | lag diagonal | wave/group | greedy | LB / LB_e | walked |
+|---|---|---|---|---|---|
+| 8 | (0,3,6,6,10,10,13,14) | default/asc | **1021** | 1002 / 1003 | **1011** |
+| 8 | (1,3,6,6,10,11,13,15) | rev/asc | 1020 | 1002 / 1003 | **1012** |
+| 8 | (0,3,6,6,10,11,13,15) | rev/asc | 1019 | — | 1014 |
+| 8 | (1,3,7,5,9,10,13,14) | rot:1/asc | 1022 | 1000 / 1001 | 1015 |
+| 16 | (0,0,1,3,4,7,5,6,8,10,10,10,12,13,14,15) | rev/rot:4 | 1022 | 997 / 998 | 1018 |
+| 16 | (0,1,0,3,4,5,6,7,9,9,10,11,12,13,14,15) | rev/asc | 1026 | 998 / 999 | 1018 |
+| 8 | (0,2,4,6,8,10,12,14) = H-056 uniform stag2 | rev/asc | 1028 | 1001 / 1002 | 1015 (H-056) |
+| 16 | (0,1,..,15) = H-056 uniform stag1 | rev/asc | 1029 | 996 / 997 | 1019 |
+| 32 | any | any | >=1087 | — | — |
+
+Three facts:
+
+1. **Greedy cycles predict the walk outcome far better than LB does.** The
+   two best-LB streams (996/997) walk to 1018-1019; the best-GREEDY streams
+   (1019-1022, LB 1000-1002) walk to 1011-1015. Regret is not a constant to
+   be subtracted from a floor — a stream whose greedy schedule is already
+   tight is a stream whose order landscape has somewhere to go.
+2. **k=8 beats k=16 beats k=32** once the diagonal is free. H-056's
+   "finer partition + tighter stagger lowers LB" is true and misleading: the
+   16-block streams have the lower floors and the worse realized schedules.
+3. The winning diagonals all share the shape (0,3,6,6,10,10,13,14): a
+   *repeated* lag (two blocks entering the pipeline on the same step) around
+   positions 3-6, then a wider gap. Uniform stagger-2 (0,2,4,...,14) is 7
+   greedy cycles worse.
+
+### 4. The accept — 1011
+
+`tools/f24_best_plan_1011.json`: 8 blocks of 4 groups, lags
+(0,3,6,6,10,10,13,14), `zip` interleave, `default` wave order, `asc` group
+order; seed greedy 1021, then ~57k chained walk evals.
+
+- **`correct: true` at seeds {unseeded,1,2,3,7,42,99}** and additionally with
+  `debug_compares=True` at {unseeded,1,42}; 1011 at every seed.
+- Bound stack: realized **1011** / LB 1000 / energetic **1002** /
+  fungible 997 / cp 490. Census valu 6000 / alu 11793 / load 1892 / flow 823
+  / store 46.
+- **Regret 11 = ramp 4 + mid 4 + drain 3** (mainline 1015 was 12 = 4/2/6;
+  H-056's even8 seed was 27 = 4/14/9). Regret jumps: cycles 0,1,2,3 then
+  805, 825, 903, 916, 985, 990, 1002 — the ramp-4 is the same irreducible
+  fill G-28 characterised, and the rest is now a thin scatter over the last
+  200 cycles rather than a band.
+- **Port dry-run passed**: a scratch copy of `perf_takehome.py` with only the
+  `_EMISSION_ORDER` literal replaced grades **1011, correct** at seeds
+  {unseeded,1,42}. The mainline port is a pure literal swap, no code change.
+- **`l4_gmin` re-sweep at the new organization** (6..9 x 29..31 and the
+  14..17 x 30..33 region): **(7,30) is still the optimum** — (7,31) 1014,
+  (8,30) 1015, (7,29) 1018, (8,31) 1018, (9,30) 1019, (16,30) 1047,
+  (16,32) 1054. The H-047/H-055 gmin closure survives the organization
+  change; only the *bound* moves with gmin, never the schedule.
+- Second, independent organization below the mainline:
+  `tools/f24_best_plan_1012.json`, lags (1,3,6,6,10,11,13,15) rev/asc, 1012,
+  `correct: true` on the same seed set, LB 1001 / energetic 1002, regret
+  11 = 4/2/5. Two different diagonals beating 1015 is the reproducibility
+  check that 1011 is not a lucky chain.
+- 1011 is where the budget ran out, not an optimum: it survived ~35k further
+  evals across 12 re-seeded chains (all jump sets 1..55, all windows).
+
+Total spend: 176,167 sim-verified walk evals across 9 streams + 12,000
+exhaustive 1-move evals + 29,296 organization screens.
+
+### 5. Envelope and follow-ups
+
+Envelope at the new frontier: realized **1011** / energetic floor **1002** /
+fungible 997. The reachable band is 1011 -> 1002, and the 992-floor story is
+withdrawn (section 1).
+
+- **PORT STATUS**: mainline reached 1011 independently via F-25/F-29 while
+  this ran (section 6), so the F-24 plan is a TIE on cycles, not a -4, and
+  should NOT be ported on its own. Its value is the organization + the
+  method, which are the input to F-30.
+- **F-30**: the non-uniform-diagonal search is 30k evals old and still
+  producing new bests (1022 -> 1021 -> 1020 -> 1019 greedy across four runs).
+  Sweep it properly, including uneven block SIZES crossed with the
+  irregular diagonal (never combined), and walk the top 5 rather than the
+  top 1-2. This is where the next -3..-5 is.
+- **F-31**: `parity_ring_plan` and `flow_spelling_plan` are still H-056's
+  (and F-25 is re-mining them at the 1015 organization). Both are
+  order-specific; they must be re-derived at the 1011 diagonal.
+  `flow_spelling_plan` has been EMPTY since H-042 — worth up to ~6.
+- **G-29 restated for this organization**: the 1-move neighbourhood is 94%
+  neutral at 1019 on the even16 stream, so "the walk plateaued" carries no
+  information about the organization's potential. Judge organizations by
+  greedy cycles, walk them, and move on.
+- **Do NOT spend more on l4_gmin>=14 streams.** Energetic bound 1007-1015,
+  ramp-dominated regret, and provably zero order sensitivity (5.2k evals,
+  zero moves). Closed.
+
+### 6. Collision with F-25/F-29: 1011 reached TWICE, by two independent routes
+
+While F-24 searched, F-25/F-29 landed mainline **1011** from the H-056
+even8/stagger-2 organization by re-mining the parity ring plan (23 rings),
+sliding `l4_gmin` to (6,30) on the resulting relief, and re-walking. F-24
+reaches the same 1011 from a different direction: the H-045 4-ring plan and
+`l4_gmin(7,30)` unchanged, on a new non-uniform 8-block diagonal. Measured
+cross:
+
+| f24 organization + | cycles | note |
+|---|---|---|
+| carried 4-ring plan, gmin(7,30) | **1011** | the F-24 accept |
+| no ring plan at all, gmin(7,30) | 1012 | the carried plan is worth 1 here |
+| gmin(6,30), no ring plan | 1015 | F-25's serving slide does NOT transfer |
+| F-25's 23-ring plan (carried) | asserts | "(0,3) already ring-funded" |
+| ring plan RE-MINED at this order (20 rings), gmin(7,30) | 1016 | before re-walk |
+| ...same, after 37k re-walk evals | 1011 | ties, no gain |
+
+- **F-25's soundness defect does NOT reproduce here.** `audit_ring_windows`
+  at the F-24 order with the carried 4-ring plan: **OK, 0 violations over 24
+  rings** (F-25 found 16 live-across violations over 24 at the 1015 order).
+  The carried plan happens to be legal on this diagonal — but the standing
+  rule stands, and this was checked rather than assumed.
+- The ring plan is **order- AND gmin-specific**: every re-mined plan asserts
+  out at a different `l4_gmin` ("already ring-funded"), because the set of
+  auto-funded rings moves with the serving mix. Re-mine and re-slide
+  together or not at all.
+- More rings is NOT better: 20 re-mined rings cost +5 against 4 carried ones
+  at this order before re-walking, and only recover to a tie after.
+- **The two 1011s are not additive as tested.** The open question — and the
+  right next hypothesis — is the JOINT chain from the F-24 diagonal:
+  re-mine rings, re-slide gmin under the resulting relief, re-walk the order,
+  iterate. F-25 got -4 out of exactly that chain at a worse organization.
