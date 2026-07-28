@@ -1571,3 +1571,227 @@ verify at the 1006 config, config read live from the plan JSON so it
 follows the frontier) and `tools/f39_par.py` (8-way parallel disc-1 /
 pairs / triples). Re-running the full battery at a future stream is
 ~15 min of wall clock; re-running measure+validate+bound+regret is ~10 s.
+
+---
+
+## H-061 (2026-07-28): the load-bound regret — ATTRIBUTED and CLOSED
+
+**Question.** H-058 left one survivor for a 940-class kernel — "a regret-0,
+load-100% scheduler". 940 = 1,880/2 is exactly a load floor, we issue 1,892
+load slots (floor 946), and H-058 measured our regret at ~20 while compute
+binds but ~70 once LOAD binds. This section measures what that ~70 IS.
+
+**Verdict: regret-0 load saturation is IMPOSSIBLE for this algorithm, by a
+rigorous energetic bound; and the load side is not the mainline's binder
+anyway. No dev.py change — every lever in the load-issue / mem-hazard /
+prefetch / ready-emit region measures EXACTLY zero against an unsound upper
+bound.**
+
+### The load-bound family at the 1006 mix
+
+`tools/h061_common.py family` (ring-free: ring plans are gmin-specific, so
+gmin probes must drop them — F-25 standing rule). Reproduces H-055's shape:
+
+| l4_gmin | loads | load floor | valu floor | realized | realized − max-floor |
+|---|---|---|---|---|---|
+| (6,31) +rings = **mainline** | 1892 | 946 | **995** | **1006** | 11 |
+| (6,31) no rings | 1892 | 946 | 1011 | 1026 | 15 |
+| (9,31) | 1916 | 958 | 1009 | 1028 | 19 |
+| (12,31) | 1940 | 970 | 1007 | 1040 | 33 |
+| (16,31) | 1972 | 986 | 1002 | 1056 | 54 |
+| (20,31) | 2004 | **1002** | 1000 | 1072 | **70** |
+| (24,31) | 2036 | **1018** | 997 | 1088 | **70** |
+| (28,31) | 2068 | **1034** | 993 | 1104 | **70** |
+
+The regret locks at exactly 70 the moment load becomes the binder and stays
+70 as the load floor climbs another 32 cycles. That constancy is the tell:
+a fixed structural overhead, not a packing failure that grows with pressure.
+
+### Where the load engine idles (`tools/h061_attrib.py census` / `blockers`)
+
+The offline model reproduces greedy EXACTLY on every stream (`validate`
+exact), so the logic is airtight: greedy places each op at the earliest
+slot-feasible cycle >= dep-ready, hence an empty load slot at cycle c means
+**no load op was dependency-ready at c**.
+
+Free load slots, mainline: **120 over 61 cycles, in exactly two places** —
+`[29..64] = 70 slots` and the drain `[958..1005] = 48`. Cycles **65–957 are
+2/2 load-SATURATED with not one free slot** (893 consecutive cycles).
+Load-bound streams: identical head bubble (72 slots, `[29..65]`); only the
+tail grows.
+
+Binding-edge census over ALL 1,892 loads (`attrib edges`):
+
+```
+binding_edge_kinds: {"raw": 1883, "floor": 9}   # zero WAR, zero WAW, zero mem
+producers: valu:multiply_add 1328, valu:- 480, alu:+ 31, alu:- 24, flow:add_imm 16
+mean slot-wait after dep-ready: 18.0 cycles
+```
+
+**Every gather in the kernel is gated by a RAW edge on its own address, and
+70% of those producers are the valu idx-recurrence `multiply_add`.** The load
+engine is a strict slave of the valu engine; nothing else ever gates it.
+
+### Per-cycle mechanism at the two bubbles (`tools/h061_window.py`)
+
+Head bubble, mainline c30–64 — **valu 6/6 and alu 12/12 in every one of those
+35 cycles**, load 0/2, next-ready load = the round-3 prefetch of group 0's
+level-4 gather, `ready=65 <- raw valu@64`. The machine is 100% compute-
+saturated, so there is no idle compute slot to accelerate the address chain,
+and only **9 of 1,892 loads are address-independent** (the 47 setup vloads +
+9 consts are already issued 2/2 in c0–29). There is literally nothing to put
+in those slots.
+
+Tail, mainline c958–994 — two short bubbles (7 and 6 cycles) where the last
+groups' gathers arrive one cycle after their address madd: parallelism
+exhaustion, too few groups still in flight to keep 2 independent loads/cycle.
+
+### Regret jumps, load-bound stream (20,31): 70 = 36 head + 26 mid + 8 drain
+
+`tools/h061_attrib.py regret 20,31`, each jump annotated with occupancy:
+
+- **c32–c82, +36** — every jump `occ={alu:12, valu:6, load:0}`, loadblock=raw.
+  Load idle, both compute engines full. The head bubble.
+- **c753–c984, +26** — every jump has **load 2/2 SATURATED** and valu
+  underfilled (1–5 of 6): load is the binder and compute starves for
+  gathered values.
+- **c1017–c1063, +8** — drain.
+
+Cross-tab (`tools/h061_phase.py x`) says it in one table:
+
+| stream | both engines full | load idle & valu FULL | valu idle & load FULL |
+|---|---|---|---|
+| mainline 1006 | 921 cyc | 54 cyc (106 slots) | 24 cyc (48 slots) |
+| (12,31) 1040 | 891 | 57 (112) | 78 (161) |
+| (16,31) 1056 | 841 | 57 (112) | 144 (289) |
+| (20,31) 1072 | 801 | 57 (112) | 200 (399) |
+| (28,31) 1104 | 742 | 57 (112) | 291 (628) |
+
+The load-idle-while-valu-full window is CONSTANT at 57 cycles across the
+family. What grows with gmin is **valu idling under load saturation**:
+pushing work onto load does not buy a better schedule, it buys a longer one
+in which the compute engines wait.
+
+### The rigorous bound: makespan >= ceil(L/2) + 31 (`tools/h061_bound.py`)
+
+2-D energetic argument, valid for ANY packing of the stream (not just
+greedy): a load with release `est >= t` and tail height `h >= k` must live in
+`[t, M-k]`, so `M >= t + k + ceil(#{est>=t, h>=k}/2)`.
+
+| stream | loads | naive floor | **energetic load LB** | free-compute greedy | realized |
+|---|---|---|---|---|---|
+| mainline | 1892 | 946 | **977** (t=51, k=10, 1831 loads) | 977 | 1006 |
+| (16,31) | 1972 | 986 | **1017** | 1019 | 1056 |
+| (20,31) | 2004 | 1002 | **1033** | 1035 | 1072 |
+| (28,31) | 2068 | 1034 | **1065** | 1067 | 1104 |
+
+Two facts fall out:
+
+1. **The bound is exactly naive-floor + 31 in every case, and the
+   free-compute oracle hits it (±2).** The +31 is tight and structural: with
+   compute made free (H-053 oracle, deps preserved) greedy achieves the
+   energetic bound exactly. The load engine's irreducible non-saturation is
+   31 cycles no matter how many loads there are.
+2. **The residual is a constant 39 cycles on every load-bound stream**
+   (1056−1017 = 1072−1033 = 1104−1065 = 39), and it is entirely compute
+   contention delaying gather addresses past their dependency-`est`.
+   Decomposition of the famous 70: **31 provable energetic ramp/drain + 39
+   compute-contention.** Neither term is a load-scheduling term.
+
+**Why t = 51** (`h061_bound.py chain`): the est-critical chain into the
+earliest gather is **52 ops spanning rounds 0,1,2,3** — 15 `^`, 13 `madd`,
+5 vselect, 4 alu-shift + 4 valu-shift, 4 `&` = **four consecutive hash
+evaluations**. Because levels 0–3 are SERVED (selection trees, no gathers),
+the first gather in the entire kernel is downstream of four full hash chains,
+and 1,831 of 1,892 loads inherit that release date. Algorithm property, not
+scheduler property.
+
+**Consequence for 940.** `940 >= 51 + 10 + ceil(L'/2)` forces
+`L' <= 1,758` steady-state loads; we have 1,831. So a 940 kernel does NOT
+"realize its load floor exactly" on a stream shaped like ours — under this
+served-levels structure 1,880 loads make 940 arithmetically impossible. It
+must issue ~73 fewer gathers **and** shorten the four-hash-chain head: a
+different algorithm, not a better scheduler. **The H-058 survivor is closed.**
+
+**Consequence for the mainline.** The load energetic LB (977) sits *below*
+the valu floor (995), so load is provably not the binder at 1006. Bound
+stack: cp 512 / store 23 / flow 797 / load 946 naive → **977 energetic** /
+alu 981 / **valu 995** → realized **1006**, regret 11 = ramp 4 + mid 3 +
+drain 4 (re-derived here, unchanged). Anything that pushes work onto the load
+engine is spending against a 977 wall to relieve a 995 one.
+
+### The three named attack directions — all measured EXACTLY zero
+
+`tools/h061_oracle.py`. Each column is an UNSOUND upper bound (the built
+program is not runnable; only schedule length is read), so a zero kills the
+whole class without writing a flag.
+
+| stream | base | `nomem` | `nofloor` | load w3 | w4 | w∞ | free compute |
+|---|---|---|---|---|---|---|---|
+| mainline | 1006 | **1006** | **1006** | 1003 | 1002 | 1001 | 977 |
+| (16,31) | 1056 | **1056** | **1056** | 1002 | 1002 | 999 | 1019 |
+| (20,31) | 1072 | **1072** | **1072** | 994 | 993 | 993 | 1035 |
+| (24,31) | 1088 | **1088** | **1088** | 990 | 988 | 988 | 1051 |
+| (28,31) | 1104 | **1104** | **1104** | 983 | 982 | 981 | 1067 |
+
+- **(a) mem-hazard precision — CLOSED, worth 0.** `nomem` deletes BOTH coarse
+  mem clocks entirely (`ready()` forced to ignore mem_read/mem_write in both
+  directions) and the bundle count does not move by one cycle on any of the
+  five streams. H-031's −3 and F-15's write-side twin already took everything
+  there was. Independently confirmed by the edge census: zero loads have a
+  mem binding edge, on any stream.
+- **`nofloor` — CLOSED, worth 0.** Dropping every explicit `min_cycle` on
+  load ops (H-039's `mem_prime` `gather_gate`) is likewise exactly neutral.
+- **(b) load-issue policy — CLOSED, negative.** `tools/h061_policy.py` runs
+  offline parallel list scheduling over the same captured stream and DAG.
+  mainline: greedy(emission) **1006** vs tail_height 1046, est+tail 1229,
+  reverse-emission 1024. (20,31): greedy **1072** vs tail_height 1079,
+  est+tail 1229, emission 1081. Note a cross-engine "loads first" bonus is
+  *degenerate* here — the ready heaps are per engine — and that is the point:
+  **greedy's load placement is optimal by construction given the emission
+  order** (earliest slot-feasible cycle >= dep-ready), and the only cycles
+  with a free load slot are cycles where nothing was ready. There is no
+  decision left to make. Consistent with F-39/G-32.
+- **(c) prefetch distance — CLOSED by construction.** The gather for round
+  r+1 is emitted in round r's position-update block; its address is
+  `f(round r's hash)`, so distance 2 does not exist and distance 0 is
+  strictly later. Measurement agrees: at the head bubble the first gather is
+  placed at exactly its dep-ready cycle (wait 0).
+- **Load bandwidth is not the mainline's problem either:** a 3-wide load
+  engine would buy 3 cycles at mainline (1006 → 1003) but 89–121 on the
+  deliberately load-bound streams — confirming the gmin family is the wrong
+  direction to walk.
+
+### What this rules IN (backlog, not this strain)
+
+The only load-side prize left is *lowering the release date t = 51*: gather
+rather than serve at levels 0–3 for the group-rounds that execute in the head
+bubble, converting compute into loads exactly where 70 load slots and 0
+compute slots are free. That is a tournament/serving restructure (levels
+1..k are served for ALL groups today; only L4 has a per-group `l4_gmin`
+predicate, which may already be an arbitrary group SET). It is not a
+scheduler change and not in this strain's region. Prize bounded by the head
+bubble: <= 35 cycles gross at mainline, less the valu cost of the extra
+gather addressing, and it still fights a 977 load wall.
+
+### Reusable artifacts (read-only wrappers; no shared tool modified)
+
+- `tools/h061_common.py` — the 1006 stream + ring-free gmin family, floors.
+- `tools/h061_attrib.py` — `census` / `regret` / `edges` / `blockers`:
+  load idle-vs-blocked census, regret jumps annotated with per-engine
+  occupancy and blocking edge kind, binding-edge histogram over all loads.
+- `tools/h061_window.py` — per-cycle occupancy + "what is the load engine
+  waiting on" for any cycle range.
+- `tools/h061_phase.py` — banded per-engine idleness, load/valu idle cross-tab.
+- `tools/h061_oracle.py` — nomem / nofloor / load-width / free-compute battery.
+- `tools/h061_bound.py` — head & drain staircases, the 2-D energetic load
+  bound, and `chain` (the est-critical path into the first gather).
+- `tools/h061_policy.py` — offline load-issue policy probe.
+
+Whole battery is ~25 s of wall clock; re-run it at any future stream.
+
+### Gate
+
+No source change (dev.py / perf_takehome.py untouched; `git status` clean
+apart from the new `tools/h061_*.py`). `python tests/submission_tests.py`
+9/9 green, **CYCLES: 1006**.
