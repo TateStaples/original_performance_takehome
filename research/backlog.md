@@ -1329,3 +1329,32 @@ correct, measured worse at every configuration tried]
   values; v^/v&/v>> are runtime hash/mask work; madd is compute. Memory
   supplies values, it does not compute.
 - predicted_gain: -5..-16 floor, unknown realized. cost: M.
+
+### H-047 result addendum [status: PARTIAL ACCEPT — frontier 1022 (-1); serve-more CLOSED by floor measurement; F-17 retargets the whole loop]
+- winner (driver-verified 1022 on main): parity_ring, l4_gmin=(7,30),
+  4-ring plan, c5_primed_gather_levels=(5,6), mem_prime_region_hazards,
+  mem_prime_dead_reg_staging, flow_spelling_plan=(), emission_plan=
+  tools/h047_best_plan_1022.json. NOTE the artifact's params block does
+  NOT carry the flag set — the full config above is required.
+- PREMISE CONFIRMED: G-22's mem_prime(5,6) converts +1 (fixed order) ->
+  -1 (per-candidate order re-search). Clean 2x2 attribution: BOTH legs
+  required; priming deletes ~184 alu slots -> funds the P-3 gmin slide
+  -> valu 6056->6049 (floor 1011->1010); order search recovers the same
+  12-cyc residual. Serve+1 alone ties; prime alone 1024.
+- SERVE-MORE CLOSED at floor level (no walks needed): at greedy
+  spellings every added L4 serve RAISES the floor (+7.2 valu slots per
+  serve); gmin(7,27) floor 1018, set-form e0 floor 1015. Hard blocker:
+  any e1<27 CRASHES (omf1_vec/b3l private-register wall) -> F-16.
+- **F-17, the strategic result**: the flowmax probe (force every
+  flow-capable race site to flow, legal per H-042 soundness) shows the
+  LP mechanism is REAL at stream level — mp56+(7,30) all-flow reaches
+  any-packing floor **990**, i.e. a FLAG-REACHABLE op stream 33 cycles
+  below today's realization, with valu 995 / flow 989 (corsix's balanced
+  ratio emerges). Its actual schedule is 1104: the entire 33-cycle
+  remainder is locked behind the select-readiness x flow-bubble
+  anti-correlation. ALL future flow-cadence/emission mechanisms must be
+  evaluated on the floor-990 stream (mp56 + gmin(7,30..27) + flow-heavy
+  spellings) — baseline-mix evaluation understates the prize by ~15
+  floor cycles.
+- F-18: e1 composition plateau ({29,30}/{27,30} tie) = free DOF for
+  H-052's drain restructure.
