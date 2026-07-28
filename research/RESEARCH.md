@@ -381,3 +381,85 @@ research/strains/p3b/STATE.md.
 Remaining soft joint: the ">= 4 madds to pack 5 loose bits" step is an
 operand-arity argument, not a machine-checked enumeration. If a 3-op packing
 exists the floor drops another 256 lane-ops.
+
+### P3-A RESULT (2026-07-28): a serving design clears 940 on all three engines
+
+**Floor 939, simultaneously feasible.** `tools/p3a_opt.py` scanned cycle
+target x serving profile; the minimum simultaneously-feasible floor is
+**939 cycles** at s=221 served group-rounds (L1 64 + L2 64 + L3 64 + L4 29),
+227 gathered, 1,139 folds. Model calibrated against the shipped kernel to
+within 55 lane-ops (0.1%).
+
+| # | design | alu+valu | load | flow | floors /60 /2 /1 | @940 |
+|---|---|---|---|---|---|---|
+| S0 | shipped @1006 | 59,489 | 1,892 | 797 | 991.5/946.0/797 | FAIL av+3,089, ld+12 |
+| **C1\*** | **ring + free-form folds + add_imm->alu + 4 store-broadcasts, s=221** | **56,272** | **1,880** | **940** | **937.9/940.0/940.0** | **PASS** |
+| C2 | sum-of-products (no vselect at all) | 61,960 | 1,880 | 229 | 1032.7/940/229 | FAIL av+5,560 |
+| C3 | store-broadcast all 48 vectors | 56,072 | 1,935 | 940 | 934.5/967.5/940 | FAIL ld+55 |
+| C4/C5 | serve more (s=250 / s=256) | 58,888/59,512 | 1,692/1,644 | 940 | 981.5/991.9 | FAIL av |
+| C7 | gather everything (s=0) | 54,088 | 3,644 | 450 | 901.5/1822/450 | FAIL ld+1,764 |
+| C8 | C1\* keeping the packed accumulator | 57,472 | 1,916 | 958 | floor 958 | FAIL @940 |
+| C9 | C1\* + omf constant-select eliminated | 55,128 | 1,840 | 920 | floor **920** | PASS |
+
+**The two levers that do it.**
+- **T2 (load-bearing): the position accumulator is pure overhead for serving.**
+  Retain the raw parity bits per level -- they are the parity extract's own
+  write, so they are free -- and read tournament conditions directly. This
+  zeroes cond.mask (624) + pos.fold (1,128) + pos.seed (320) = -2,072
+  lane-ops, and pays +2 valu ops only at each gather boundary (35 exits,
+  +70 vec-ops). Net -1,512. **With the packed accumulator kept, the best
+  floor is 958** -- this lever alone is the difference.
+- **T3: move the 20 setup `add_imm` slots OFF flow onto alu** (-160 alu+valu
+  lane-ops, +20 flow slots). Also load-bearing: without it C1\* FAILS.
+
+**T1 (derived, not load-bearing at the optimum): every tournament node is
+freely flow-`vselect` OR valu-`madd` at 1 op.** A node combining constant
+subtables A/B is either `vselect(b, B[q], A[q])` or `madd(b, (B-A)[q], A[q])`
+-- and in the madd form the child table is the elementwise DIFFERENCE, which
+is again constant and precomputable at setup. **Therefore no interior node
+ever needs a runtime subtract**; `race_sel`'s sub+madd interiors and
+`make_newest_parity_last_diffs` are artifacts of the newest-first tree shape
+and are removable. This matters whenever flow has slack.
+
+**Why serving more or less both lose.** At the optimum load and flow bind
+EXACTLY and simultaneously (flow = C, load = 2C) with alu+valu holding ~1.5
+cycles of slack. The marginal trade is: +1 served L4 group-round = -8 load
+slots but +15 folds, and since flow is saturated those folds land on valu.
+Exchange rate **1 load slot ~ 1.875 valu vec-ops**. C2 (sum-of-products) is
+exactly isomorphic to the select tree, not cheaper: Horner over d parity bits
+costs the same 2^d-1 nodes but every node becomes valu-only, converting 1,139
+flow-eligible ops into valu ops.
+
+**Budget line, restated correctly.** The charter's "1,744 lane-ops" pool was
+an artifact of the wrong index floor (P3-B). The pool that actually binds is
+ALL non-hash alu+valu, which is what the capacity algebra sees: shipped
+**13,153 -> best achievable 10,032**, against a hard ceiling of **10,064** at
+940. Clears by 32 lane-ops. Required cut is **-23.5%, not -64%**.
+
+### Honest status: this clears the BAR, not yet the RECORD
+
+1. **939 is a floor, not a realized count.** Shipped regret is ~11-15 cycles
+   (floor 991.5 -> realized 1006). A design whose floor is 939 with two
+   engines exactly saturated realizes ~950-960. Under the Phase-3 acceptance
+   bar as written ("simultaneous engine floors all < 940") C1\* PASSES; it
+   does not imply a realized 940. **C9 (floor 920) is the design that would
+   plausibly realize ~935 -- that is the real target.**
+2. **The margin is at model resolution.** 128 lane-ops (16 vec-ops, 0.23%).
+   Two inputs carry that much uncertainty alone: SETUP_VEC_MIN = 70 (shipped
+   measures 83) and the exit count (35). P3-C's independent calculator is
+   deliberately NOT being told these numbers, so its enumeration is a genuine
+   cross-check rather than a confirmation.
+3. **C1\* needs K<=16 live groups.** Retained parities cost 3 vectors/group
+   (768 words at K=32) where the packed `st` cost 256; at K=32 it overruns
+   SCRATCH_SIZE=1536 by ~85 words. H-058 measured K>=11 suffices for ILP at
+   940, but **K<32 is charter frame #4 and has never been tested.** This is
+   now the largest untested assumption in the design.
+
+**Open cross-axis question (dispatched to P3-B).** The `omf` two-way constant
+choice in `gaddr' = 2*gaddr + omf +/- par` consumes 227 flow slots at the
+optimum. P3-A modelled its elimination as FREE, giving C9's floor of 920;
+P3-B showed it currently costs zero alu/valu because it rides a flow vselect
+between two live constants. With flow now SATURATED, that slot is no longer
+free -- each one displaces a fold onto valu. Whether the elimination is free,
+costs +N, or is impossible decides 939 vs 920. Full detail:
+research/strains/p3a/STATE.md.
