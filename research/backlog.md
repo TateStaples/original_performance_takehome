@@ -1305,3 +1305,27 @@ correct, measured worse at every configuration tried]
   not the slot count. Store engine (19/2046) can pre-transform values in
   mem (mem_prime pattern) so the preload returns post-C5 values.
 - predicted_gain: bounded by 13; realistic 3-6. cost: M-L.
+
+### H-053 [strain: flow-balance] [status: testing] (user-directed: exploit store vacancy)
+- statement: convert BINDER work into load work using the idle store
+  engine (38/2046 slots used; scalar `store` opcode entirely unused).
+  Census at 1023: valu 6,056 (floor 1009, BINDING), alu 11,793 (983),
+  load 1,892 (946), flow 786 (768). Balance point: migrating X~95 valu
+  slots to load equalizes at floor ~993 (-16). Lead candidate: the 59
+  `vbroadcast` slots — pure data movement (splat scalar to 8 lanes),
+  which memory does natively as 8 scalar stores (FREE) + 1 vload
+  (1 load slot). Ceiling ~-10 floor for the broadcast class alone.
+  Mandate is broader: audit EVERY valu/alu slot for "movement or
+  re-derivation of a value memory could supply" (the parity_ring pattern
+  generalized), not just vbroadcast.
+- why it may beat the naive arithmetic: broadcasts are setup-phase and
+  G-22 measured ~90 dependency-dead free load slots in cycles 0-60, so
+  the loads may land in existing slack without moving the load floor.
+- risk: the ramp is CP-bound (4 of 13 residual cycles at c=0-7); a
+  store->load round trip adds dependency depth + a mem hazard edge, and
+  could lengthen the region we can least afford. Measure the regret
+  profile (tools/backtrack_sched.py), not just the floor.
+- NOTE what is NOT migratable: v- (93) subtracts two gathered tree
+  values; v^/v&/v>> are runtime hash/mask work; madd is compute. Memory
+  supplies values, it does not compute.
+- predicted_gain: -5..-16 floor, unknown realized. cost: M.
