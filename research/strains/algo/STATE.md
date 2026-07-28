@@ -1467,3 +1467,231 @@ cross:
   right next hypothesis — is the JOINT chain from the F-24 diagonal:
   re-mine rings, re-slide gmin under the resulting relief, re-walk the order,
   iterate. F-25 got -4 out of exactly that chain at a worse organization.
+
+## H-057 (2026-07-28): the F-25 joint chain run on F-24's non-uniform diagonal — ACCEPTED, strain frontier 1011 -> **1006** (-5), and a second independent diagonal at 1007
+
+Baseline: `tools/f24_best_plan_1011.json` = **1011** (reproduced exactly,
+`correct: true`); mainline `perf_takehome.py` = 1011 (F-25/F-29's different
+organization). **No `dev.py`, no `perf_takehome.py` and no shared-tool
+change** — the whole result is config artifacts again.
+
+New artifacts: `tools/h057_best_plan_1006.json` (the accept: order + full
+`params.mix` incl. the re-mined 20-ring `parity_ring_plan`, `l4_gmin=(6,31)`
+and the empty `flow_spelling_plan`) and `tools/h057_best_plan_1007.json`
+(a second, independent diagonal that also beats 1011).
+
+### 1. The chain, stage by stage (workstream A)
+
+Every stage measured on the frozen grader; bounds from `h056_screen`.
+
+| stage | config | cycles | LB | energetic | fungible | cp |
+|---|---|---|---|---|---|---|
+| base (F-24 accept) | 4 carried rings, gmin (7,30) | **1011** | 1000 | 1002 | 997 | 490 |
+| + rings re-mined at that order | 20 rings (fixpoint), gmin (7,30) | 1016 | 995 | 997 | 992 | 491 |
+| + gmin re-slid on the relief | 20 rings, gmin **(6,31)** | 1014 | 997 | 998 | 993 | 492 |
+| + order re-walked (chained) | same mix, walked order | **1010** | 994 | 995 | 991 | 486 |
+| + walk -> re-mine -> walk (x2) | 20 rings, gmin (6,31) | **1006** | 995 | 996 | 992 | 512 |
+| + spelling plan re-derived | `flow_spelling_plan=()` | 1006 | 995 | 996 | 992 | 512 |
+
+**P-3 confirmed a fifth time, and F-25's causal chain reproduces exactly on a
+different organization**: 20 re-mined rings buy 5 cycles of FLOOR
+(LB 1000 -> 995) and ZERO realized cycles (they cost +5 up front,
+1011 -> 1016); the floor then funds a serving slide (7,30) -> **(6,31)**;
+and the changed stream re-opens an order landscape that F-24 had walked to
+exhaustion. Net **-5**.
+
+- gmin sweep at the base order with the ring plan RE-MINED to fixpoint per
+  point (plans are gmin-specific — a plan mined at another gmin collides on
+  keys and asserts "already ring-funded"): (6,31) 1014, (7,31)/(6,30) 1015,
+  (7,30)/(5,31) 1016, (5,30) 1017, (7,29) 1018, (4,31) 1019.
+  **gmin >= 8 audit-derived plans FAIL the closed-loop recheck** (40-80
+  live-across violations) at every order tried — the same wall F-25 hit.
+- Re-swept gmin twice more (at the walked 1010 order and at the final 1006
+  order, 5..8 x 29..32, re-mining per point): **(6,31) stays the optimum**,
+  and at the 1006 order every other gmin makes the incumbent plan ASSERT.
+  The gmin leg is at a fixpoint.
+- `l4_gmin` moved (7,30) -> (6,31) here versus (7,30) -> (6,30) in F-25:
+  the slide DIRECTION is organization-dependent, the EXISTENCE of a slide
+  is not.
+
+### 2. What actually paid in the walk: ROUND-window moves, not ramp/drain
+
+`emission_order_search.py local` under chained re-seeding. The default
+`both` window (first/last 120 plan entries) got 1014 -> 1010 and then
+plateaued for 62k evals across 10 re-seeded chains, every jump set 1..64.
+The three further cycles came from windows nobody had used on this kernel:
+
+| window | seed | result | note |
+|---|---|---|---|
+| `both`/`all`/`ramp`/`mid`/`drain` (10 chains, 62k evals) | 1014 | **1010** | then flat |
+| **`r:11-15`** (epoch-1 ROUND window) | 1010 | **1008** | first move in 62k evals |
+| `drain` | 1008 | **1007** | |
+| **`r:11-15`** (again, after a re-mine) | 1008 | **1006** | |
+| `r:0-5`, `r:5-10`, `p:0-130`, `p:130-260`, `p:260-390`, `all` | 1006 | 1006 | flat |
+
+`--window r:LO-HI` selects entries by ROUND rather than by plan position, so
+it moves the same group-round across the whole stream instead of within a
+positional band. **Every single-cycle step below 1010 came from `r:11-15`
+or `drain`** — i.e. from the epoch-1 tail, which is exactly where the regret
+profile puts its mass (drain 4-7). G-29's "the walk plateaued" verdict is
+window-relative: a 62k-eval plateau in position windows was one 200-second
+round-window chain away from -2.
+
+### 3. Ring plans break under the walk, and the re-mine is not just a tax (F-25 sec. 4, sharpened)
+
+Audit state after every walk this session (`tools/audit_ring_windows.py`
+driven at the exact walked order with the exact carried plan):
+
+| walked order | carried plan audit | re-mined-at-that-order plan | kept |
+|---|---|---|---|
+| F-24 1011 | OK, 0/24 (4 rings) | 20 rings, OK 0/40, measures 1016 | re-mined (buys floor) |
+| 1010 | **OK, 0/40** | 20 rings, OK 0/40, measures 1012 | **carried** |
+| 1008 | **80 violations / 40** | 20 rings, OK 0/40, measures 1011 | re-mined (soundness) |
+| 1007 | **40 violations / 40** | 20 rings, OK 0/40, measures **1008** | re-mined (soundness) |
+| 1006 | **OK, 0/40** | 20 rings, OK 0/40, measures 1007 | **carried** |
+
+Three facts to carry forward:
+
+1. **The unsound point is usually the faster one.** The 1008 and 1007 orders
+   measure `correct: true` on all seven seeds AND are 1-3 cycles faster than
+   their sound re-mines. Shipping on seed-correctness would have banked 1007
+   with 40 live-across violations. **The frontier is the best AUDIT-CLEAN
+   point, not the best measured point.**
+2. **The re-mine is a chain STEP, not only a tax.** Re-mining at the unsound
+   1007 order produced a clean 1008 stream whose order landscape was
+   different again — walking THAT is what produced 1006. Full sequence:
+   1010 (clean) -> 1008 (dirty) -> re-mine 1011 -> walk 1007 (dirty) ->
+   re-mine **1008 (clean)** -> walk **1006 (clean)**.
+3. Mining from `()` and mining from the carried plan give DIFFERENT 20-ring
+   assignments of the same size, and **the carried-seeded one was unsound**
+   (40 violations) where the from-empty one was clean. Always re-mine from
+   `parity_ring_plan=()`.
+
+### 4. The accept — 1006 (all measured, `correct: true`)
+
+    parity_ring=True   l4_gmin=(6, 31)
+    c5_primed_gather_levels=(5,6)  mem_prime_region_hazards=True
+    mem_prime_dead_reg_staging=True   flow_spelling_plan=()
+    parity_ring_plan = 20 rings (tools/h057_best_plan_1006.json)
+    emission_plan    = tools/h057_best_plan_1006.json   -> **1006**
+
+- **`correct: true` at seeds {unseeded x2, 1, 2, 3, 7, 42, 99}**, and again
+  with `debug_compares=True` at {unseeded, 1, 42}; 1006 at every seed.
+  Re-verified by round-tripping the saved artifact.
+- **Ring audit at the shipped order with the shipped plan: OK, 0 violations
+  over 40 rings.**
+- Bound stack (`h056_screen --lags-zero --regret`):
+
+      realized 1006 | LB 995 | energetic 996 (release 996 / tail 995) |
+      fungible 992 | cp 512 | all-lags-zero 1004
+      ops 20462: valu 5966 alu 11761 load 1892 flow 797 store 46
+      regret 11 = ramp 4 + mid 3 + drain 4
+      jumps: 0,1,3,7 (the G-28 fill) then 805, 864, 915, 978, 984, 993, 997
+
+- **Port dry-run PASSED.** A scratch copy of `perf_takehome.py` with exactly
+  three literals swapped — `_EMISSION_ORDER`, `l4_gmin = (6, 30)` -> `(6, 31)`,
+  and the `f25_ring_plan` tuple -> the 20 rings below — grades **1006,
+  correct** at seeds {unseeded, 1, 42}. Donors symbolized against the named
+  vectors (F-6's port rule: never hard-code layout constants):
+
+```python
+            h057_ring_plan: tuple[tuple[tuple[int, int], tuple[int, int, int]], ...] = (
+                ((0, 3), (st[6], st[7], st[13])),
+                ((0, 4), (st[25], nv[8], nv[12])),
+                ((0, 5), (lv, lv + VLEN, lv + 2 * VLEN)),
+                ((0, 13), (nv[20], nv[21], nv[22])),
+                ((0, 14), (st[22], st[23], nv[16])),
+                ((0, 15), (nv[17], nv[18], nv[19])),
+                ((0, 16), (nv[28], nv[29], nv[30])),
+                ((0, 17), (lv, lv + VLEN, nv[31])),
+                ((0, 18), (lv + 2 * VLEN, st[30], st[31])),
+                ((0, 19), (st[28], st[29], nv[27])),
+                ((0, 28), (st[0], st[1], st[3])),
+                ((0, 29), (lv, lv + VLEN, st[2])),
+                ((1, 8), (nv[0], nv[1], nv[2])),
+                ((1, 9), (root_node_val_vec, st[4], st[5])),
+                ((1, 21), (st[8], st[9], st[10])),
+                ((1, 22), (st[13], nv[8], nv[10])),
+                ((1, 23), (root_node_val_vec, lv, lv + VLEN)),
+                ((1, 28), (st[0], st[1], st[2])),
+                ((1, 29), (lv + 2 * VLEN, st[16], st[17])),
+                ((1, 30), (st[18], st[19], st[20])),
+            )
+```
+
+### 5. Second, independent diagonal: 1007 (reproducibility check)
+
+`tools/h057_best_plan_1007.json`: 8 blocks of 4, lags
+**(0,3,6,6,10,11,13,15)**, `zip`/`rev`/`asc` — the diagonal F-24 screened at
+greedy 1019 and walked to only **1014 without the chain**. Same chain
+applied (rings re-mined to fixpoint at the seed order = 19 rings; gmin
+chosen by re-mined sweep = **(6,30)**; order walked): 1023 -> 1011 -> 1009
+-> **1007**, plateau over 12 chains / 46k evals. `correct: true` on
+{unseeded,1,2,3,7,42,99}; **ring audit OK, 0 violations over 39 rings**;
+LB 996 / energetic 997 / fungible 993; regret 11 = ramp 4 + mid 2 + drain 5.
+
+So the chain is worth **-7 on this diagonal** (1014 -> 1007) and **-5 on
+F-24's** (1011 -> 1006), from two different organizations. The chain, not
+the diagonal, is the lever.
+
+### 6. Workstream B: the non-uniform diagonal search is SATURATED at greedy 1019
+
+F-24 left the organization search "still producing new bests"
+(greedy 1022 -> 1021 -> 1020 -> 1019). Re-run with elitist perturbation over
+lag diagonals x **uneven block sizes** (F-24's F-30 ask) x wave/group order
+x interleave, k in {6,8,10,16}, two independent RNG seeds:
+
+**52,361 organizations screened (~24/s on 4 workers), ZERO below greedy
+1019.** Both runs re-found F-24's three known diagonals in their first 44
+evaluations and never improved on them in 52k more. Uneven block sizes were
+sampled throughout and never entered the elite set; k=6/10/16 never beat
+k=8.
+
+With F-24's 29,296 screens that is **~82k organizations, all at greedy
+>= 1019**. **The cheap greedy-screen organization axis is closed at this
+move set.** F-24's "still descending" reading was the first 44 SEEDS
+descending, not the search descending.
+
+Correction worth recording: F-24's "greedy cycles predict the walk better
+than LB" held again but is weaker than advertised — the greedy-1019 diagonal
+walks to 1007 and the greedy-1021 one to 1006, i.e. a 2-cycle greedy gap
+INVERTED under the chain. Screen on greedy, but **walk more than the top 1**.
+
+### 7. Spelling plan: re-derived here too, still EMPTY (fifth derivation)
+
+`tools/spelling_plan_search.py` at the 1006 point: flow-race sites only ->
+zero-flip fixpoint (sweep 1 exhausted, 42 s, 1006 -> 1006); `H042_AUX=1`
+(all valu<->alu negative-key race sites) -> zero-flip fixpoint (98 s,
+1006 -> 1006). H-047's and H-054's verdicts transfer across this
+organization too. Byproduct `tools/h042_plan.json` deleted (the tool writes
+it next to itself).
+
+### 8. Spend and envelope
+
+280,528 sim-verified walk evals across 9 streams / 48 re-seeded chains,
+52,361 organization screens, ~150 ring-mine + audit fixpoints, 2 spelling
+fixpoints.
+
+Envelope at the new frontier: realized **1006** / energetic floor **996** /
+fungible 992. The reachable band is 1006 -> 996.
+
+### 9. Follow-ups
+
+- **F-33 [port]**: bake `tools/h057_best_plan_1006.json` into
+  `perf_takehome.py` — three literals, dry-run already green at 1006
+  (section 4). -5 for a literal swap. Update the ring-audit line in the
+  `_EMISSION_ORDER` comment (43 rings -> 40) when porting.
+- **F-34 [the live axis]**: the ROUND-window walk (`--window r:LO-HI`) is
+  under-explored — it produced every step below 1010 and was only ever run
+  at r:0-5 / r:5-10 / r:8-15 / r:11-15 / r:13-15. Sweep finer round windows
+  (single rounds, r:14-15, r:12-13, ...) crossed with the re-mine loop of
+  section 3. This is where the next -2..-4 is.
+- **F-35 [soundness x search]**: the walk should be audit-aware. Roughly
+  half of walked orders invalidate their own ring plan (section 3) and the
+  re-mine costs 1-3 cycles. Adding the borrow-window check to the walk's
+  acceptance test would let the search KEEP the fast points that are
+  currently discarded (1007 and 1008 were both correct on 7 seeds).
+- **F-36**: the 21-24 windows unfundable at every gmin still have only
+  `anon:23`-class free words (F-25's F-31, verbatim and unchanged).
+- **CLOSED**: the cheap-greedy organization search (section 6). Do not spend
+  more budget on lag-diagonal screening at this move set.
