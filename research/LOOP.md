@@ -22,7 +22,13 @@ continue from whatever step the state implies.
    joint numbers against each relaxed machine's OWN floors; G-27 was
    misread as superadditivity when it was max-of-floors, see G-28),
    tools/h055_preload_oracle.py (structural/DAG-surgery ceiling, ~2s),
-   tools/backtrack_sched.py regret (friction decomposition).
+   tools/backtrack_sched.py regret (friction decomposition),
+   tools/h059_shadow.py (scratch shadow price).
+   **NEVER state a constraint in SCRATCH terms without checking it with
+   h059_shadow (G-33): three closures — H-041's L5 tables, H-045/H-048's
+   ring starvation, H-053's pool purchase — were all phrased as scratch
+   limits and are all actually VALU-SLOT limits. Freed scratch buys
+   nothing measurable at any size.**
 0b. **RESEARCH MODE (user directive 2026-07-27): ALGO-FIRST under an
    idealized machine.** Evaluate hypotheses assuming INFINITE SCRATCH and
    PERFECT SLOT ALLOCATION: what matters is the op multiset (per-engine

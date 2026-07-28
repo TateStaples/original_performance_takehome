@@ -626,3 +626,48 @@ Seeded 2026-07-23 from the 2148->1140 campaign's measured rejections.
   H-042/F-25, packing here) are measured-closed at the 1006 mix for the
   SECOND regime running. The residual 11 is chain structure; only chain
   shortening (capped at 2 by all-lags-zero = 1004) or a mix change moves.
+
+### G-33 Scratch/parallelism trade (H-059) — AND THE "SCRATCH IS THE CONSTRAINT" FRAMING
+- claim (Phase-2 charter): we hold 32 groups live and spend 1,533/1,536
+  scratch words doing it, while valu runs 5.93/6 — so parallelism past
+  engine saturation is wasted and fewer live groups should free hundreds
+  of words at little cost.
+- **BOTH HALVES OF THE PREMISE ARE FALSE.**
+- group liveness is an EMISSION-PLAN property: a diagonal with
+  lag(g+W) >= lag(g)+rounds keeps W groups live. Flag-gated
+  `group_window=W` landed (default 0, bit-identical at {absent,0,32}).
+  Words freed = exactly (32-W)*24, at ~0.1 cyc/word (9x cheaper than
+  H-053's pool route) — but EVERY point loses:
+  W=32 1006 | W=24 1045 (full chain) | W=20 1064 | W=16 1097 |
+  W=12 1136 | W=8 1307 | W=4 2031.
+- **MECHANISM (the real finding): the valu floor RISES as liveness falls**
+  (1008 -> 1010 -> 1018) while the alu floor FALLS (993 -> 962 -> 933)
+  at constant ~60.3k lane-ops. Fewer live groups => fewer independent ops
+  at each `_sched_vec` decision => alu_offload wins fewer races => work
+  concentrates on the 6-wide BINDER instead of the 12-wide slack engine.
+  **The 5.93/6 valu occupancy was never spare ILP — it is what FUNDS the
+  offload.** At W=24 the design's own slot floor (1010) already exceeds
+  mainline's REALIZED 1006.
+- freed scratch buys NOTHING, closed by relaxation not search:
+  * temp pool INFINITE -> 1007; cond=32 -> 1009; both -> 1007 (up to
+    2,429 words). Never below 1006 at any size.
+  * complete non-borrowed parity rings (all 64, private words) deletes
+    162 lane-ops and lands EXACTLY 1006 — the 40 borrowed rings already
+    capture the mechanism's entire value. Falsifies H-058's ~7-cycle
+    cond-retention estimate at the shipped stream.
+  * select trees at L4/L5/L6 = **+30/+61/+94 with scratch FREE**. L5's
+    254 extra words are real but were never the binding reason; L4 needs
+    FEWER words than today and still loses. Discharges G-23's
+    "reopen if 256+ words free" clause independently of H-058.
+  * whole flag space at unbounded scratch: neutral-or-worse everywhere.
+  * flow export does not compose (40 configs return unbiased greedy at
+    BOTH streams) — G-27 confirmed on a second mix.
+- **METHODOLOGY: stop citing the scratch budget as a constraint.** Three
+  separate closures (H-041's L5 tables, H-045/H-048's ring starvation,
+  H-053's pool purchase) were all STATED in scratch terms and are all
+  actually VALU-SLOT statements. tools/h059_shadow.py is the pre-screen.
+- caveat recorded: newest_parity_last_leaf_diff_tables' round-15
+  dead-register pool assumes 32-group liveness and clobbers aliased
+  registers; with it off, aliasing is correct at every W.
+- reopen-if: the alu/valu assignment stops depending on live-group count
+  (i.e. H-060's static partition works).
