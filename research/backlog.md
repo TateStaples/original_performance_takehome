@@ -1412,3 +1412,37 @@ correct, measured worse at every configuration tried]
   order round.
 - predicted_gain: unknown; this is the only surface left below 1006.
   cost: XL.
+
+### F-25 result addendum [ACCEPTED — frontier 1011; ALSO a mainline soundness fix]
+- winner artifact tools/f25_best_plan.json: H-056 organization + ring plan
+  RE-MINED for it (23 audited plan rings / 552 words, closed-loop
+  re-checked at this exact order) + l4_gmin re-slid to (6,30) + order
+  re-walked. flow_spelling_plan re-derived = EMPTY (H-047/H-054's verdict
+  transfers to this organization). Driver-verified 1011 correct on TEN
+  seeds.
+- **RING PLANS ARE ORDER-SPECIFIC (new soundness fact).** Borrow windows
+  are timed against the emission order, so an order change invalidates
+  the plan. The CURRENT MAINLINE (1015) carries H-048's 4-ring plan
+  through H-056's organization change and DRIVER-CONFIRMED shows
+  LIVE-ACROSS violations (ring (0,6), donor st9). The grader does not
+  catch it (correct on every seed tested). Caveat: the audit window is a
+  superset of real ring accesses, so violations may be false positives —
+  but that plan is worth ZERO cycles at that order (() also = 1015,
+  audits OK over 20 rings), so removing it is free de-risking. The 1011
+  config audits CLEAN (0 violations over 43 rings), so the F-29 port
+  resolves this.
+- STANDING RULE: after ANY order or organization change, re-mine and
+  re-audit the ring plan (audit -> add -> re-audit fixpoint), and never
+  carry a plan across orders.
+- how the ~6 predicted cycles converted: 4, and not by the predicted
+  mechanism. Op deletion at a 1-move optimum with a 68% plateau converts
+  at ZERO; the causal chain is rings -> floor (LB 1003 -> 998) -> floor
+  funds the serving slide (-1) -> the changed stream reopens the order
+  landscape (-3).
+- f18_exhaust1 at 1015: 25,637 moves, zero (H-056's order was a genuine
+  strict 1-move optimum). At 1011: 25,641 moves, zero. Plans are
+  all-or-nothing: leave-one-out of ring (0,25) goes correct:FALSE.
+- follow-ups: F-29 port 1011 (order + 23-ring map + gmin(6,30)); F-30
+  walk the LB-995/fungible-992 (7,31)+23-ring stream (unwalked); F-31
+  decide whether any `anon`-class word is schedule-independent (last
+  third of full retention); F-32 subsumed by F-29.
