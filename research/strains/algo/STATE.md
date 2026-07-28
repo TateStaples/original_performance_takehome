@@ -1772,3 +1772,185 @@ and the preamble now states the two rules explicitly:
 
 Strain frontier and mainline are now both at **1006**; envelope 1006 ->
 energetic 996. Next live axis is H-057's F-34 (finer round windows).
+
+
+## F-34/F-35 (2026-07-28): finer ROUND windows x the audit-aware re-mine loop — NEGATIVE at the frontier; the 1006 order is a STRICT 1-move local optimum by ENUMERATION, and the round-window map is measured
+
+No improvement on 1006. Frontier unchanged, `perf_takehome.py` untouched,
+`dev.py` untouched, no shared tool modified. New drivers only:
+`tools/f34_lib.py` (programmatic mine/audit), `tools/f34_map.py` (parallel
+window map), `tools/f35_loop.py` + `tools/f35_fleet.py` (audit-aware walk
+with in-loop re-mining). Total spend this session: **~206k sim-verified
+evals** (78k window-map + 25.6k exhaustive + ~102k fleet/loop) plus ~1,100
+mine/audit fixpoints.
+
+### 1. The headline: 1006 is a strict 1-move local optimum at UNBOUNDED radius
+
+`tools/f18_exhaust1.py` (G-29's enumerator, called unmodified with
+`EOS_OVERRIDES` = the H-057 mix) at `tools/h057_best_plan_1006.json`:
+
+    total single-entry moves: 25,550   (every entry x every position in
+    its group's feasible interval -- radius unbounded by construction)
+    ZERO below 1006.
+
+Neighbour histogram (25,550 moves): **1006 x 7,487** (29% plateau),
+1007 x 1,129, 1008 x 445, 1009 x 299, 1010 x 5,019, 1011 x 3,600,
+1012 x 755, 1013 x 772, 1014 x 380, 1015 x 477, 1016 x 123, 1017 x 117,
+... ; **3,673 moves (14%) build an INCORRECT kernel**.
+
+This is the F-34 answer in one line: **no round window, however fine, can
+pay at 1006**, because the entire single-move neighbourhood has been
+enumerated and is empty. Any further order search at this point must be
+multi-move. G-29's verdict at 1020 now reproduces exactly at 1006.
+
+### 2. The round-window productivity map (F-34)
+
+Two regimes, and they disagree completely — which is the real finding.
+
+**(a) At either H-057 accept point: every window is dead.** 63 re-seeded
+`emission_order_search local` chains, ~78k evals, all flat:
+
+| seed point | windows run | evals | result |
+|---|---|---|---|
+| 1006 (h057_best_plan_1006) | 16 singletons `r:0-0..r:15-15`; 15 pairs; spans `r:0-4/0-7/5-10/8-15/9-15/10-15/11-13/11-15/12-13/12-15/13-15/14-15`; `drain` — 47 chains, 2 jump sets (1,2,4,8,16 and 1,3,6,12,24,48) | 59,148 | **1006 flat, all 47** |
+| 1006 re-mined (19-ring and 20-ring, both 1007) | `r:11-15`, `drain`, `both`, `all` | 14,467 | **1007 flat, all 8** |
+| 1007 (h057_best_plan_1007, 2nd diagonal) | `r:0-0/5-5/11-11/14-14/15-15/0-4/5-10/11-15/12-13/13-15/14-15`, `drain/both/all/mid/ramp` — 16 chains | 19,132 | **1007 flat, all 16** |
+
+**(b) From a common PERTURBED start the windows separate sharply.**
+Common seed = the 1006 order + 18 random moves = **1015, audit-clean**;
+one chain per window, ~1,200 evals each, same RNG family:
+
+| window | best from 1015 | delta |
+|---|---|---|
+| `drain` | 1009 | **-6** |
+| `all` | 1009 | **-6** |
+| `r:12-13` | 1010 | **-5** |
+| `r:13-15` | 1010 | **-5** |
+| `r:14-15` | 1010 | **-5** |
+| `r:15-15` | 1010 | **-5** |
+| `both` | 1011 | -4 |
+| `r:11-15` | 1011 | -4 |
+| `r:8-15` | 1011 | -4 |
+| `r:0-7` | 1012 | -3 |
+| `r:5-10` | 1012 | -3 |
+| `r:11-11` | 1012 | -3 |
+| `r:0-4` | 1015 | **0** |
+| `r:0-0` | 1015 | **0** |
+| `mid` | 1015 | **0** |
+| `ramp` | 1015 | **0** |
+
+**Which rounds pay: 12-15, and essentially only those.** The single round
+`r:15-15` alone matches the whole `r:13-15`/`r:14-15` band (-5) and beats
+H-057's coarser `r:11-15` (-4); `r:11-11` alone is worth only -3. Epoch 0
+(`r:0-4`, `r:0-0`) and the positional `ramp`/`mid` bands are worth exactly
+zero. This refines H-057's "`r:11-15` or `drain`" to **"round 15 first,
+then 12-14; everything below round 11 is dead"** — and it matches the
+regret profile, which puts 4 of its 11 cycles in the drain band.
+
+So finer round windows ARE a real axis (the fine `r:12-13`/`r:15-15`
+windows beat the coarse `r:11-15` H-057 used, from a common start); they
+are simply worth nothing at 1006, because of section 1.
+
+### 3. F-35: the audit-aware loop, and what it recovers
+
+`tools/f35_loop.py` folds the borrow audit into the walk: every accepted
+descent is audited against the carried plan; a **DIRTY descent is kept**,
+its plan re-mined from EMPTY at that order, and the walk continues from the
+re-mined stream. Structure is branch-and-return basin hopping around the
+best CLEAN point (`home`) so the chain cannot drift upward — the first,
+drift-free version of the loop wandered 1006 -> 1007 -> 1008 -> 1015 in
+120 s, which is exactly why H-057 had to re-mine only at checkpoints.
+
+**Two mechanism corrections that H-057's checkpoint method never had to
+face, and that the in-loop version cannot work without:**
+
+1. **The mine fixpoint is GROW-then-PRUNE, not grow-only.** Iterating
+   audit -> append the tool's proposed rings until it proposes none gives a
+   20-ring plan that is *not* automatically sound at a perturbed order —
+   each added ring shifts the emission windows the next audit sees. Measured
+   at four dirty orders off the 1007 diagonal, the grow-only fixpoint came
+   back **32 violations / 40 rings every time**. The loop now drops every
+   plan ring the closed-loop recheck flags and re-audits (monotone, so it
+   terminates). With grow-only, in-loop recovery had a **0/24 success rate**;
+   with grow-prune it recovers.
+2. **Only PLAN rings are prunable.** `parity_ring_map` holds ~20 natively
+   derived rings alongside the ~20 planned ones, and a live-across on a
+   NATIVE ring is a property of the ORDER that no plan can repair. Those
+   points are genuinely unrecoverable and must be dropped.
+
+Recovery rate, fleet G3 (8 lanes x 470 s, seeded at 1006/1007 and at
+perturbed 1015/1016/1018 starts): **92 descents, 34 DIRTY (37%), 19
+recovered in-loop into clean continuations, 15 unrecoverable** (native-ring
+violations or an incorrect re-mine). So the audit-aware loop converts
+**~56% of the points H-057's method would have discarded** into live walk
+state — H-057's 37%-dirty rate reproduces ("roughly half" was the right
+order of magnitude), and the re-mine-as-re-conditioning step works
+mechanically. It bought **zero cycles**: no lane ever put a clean point
+below its seed's frontier.
+
+Also measured: dirtiness is *selection*, not noise. Over 247/505 random
+single moves off the 1006/1007 orders only **2.0% / 0.4%** audit dirty
+(2 of 5 and 1 of 2 of those on native rings) — it is the *descending* moves
+that are disproportionately dirty, which is what makes the audit
+search-shaping rather than a filter.
+
+Fleet totals: G1 26k evals / G2 21k / G3 28k / G4 24k, plus 13k in the
+single-process loop = **~112k evals over 132 branches**, best clean point
+found anywhere = **1006** (never improved), best clean point from a
+perturbed restart = 1008.
+
+### 4. Deliberate re-conditioning from a CLEAN point (the F-35 corollary)
+
+H-057 kept the carried plan whenever it audited clean. The re-mine at the
+1006 order is nevertheless a *different* 20-ring assignment that measures
+1007 — a second, legitimate, audit-clean stream at the same order. Both it
+and the 19-ring truncation of the same fixpoint were walked (`r:11-15`,
+`drain`, `both`, `all`; 14.5k evals): **both flat at 1007.** Re-conditioning
+from a clean point is available and sound, but at this frontier it only
+costs the +1 and buys nothing back.
+
+Reproduced exactly, as a machinery control: the mine fixpoint at the 1006
+order converges in 3 audit rounds (19 rings -> +1 -> 20 rings), audits
+`OK over 40 rings`, and measures 1007 — H-057 sec. 3, row 5, to the cycle.
+
+### 5. Frontier re-verification (unchanged)
+
+    tools/h057_best_plan_1006.json -> 1006
+    correct: true at seeds {unseeded x2, 1, 2, 3, 7, 42, 99}
+    correct: true with debug_compares=True at {unseeded, 1, 42}
+    ring audit at the shipped order with the shipped plan:
+        "OK over 40 rings"   (0 violations)
+    realized 1006 | LB 995 | energetic 996 (release 996 / tail 995) |
+    fungible 992 | cp 512 | all-lags-zero 1004
+    ops 20462: valu 5966 alu 11761 load 1892 flow 797 store 46
+    regret 11 = ramp 4 + mid 3 + drain 4
+    jumps: 0,1,3,7 then 805, 864, 915, 978, 984, 993, 997
+
+No `tools/f34_best_plan_*.json` was written: there is no winner below 1006,
+and the 1006 point is already shipped as `tools/h057_best_plan_1006.json`
+and baked into `perf_takehome.py` by F-33.
+
+### 6. Follow-ups
+
+- **CLOSE the single-move order axis at 1006** (this section 1, by
+  enumeration — the same status G-29 gave the 1020 plan). Do not spend more
+  budget on any 1-move walk at this point, in any window, at any radius.
+- **F-37 [the only live order axis left]: MULTI-move.** G-29 already found
+  compound moves (pairg/comp2/block, 21,472 evals) negative at 1020, but
+  never at 1006 and never restricted to the productive band. The one
+  targeted version worth trying: **simultaneous k-entry displacements
+  confined to rounds 12-15** (section 2 says that band owns all the
+  descent), k in 2..4, seeded at 1006. The 29% exact-1006 plateau in the
+  1-move histogram is the raw material — 7,487 neutral moves is a large
+  connected plateau to compose across.
+- **F-38**: the perturb-and-redescend statistic is a cheap basin probe —
+  18 random moves off 1006 lands at 1015-1018 and re-descends only to
+  1008-1010 in ~1,200 evals per window. If a cheap descent from a random
+  restart ever reaches 1006 again, the basin is wide and multi-start is
+  worthless; so far it never has (0 of 12 restarts), which is weak evidence
+  that 1006 is a narrow basin and that a *different* basin may exist.
+- **DEAD (measured this session, do not re-run)**: fine round windows at
+  1006 or at either 1007 stream; `r:0-*`/`ramp`/`mid` windows at any point;
+  re-conditioning by re-mine from an already-clean frontier point;
+  audit-aware acceptance as a *cycle* lever (it is a soundness/search-shaping lever
+  only — 19 recoveries, 0 cycles).
