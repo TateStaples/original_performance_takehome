@@ -141,6 +141,24 @@ class ListScheduler:
         self.flow_site_idx = 0
         self.aux_site_idx = 0
         self.flow_site_plan: dict[int, int] = {}
+        # H-054 (select-readiness x flow-bubble): online spelling POLICY
+        # rather than a per-site plan. `flow_race_bias` B > 0 makes
+        # emit_any accept a pure-flow encoding whose retire time is up to
+        # B cycles LATER than the winning encoding's -- i.e. "wait up to B
+        # cycles for the 1-wide flow engine instead of burning a valu
+        # slot". Greedy (B = 0) is myopic in exactly the opposite
+        # direction: it takes valu the moment flow is busy, even though
+        # valu is the schedule's binder and flow has ~226 idle slots.
+        # B = 0 is the untouched code path (bit-identical).
+        # `flow_race_bias_window`, when set, restricts the policy to race
+        # sites whose ready cycle falls in [lo, hi) -- the bursts are
+        # localized, so a global B over-migrates in the tight windows.
+        self.flow_race_bias = 0
+        self.flow_race_bias_window: tuple[int, int] | None = None
+        # H-054 direction 4: cap how many biased (late) flow placements
+        # may be taken per cycle-window; see build_kernel_scheduled docs.
+        self.flow_race_bias_budget: int | None = None
+        self.flow_race_bias_taken = 0
 
     def ready(self, reads: Iterable[int] = (), writes: Iterable[int] = (), mem_read: bool = False, mem_write: bool = False, min_cycle: int = 0, ignore_mem_read_hazard: bool = False, ignore_mem_write_hazard: bool = False) -> int:
         cycle = min_cycle
@@ -250,6 +268,9 @@ class ListScheduler:
             if forced is not None:
                 encodings = [encodings[forced]]
         best: tuple[int, Iterable[tuple[Any, ...]], list[int]] | None = None
+        # H-054: pure-flow alternative kept aside when the bias policy is on.
+        bias = self.flow_race_bias
+        flow_alt: tuple[int, Iterable[tuple[Any, ...]], list[int]] | None = None
         for encoding in encodings:
             trial_occupancy: dict[Engine, dict[int, int]] = {}
             trial_last_write: dict[int, int] = {}
@@ -281,7 +302,19 @@ class ListScheduler:
                     trial_last_write[addr] = cycle
             if best is None or retire < best[0]:
                 best = (retire, encoding, placements)
+            if bias and flow_alt is None and len(encodings) > 1 and all(
+                e == "flow" for e, *_ in encoding
+            ):
+                flow_alt = (retire, encoding, placements)
         assert best is not None
+        if flow_alt is not None and flow_alt[0] > best[0]:
+            win = self.flow_race_bias_window
+            budget = self.flow_race_bias_budget
+            if ((win is None or win[0] <= best[0] < win[1])
+                    and (budget is None or self.flow_race_bias_taken < budget)
+                    and flow_alt[0] <= best[0] + bias):
+                self.flow_race_bias_taken += 1
+                best = flow_alt
         retire, encoding, placements = best
         for (engine, slot, reads, writes), cycle in zip(encoding, placements):
             self.put(engine, slot, cycle, reads, writes)
@@ -651,6 +684,9 @@ class KernelBuilder:
         parity_ring_extras: tuple[int, ...] = (),
         parity_ring_plan: tuple[tuple[tuple[int, int], tuple[int, int, int]], ...] = (),
         flow_spelling_plan: tuple[tuple[int, int], ...] = (),
+        flow_race_bias: int = 0,
+        flow_race_bias_window: tuple[int, int] | None = None,
+        flow_race_bias_budget: int | None = None,
         store_order: str = "group",
         reverse_newest_parity_fold: bool | Iterable[int] = (),
         newest_parity_last_fold_race: bool = True,
@@ -1461,6 +1497,11 @@ class KernelBuilder:
         # H-042: offline-searched per-site spelling plan (see ListScheduler
         # field docs). Empty tuple = bit-identical default greedy racing.
         scheduler.flow_site_plan = dict(flow_spelling_plan)
+        # H-054: online flow-vs-valu spelling policy (see ListScheduler
+        # field docs). 0 = untouched greedy race, bit-identical.
+        scheduler.flow_race_bias = int(flow_race_bias)
+        scheduler.flow_race_bias_window = flow_race_bias_window
+        scheduler.flow_race_bias_budget = flow_race_bias_budget
         # H-028 (store_pair): let mem writes pair up within a cycle -- the
         # scheduler's coarse one-location mem model otherwise serializes
         # the 32 final vstores at 1/cycle on the 2-wide store engine, and
@@ -1796,12 +1837,14 @@ class KernelBuilder:
                 dict(scheduler.last_write), dict(scheduler.last_read),
                 scheduler.last_mem_read_cycle, scheduler.last_mem_write_cycle, dict(scheduler.first_free_cycle_hint),
                 scheduler.flow_site_idx, scheduler.aux_site_idx,
+                scheduler.flow_race_bias_taken,
             )
 
         def sched_install(snap: tuple[Any, ...]) -> None:
             (scheduler.bundles, scheduler.engine_slot_counts, scheduler.last_write, scheduler.last_read,
              scheduler.last_mem_read_cycle, scheduler.last_mem_write_cycle, scheduler.first_free_cycle_hint,
-             scheduler.flow_site_idx, scheduler.aux_site_idx) = snap
+             scheduler.flow_site_idx, scheduler.aux_site_idx,
+             scheduler.flow_race_bias_taken) = snap
 
         # --- header (inp_indices is never read: only values are graded) ---
         for name, hidx in (("forest_values_p", 4), ("inp_values_p", 6)):
