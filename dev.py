@@ -694,6 +694,7 @@ class KernelBuilder:
         reverse_newest_parity_fold_at_shallow_levels: bool | Iterable[int] = (),
         emit_order: str = "group",
         emission_plan: tuple[Any, ...] = (),
+        group_window: int = 0,
         flow_consts: bool = False,
         vals_first: bool | str = False,
         tie_break: str | Iterable[str] = (),
@@ -1050,6 +1051,26 @@ class KernelBuilder:
           still be simulation-verified (tools/run_variant.py `correct`).
           Default () = the step loop runs untouched, bit-identical.
           Search driver: tools/emission_order_search.py.
+
+        - `group_window` (H-059): hold only W of the n_groups groups LIVE at
+          once and alias the rest onto their registers, trading instruction-
+          level parallelism for scratch words. Group g's st/nv/val vectors
+          become the physical vectors of slot `g % W`, so the design spends
+          `W * 24` state words instead of `n_groups * 24` -- (32-W)*24 words
+          freed at the 32-group shape. Correctness needs only that group
+          g+W's FIRST emitted op follow group g's LAST in program order (the
+          list scheduler then derives the WAR/WAW serialisation itself);
+          that is asserted here and is exactly what a "rolling window"
+          emission plan whose lags satisfy lag(g+W) >= lag(g) + rounds
+          produces (tools/h059_curve.py builds them). Requires an explicit
+          `emission_plan` and `lazy_val_loads` (the initial val vload must
+          move into the window, not sit in setup), and forbids
+          `parity_ring*` (borrow windows are order-specific and must be
+          re-mined from empty after any windowing change). Each group's
+          final vstore is emitted at the end of its own last round instead
+          of in the drain block, so the val slot is free for its successor.
+          `group_window = 0` (default) or n_groups is the untouched code
+          path, bit-identical.
 
         - `derive_consts` / `alu_val_addrs` / `lazy_val_loads` (H-024):
           setup load/flow-slot removal; none changes the maths.
@@ -1424,6 +1445,24 @@ class KernelBuilder:
                 "parity_ring's dead-register funding map is derived for the (4,3)/32-group shape"
         assert not parity_ring_plan or parity_ring_slices, \
             "parity_ring_plan (H-048) extends parity_ring and needs it active"
+
+        # H-059 (group_window): reduced group liveness + register aliasing.
+        assert 0 <= group_window <= n_groups, "group_window out of range"
+        windowed = 0 < group_window < n_groups
+        if windowed:
+            assert emission_plan, \
+                "group_window needs an explicit wave-ordered emission_plan"
+            assert lazy_val_loads, \
+                "group_window needs lazy_val_loads (val vloads move into the window)"
+            # Rings may still be used, but ONLY through explicit
+            # parity_ring_plan entries: the structural slices borrow whole
+            # dead st/nv registers of other blocks, and under aliasing those
+            # registers belong to a later group as well, so their dead
+            # windows are not dead. Plan entries name absolute addresses, so
+            # they can be pointed at words the windowing actually freed
+            # (H-059's "non-borrowed rings" spend).
+            assert not parity_ring_extras, \
+                "group_window: epoch extras are borrow-timed against the 32-group diagonal"
 
         def is_shallow_newest_parity_last_fold(r: int, g: int) -> bool:
             # bs_ (groups per skew block) is defined before emission runs.
@@ -1953,9 +1992,16 @@ class KernelBuilder:
         def alloc_state() -> None:
             nonlocal state_vecs, hash_chain_vecs, node_val_vecs, temp_pool, condA, condB, tm, tmM
             nonlocal temp_pool_size, cond_pool_size
-            state_vecs = [self.alloc_scratch(f"st{g}", VLEN) for g in range(n_groups)]
-            hash_chain_vecs = [self.alloc_scratch(f"val{g}", VLEN) for g in range(n_groups)]
-            node_val_vecs = [self.alloc_scratch(f"nv{g}", VLEN) for g in range(n_groups)]
+            # H-059: `nphys` physical copies of each per-group vector, group
+            # g using slot g % nphys. nphys == n_groups (group_window off or
+            # == n_groups) reproduces the 1:1 allocation exactly.
+            nphys = group_window if windowed else n_groups
+            st_phys = [self.alloc_scratch(f"st{j}", VLEN) for j in range(nphys)]
+            val_phys = [self.alloc_scratch(f"val{j}", VLEN) for j in range(nphys)]
+            nv_phys = [self.alloc_scratch(f"nv{j}", VLEN) for j in range(nphys)]
+            state_vecs = [st_phys[g % nphys] for g in range(n_groups)]
+            hash_chain_vecs = [val_phys[g % nphys] for g in range(n_groups)]
+            node_val_vecs = [nv_phys[g % nphys] for g in range(n_groups)]
             temp_pool_size, cond_pool_size = temp_and_cond_pool_sizes
             if parity_early_levels and tournament_level_count >= 2:
                 # Scratch is full: trade one cond-pool slot (32 words across
@@ -2459,7 +2505,7 @@ class KernelBuilder:
                     d += [hash_chain_vecs[g] for g in gs]
                 return d
 
-            for (epoch, block) in sorted(parity_ring_slices):
+            for (epoch, block) in (() if windowed else sorted(parity_ring_slices)):
                 if epoch == 0:
                     assert block in (0, 1), "e0 slices are safe for blocks 0/1 only"
                     donor_block = block + 2
@@ -3078,6 +3124,21 @@ class KernelBuilder:
             while gens:
                 gens = [gen for gen in gens if next(gen, sentinel) is not sentinel]
 
+        # H-059: groups whose result vstore was emitted inside their own
+        # window (so the val register could be handed to their successor)
+        # rather than in the drain block at the end.
+        early_stored: set[int] = set()
+        early_store_cycles: list[int] = []
+
+        def emit_final_store(g: int) -> None:
+            assert val_addrs is not None and hash_chain_vecs is not None
+            assert val_addrs[g] is not None
+            early_store_cycles.append(scheduler.emit(
+                "store", ("vstore", val_addrs[g], hash_chain_vecs[g]),
+                (val_addrs[g],) + self._v(hash_chain_vecs[g]), (),
+                mem_write=True, ignore_mem_read_hazard=store_disjoint_region))
+            early_stored.add(g)
+
         # Groups are fully independent, so they need not march in lockstep:
         # emitting the later blocks a few ROUNDS behind the earlier ones
         # skews the whole batch into a software-pipelined diagonal, so one
@@ -3153,11 +3214,35 @@ class KernelBuilder:
                     next_round_[gg_] += 1
             assert all(nr == rounds for nr in next_round_), \
                 "emission_plan must cover every (round, group) exactly once"
+            if windowed:
+                # H-059: register aliasing is sound exactly when group g+W's
+                # first op follows group g's last in EMISSION order -- the
+                # list scheduler enforces the rest (WAR: a write may share
+                # the last read's cycle; WAW: strictly after), and it does so
+                # against running per-address maxima, which are exact under
+                # program-order emission.
+                first_pos: dict[int, int] = {}
+                last_pos: dict[int, int] = {}
+                for pos, members in enumerate(norm):
+                    for _, gg_ in members:
+                        first_pos.setdefault(gg_, pos)
+                        last_pos[gg_] = pos
+                for gg_ in range(n_groups - group_window):
+                    assert first_pos[gg_ + group_window] > last_pos[gg_], (
+                        f"group_window={group_window}: group {gg_ + group_window} "
+                        f"is emitted before group {gg_} finishes, so they cannot "
+                        f"share registers (use a rolling-window emission plan)")
             for members in norm:
                 if len(members) == 1:
                     emit_group_round(*members[0])
                 else:
                     round_robin([emit_stages(rr_, gg_) for rr_, gg_ in members])
+                if windowed:
+                    # Retire each group's val vector the moment its chain is
+                    # complete, so its successor's vload can reuse the slot.
+                    for rr_, gg_ in members:
+                        if rr_ == rounds - 1:
+                            emit_final_store(gg_)
         else:
           for step in range(n_steps):
             waves: list[tuple[int, Sequence[int]]] = []  # (round, group-range) active at this diagonal step
@@ -3220,9 +3305,11 @@ class KernelBuilder:
             tail = store_gs[-4:]
             store_gs = list(reversed(tail)) + store_gs[:-4]
         scheduler.tag = None
-        last_store_cycle = 0
+        last_store_cycle = max(early_store_cycles) if early_store_cycles else 0
         assert val_addrs is not None and hash_chain_vecs is not None
         for g in store_gs:
+            if g in early_stored:  # H-059: already retired inside its window
+                continue
             assert val_addrs[g] is not None
             c = scheduler.emit("store", ("vstore", val_addrs[g], hash_chain_vecs[g]),
                        (val_addrs[g],) + self._v(hash_chain_vecs[g]), (), mem_write=True,

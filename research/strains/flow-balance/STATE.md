@@ -1238,3 +1238,171 @@ patch is directly reusable for it.
   oracle harness is ~40 lines (route a class to the `debug` engine, read the
   span) and should be promoted into `tools/` as a standing pre-screen for any
   op-removal hypothesis — it would have closed H-053 in one run.
+
+---
+
+## H-059 (Phase 2, 2026-07-28): the scratch-versus-parallelism trade — REJECTED
+
+**Question.** The Phase-2 charter's one untested structural axis: we keep 32
+groups live and spend 1,533/1,536 scratch words doing it, while valu runs
+5.93/6. If ILP is "spare", a design holding FEWER groups live should free
+hundreds of words at little throughput cost, changing which serving
+strategies are affordable.
+
+**Answer: both halves of the premise are false.** The parallelism is NOT
+spare (it is what funds the alu offload that keeps the binder fed), and the
+words buy nothing (every spend is worth <= 0 even when scratch is unbounded).
+
+### Mechanism: group liveness is an EMISSION-PLAN property
+
+Group g's st/nv/val vectors are live from its round-0 emission to its
+round-15 emission, so a diagonal whose lags satisfy `lag(g+W) >= lag(g) +
+rounds` keeps at most W groups live and makes group g+W's registers reusable
+from group g's — the list scheduler derives the WAR/WAW serialisation itself
+from program order. `tools/h059_curve.py` builds those rolling-window plans;
+`dev.build_kernel_scheduled(group_window=W)` (new, flag-gated, default 0 =
+bit-identical, verified programmatically incl. the scratch debug map) aliases
+group g onto slot `g % W` and retires each group's result vstore at the end
+of its own last round so the val slot is free for its successor.
+
+### The trade curve (ring-free 1006 mix + lazy_val_loads; per-W diagonal
+searched ~950-4,000 evals each, `tools/h059_search.py` / `h059_chain.py`)
+
+| W | words freed | best cycles | valu floor | alu floor | energetic | cp | regret |
+|---|---|---|---|---|---|---|---|
+| 32 (mainline, borrowed rings) | 3 free | **1006** | 995 | — | 996 | 512 | 11 |
+| 32 (same flags, ring-free) | 3 free | 1028 | 1008 | 993 | 1010 | 473 | 20 |
+| 24 | 192 | **1045** (full chain) | 1010 | 962 | 1017 | 526 | 35 |
+| 20 | 288 | 1064 | — | — | — | — | — |
+| 16 | 384 | 1097 | 1018 | 933 | 1026 | 571 | 79 |
+| 12 | 480 | 1136 | — | — | — | — | — |
+| 8 | 576 | 1307 | — | — | — | — | — |
+| 4 | 672 | 2031 | — | — | — | — | — |
+
+Words freed are exactly `(32-W)*24` and were confirmed against
+`kb.scratch_next_addr` (W=16 -> 1,149 used, 387 free).
+
+**The words are cheap and the cycles are not recoverable.** Freeing costs
+~0.09-0.12 cyc/word — about 9x cheaper than H-053's pool route (1.06
+cyc/word) — but every point is strictly worse, and worse *at the floor*:
+
+> **The valu FLOOR rises monotonically as liveness falls: 1008 -> 1010 ->
+> 1018 -> ... while the alu floor falls 993 -> 962 -> 933.** Total lane-ops
+> stay ~60.3k; only the SPLIT moves. Fewer live groups means less independent
+> work at each `_sched_vec` decision, so `alu_offload` wins fewer races and
+> the work concentrates on the 6-wide binder instead of the 12-wide slack
+> engine. cp rises too (473 -> 526 -> 571).
+
+So the ILP at 5.93/6 valu was never spare: **it is the resource that funds
+the alu offload.** At W=24 the design's own slot floor (1010) already exceeds
+mainline's REALIZED 1006 — no amount of walking can close it.
+
+### What the freed scratch buys: nothing (three closures by relaxation)
+
+All three measured with `dev.SCRATCH_SIZE` monkeypatched away (tool-side;
+programs scored by schedule length only, a valid upper bound).
+
+1. **Larger temp/cond pools — CLOSED, worth <= 0 at ANY size.**
+   `tools/h059_oracle.py`: temp pool = INFINITE (a private never-reused
+   vector per `temp_slot()`, dominating every enlargement) gives **1007**;
+   cond pool 6/8/12/16/32 gives 1006/1008/1009/1009/1009 (up to 2,429 words,
+   +896 over budget); temp 24/32/48 gives 1007/1008/1007; both together
+   1007. Nothing is ever below 1006. H-053's "+17 cycles for 16 words" is a
+   one-directional COST, not a reversible price.
+
+2. **Non-borrowed / complete parity rings — CLOSED, worth 0 at the shipped
+   stream.** `tools/h059_ringmax.py`: the 1006 mainline funds 40 of the 64
+   (epoch, group) rings by borrowing. Giving all 64 PRIVATE 24-word triples
+   out of unbounded scratch deletes 162 lane-ops (flow 797->773, alu
+   11761->11673, valu 5966->5916) and lands on **exactly 1006** — zero
+   cycles. Rings are worth 20 in total (1026 ring-free -> 1006) and the
+   borrow mechanism already captures all 20. *This falsifies H-058's ~7-cycle
+   estimate for completing cond retention at the shipped stream.* At the
+   W=16 stream (which starts ring-free) all-64 private rings are worth -16
+   and the 16 rings the 384 freed words can actually pay for are worth -6.
+
+3. **Select-tree serving at L4/L5/L6 — CLOSED, worth -30/-61/-94 with
+   scratch FREE.** Deeper tournaments measured at 1049 (L3, ref) / 1079 (L4)
+   / 1110 (L5) / 1143 (L6). L5 needs 1,786 words (+254 over the shipped
+   1,532 — H-041's 256 lane-broadcast words, confirmed) and L6 needs 2,394;
+   L4 needs FEWER words than today (1,482) and still loses. **Scratch was
+   never the binding reason** — independently confirmed by H-058's structural
+   cost model. G-23's "reopen if 256+ words free" clause is now discharged
+   from both directions.
+
+4. **Whole-flag-space shadow price — `tools/h059_shadow.py`.** With the
+   1,536-word limit removed, every reachable direction off 1006 is neutral or
+   worse: pools +0..+2, prime L5-7 +9, prime L5-8 +41, flow_consts +13,
+   idx_boundary_select +9, bcast_alu_copies +36, coloring-uncapped +75.
+   l4_gmin is at an interior optimum ((6,31); (3,30) +8, (9,30) +4, (12,30)
+   +13, (31,31) +90) with scratch usage FLAT at 1,533 across the sweep.
+   **The shadow price of a scratch word at 1006 is <= 0 in every spellable
+   direction.**
+
+5. **Flow export does not compose.** Sweeping `flow_race_bias` x
+   `flow_first_fold_levels` (40 configs) at both the mainline and the W=24
+   chain point returns the unbiased greedy encoding in both cases (1006 and
+   1045). Confirms G-27 on a second, differently-mixed stream.
+
+### The chain was run (F-25 discipline)
+
+At the best point (W=24) the full chain ran from empty: ring plan re-mined
+into the freed words (1054, `e1-desc`, 8 rings) -> l4_gmin re-slid to (7,30)
+(1050) -> rolling-diagonal re-walked with rings and gmin inside the objective
+(3,955 evals, 1045). The chain delivered -9, its usual magnitude; the gap to
+mainline is 39 and to the same-flag 32-live reference is 17.
+
+### Artifact + verification
+
+`tools/h059_best_plan_1045.json` (drop-in format, `params.mix` block).
+Verified: `correct: true` on {unseeded, 1, 2, 3, 7, 42, 99} + a
+`debug_compares=True` run, all at 1045 cycles. Ring audit CLEAN — the shared
+`tools/audit_ring_windows.py` reports "  OK over 8 rings" against the shipped
+literals (privately allocated words, so no borrow window can be violated).
+Bounds: LB 1010 / energetic 1017 / fungible 1000 / cp 526 / all-lags-zero
+1016; regret 35 = ramp 10 + mid 1 + drain 24. Full grader green with flags
+off (9/9, CYCLES 1006); `group_window=0` and `group_window=32` proved
+bit-identical to the flag's absence (instruction stream, scratch_next_addr
+and scratch debug map all compared).
+
+Correctness caveat recorded: `newest_parity_last_leaf_diff_tables`' round-15
+dead-register pool assumes 32-group liveness and clobbers aliased registers
+(the `correct:false` points at W in {24,14,12,8,4} before the ring plan
+displaces it). With it off, aliasing is correct at every W measured. The
+aliasing MECHANISM is sound; that one dead-register optimisation is not
+liveness-agnostic.
+
+### Verdict
+
+**REJECT. The scratch/parallelism trade is not a live lever toward 940.**
+The trade is real and the words are cheap, but the exchange rate is
+catastrophic in the wrong direction: liveness reduction raises the BINDING
+engine's floor (because ILP is what funds alu offload), and the freed words
+are worth <= 0 in every spellable spend, as proven by unbounded-scratch
+relaxation rather than by search. Any sub-940 design must find its scratch
+somewhere that does not cost parallelism, and must find something to SPEND it
+on that does not exist in today's op vocabulary.
+
+reopen-if: (a) an op vocabulary appears whose cost is dominated by scratch
+rather than by valu slots — the relaxation says every current one is
+valu-bound; or (b) `alu_offload`'s race is replaced by a static
+alu/valu partition that does not depend on the number of live groups, which
+would decouple the valu floor from liveness and make the curve flat (this is
+the ONE way the cost side could change, and it is worth its own hypothesis);
+or (c) the load floor (946, flat at every W measured) ever becomes the
+binder, in which case gathers, not selects, are the thing to trade.
+
+### Follow-ups (proposed backlog entries)
+
+- **H-060: static alu/valu partition instead of the retire race.** The whole
+  cost of H-059 is that `_sched_vec`'s alu/valu race needs many live groups
+  to win. A partition decided at emission time (per op class, per round)
+  would make the op mix liveness-independent — worth testing on its own
+  merits at W=32 too, since G-26 already showed the race self-equilibrates
+  in the wrong direction (freeing valu RAISES valu).
+- **The scratch budget is not a constraint on this kernel and should stop
+  being cited as one.** `tools/h059_shadow.py` should join the standing
+  pre-screens in LOOP.md step 0a2: it bounds any "if only we had words"
+  hypothesis in one run. Three separate closures (H-041's L5 tables,
+  H-045/H-048's ring starvation, H-053's pool purchase) were all stated in
+  scratch terms and are all actually valu-slot statements.
