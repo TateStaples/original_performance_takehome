@@ -30,6 +30,7 @@ sys.path.insert(0, os.path.join(REPO_ROOT, "tests"))
 
 import problem  # noqa: E402
 import h054_common as C  # noqa: E402
+import h055_chain as _H  # noqa: E402  (shared $H055_PLAN-aware frontier)
 from dev import KernelBuilder  # noqa: E402
 from run_variant import measure  # noqa: E402
 
@@ -40,7 +41,7 @@ ENG = ("valu", "alu", "load", "flow", "store")
 def stats(**extra):
     kb = KernelBuilder()
     kb.build_kernel_scheduled(C.SHAPE["batch_size"], C.SHAPE["rounds"],
-                              C.SHAPE["forest_height"], **C.frontier_kwargs(**extra))
+                              C.SHAPE["forest_height"], **_H.frontier_kwargs(**extra))
     slots = {e: sum(len(b.get(e, [])) for b in kb.instrs) for e in ENG}
     floors = {e: -(-slots[e] // W[e]) for e in ENG}
     return len(kb.instrs), slots, floors
@@ -52,7 +53,7 @@ def line(label, **extra):
     except Exception as exc:  # noqa: BLE001
         print(f"{label:28s} BUILD-FAIL {type(exc).__name__}: {str(exc)[:60]}")
         return None
-    cyc, ok = measure(C.frontier_kwargs(**extra))
+    cyc, ok = measure(_H.frontier_kwargs(**extra))
     jf = max(f.values())
     print(f"{label:28s} cyc {cyc:5d} ok {int(ok)}  jointfloor {jf:5d}  "
           f"regret {cyc-jf:4d} | valu {s['valu']:5d}/{f['valu']:5d} "
@@ -78,7 +79,7 @@ def cmd_loadbudget(args):
     from collections import Counter
     kb = KernelBuilder()
     kb.build_kernel_scheduled(C.SHAPE["batch_size"], C.SHAPE["rounds"],
-                              C.SHAPE["forest_height"], **C.frontier_kwargs())
+                              C.SHAPE["forest_height"], **_H.frontier_kwargs())
     n = len(kb.instrs)
     occ = [len(b.get("load", [])) for b in kb.instrs]
     free = [W["load"] - o for o in occ]

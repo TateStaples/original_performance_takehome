@@ -35,9 +35,23 @@ from problem import SLOT_LIMITS  # noqa: E402
 ENGINES = ("valu", "alu", "load", "flow", "store")
 
 
+PLAN_ENV = "H055_PLAN"   # override the emission plan (e.g. tools/f13_best_plan_1020.json)
+
+
+def frontier_kwargs(**extra):
+    """h054_common's frontier config, with the emission plan overridable via
+    $H055_PLAN so the tools track mainline as F-13's order walks land."""
+    kw = C.frontier_kwargs(**extra)
+    plan = os.environ.get(PLAN_ENV)
+    if plan:
+        import emission_order_search as eos
+        kw["emission_plan"] = eos.load_plan(plan)
+    return kw
+
+
 def frontier_capture():
-    """Capture the 1022 frontier op stream (patch H51_OVERRIDES in-process)."""
-    kw = C.frontier_kwargs()
+    """Capture the frontier op stream (patch H51_OVERRIDES in-process)."""
+    kw = frontier_kwargs()
     kw.pop("debug_compares", None)
     B.H51_OVERRIDES.clear()
     data = B.capture(overrides=kw)

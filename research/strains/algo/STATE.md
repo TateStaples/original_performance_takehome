@@ -760,6 +760,35 @@ create. Theoretical minimum deficit (valu usable <= 2c slots by cycle c) is
 12 slots = 2 cycles vs today's 24 slots = 4, so the ramp's reachable share
 is ~2.
 
+### 6. Re-verified on the NEW mainline (F-13's 1020 order plan) — conclusions unchanged, and stronger
+
+F-13 landed 1022 -> 1020 mid-run. Every H-055 tool takes the plan from
+`$H055_PLAN`, so all of the above re-runs on the new stream with one env var
+(`H055_PLAN=tools/f13_best_plan_1020.json`). Gate after merge: 9/9 green,
+all nine CYCLES lines 1020.
+
+Bound stack at 1020: realized **1020** / **all-lags-zero 1017** / valu-slot
+floor **1006** / fungible **1000** / load floor 946 / pure CP **541**.
+Census valu 6033 (1006), alu 11695 (975), load 1892 (946), flow 814 (814).
+**Chain shortening is now worth 3 cycles globally, not 6** — F-13's order
+walk consumed part of the latency slack. Regret 14.
+
+CP at 1020: 541 levels, 719 ops on it, engine census valu 499 / flow 115 /
+alu 91 / **load 11** / store 3; **17 valu<->load alternations**. Same shape.
+
+Pair-preload re-run at 1020, real load engine / free-load oracle:
+1 site +5 / **+3**; 2 sites +9 / **+2**; 8 +14 / +9; 16 +45 / +9;
+48 +173 / +8; 128 +493 / +17; all 229 +883 / +78. **Still positive
+everywhere in both columns** — no subset of the 229 gather sites wins even
+with load throughput free.
+
+One difference worth recording: zeroing all lags among the drain ops
+(c >= 950) now gives **1018 (-2)** where at 1022 it gave +0. So the 1020
+drain does have ~2 cycles of genuine latency, but the mechanism that could
+buy it (pair-preload) measures +3 at its single best site even with free
+loads, i.e. the +1 flow op and the emission-order disturbance already
+exceed the prize.
+
 ### Verdict / follow-ups
 
 H-055 is **closed negative**, and with it the F-20 axis. The op multiset —

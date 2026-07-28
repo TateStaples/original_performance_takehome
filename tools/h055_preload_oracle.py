@@ -46,6 +46,7 @@ sys.path.insert(0, os.path.join(REPO_ROOT, "tests"))
 
 import backtrack_sched as B  # noqa: E402
 import h054_common as C  # noqa: E402
+import h055_chain as _H  # noqa: E402  (shared $H055_PLAN-aware frontier)
 
 VIRT = 100000  # virtual scratch base (oracle assumes scratch is free)
 LOAD_ENGINE = "load"  # set to "oracle" by --free-loads (isolates the CHAIN gain)
@@ -63,7 +64,7 @@ def enable_free_loads() -> None:
 
 
 def capture():
-    kw = C.frontier_kwargs()
+    kw = _H.frontier_kwargs()
     B.H51_OVERRIDES.clear()
     return B.capture(overrides=kw)
 
