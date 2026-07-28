@@ -1267,3 +1267,29 @@ correct, measured worse at every configuration tried]
 - follow-ups: F-12 mainline port (NOTE: must REVERT F-9's (13,29)
   multiply_add pin — spelling plan is now empty); F-13 restart-portfolio
   walks (still descending ~1-2/round); F-14 regret re-profile at 1023.
+
+### F-14 result (regret re-profile at 1023, driver-run 2026-07-27)
+- LB for the 1023 op stream: engine valu 1010, staircase 1011 (any
+  packing); CP rose to 489 (order plan trades span for engine balance).
+  Final regret 13 (was 18 at 1031): ramp 4 (c=0-7, CP/vbroadcast),
+  epoch-seam cluster 5 (c=881-927, r9-11 — persisted, reshaped), drain 4
+  (c=996-1014, cpLB>=engLB — CP-bound). H-049's -8 = both mid seams
+  erased + drain 7->4.
+- implication: ALL residual friction is dependency-chain-bound. Two
+  op-stream levers remain: (a) H-047 re-scope — serving-mix change (LP
+  wants 31/64 L4 served + L4/L5/L6 priming at the balanced mix) with the
+  full plan-search toolchain (emission/spelling/ring plans) re-run per
+  candidate mix; (b) H-052 (queued) — targeted chain shortening at the
+  three regret sites (r9-11 group-24-31 hash+fold RAW staircase; ramp
+  vbroadcast chains; final-round drain chains).
+
+### H-052 [strain: algo] [status: open]
+- statement: targeted dependency-chain shortening at the F-14 regret
+  sites. The 13 residual cycles are chain-bound, not slot-bound. Sites:
+  (1) r9-11 epoch seam (5 cyc): groups 24-31's r9/r10 hash+fold chains
+  — restructure fold order / break RAW staircase (e.g. tree-reduce
+  folds, alternate fold operand association); (2) ramp (4 cyc):
+  vbroadcast RAW on setup loads — earlier constant materialization or
+  alu-side broadcast alternatives; (3) drain (4 cyc): final-round
+  chains — deeper b3l-style folds or store-side restructure.
+- predicted_gain: bounded by 13; realistic 3-6. cost: M-L.
