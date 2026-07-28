@@ -941,6 +941,17 @@ frontier mix, `EOS_JUMPS` per F-13/G-29's radius finding).
   from the previous chain's best; each chain then plateaued for ~10k evals.
   Wider jump sets kept paying past F-13's `1,2,4,8,16,32`
   (`1,2,3,4,6,8,12,16,24,32` and `1,2,3,5,8,13,21,34` both produced steps).
+  The chain stops at 1015: two further fresh chains off the 1015 plan
+  (different seeds, `1,2,3,4,6,8,12,16,24,32` and `1,2,3,5,8,13,21,34,55`,
+  ~24k evals combined) found nothing below it, so 1015 is where this
+  session's budget ran out, not a proven optimum. Total walk spend across
+  H-056: ~9 chains, ~75k sim-verified evals.
+- Bound stack at the 1015 artifact: realized **1015** / all-lags-zero 1007 /
+  valu-slot floor **1003** / energetic 1004 / fungible 998 / cp 572.
+  Regret 12 = ramp 4 + mid 2 + drain 6 (the mainline's was 14 = 4/6/4):
+  the organization change ate the mid/seam band that F-13 fought for, and
+  the residue is now ramp+drain, which G-28 characterised as load-bandwidth
+  and valu-saturation respectively.
 - LB drift to watch: the even16/stag1 stream enters at LB 996 but the walk
   pulls it back to LB ~1001 — order walks optimise realized cycles and will
   spend floor to get them.
