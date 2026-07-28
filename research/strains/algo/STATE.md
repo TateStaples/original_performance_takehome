@@ -807,3 +807,203 @@ valu AND load together:
   surgery on the captured stream) as the standing pre-screen for any future
   chain/structure hypothesis, alongside `free_slot_oracle` (op-migration)
   and `h054_shadow` (resource).
+
+## H-056 (2026-07-28): re-open the PROGRAM ORGANIZATION — ACCEPTED, strain frontier 1020 -> 1016 (-4), and the first sub-1006 op streams ever measured (LB 996 / 992)
+
+Baseline: mainline **1020** (`tools/f13_best_plan_1020.json` on the H-047
+mix); `tests/submission_tests.py` 9/9 green, all nine CYCLES lines 1020 —
+re-verified green and unchanged at the end of this session.
+
+**No dev.py and no perf_takehome.py change was made.** The organization is
+already fully expressible through the existing `emission_plan` kwarg, so
+H-056 is a pure search + measurement result: two new tools and one plan
+artifact. Flags-off bit-identity is therefore trivially satisfied.
+
+New tools: `tools/h056_screen.py`, `tools/h056_org.py`.
+New artifact: `tools/h056_best_plan.json` (1016, `correct: true` at seeds
+1/2/3/7/42/99).
+
+### 0. Why the reopen was justified (and what it found)
+
+G-25..G-29 closed every axis *within* the mainline organization. But every
+prior organization experiment (uneven blocks, the external repo's 13-block
+shape, the skew sweeps, H-049 phase1's `blocks8`/`blocks13`/`blocks2`) was
+measured under a greedy emission order and the pre-H-042 spelling regime.
+H-047's precedent (mem_prime(5,6) flipping +1 -> -1 under per-candidate
+order re-search) said those verdicts were measured wrong.
+
+They were. **The mainline organization is one of the WORST points in the
+organization space by lower bound** (even-4-blocks / stagger-3 /
+block-interleave, LB 1013); F-13's 213k-eval order walk spent itself
+recovering 1013 -> 1006. Organizations exist whose *unwalked* streams
+already sit at LB 996-1005.
+
+### 1. The pre-screen (`tools/h056_screen.py`) — 0.3 s per config
+
+Patches `backtrack_sched.H51_OVERRIDES` in process (and restores it),
+captures the exact op stream, and prints the whole bound stack per CONFIG
+rather than only for the mainline: realized, per-engine census + floors, CP,
+the any-packing `LB`, both energetic staircase bounds, the fungible bound,
+the offline-greedy reproduction check, and optionally all-lags-zero and the
+full regret profile. Verified against the known mainline numbers on its
+first run:
+
+    realized 1020 | LB 1006 | fungible 1000 | all-lags-zero 1017 | cp 541
+    valu 6032 alu 11689 load 1892 flow 814 store 46 | model_exact true
+
+At 0.3 s it is cheap enough to screen the LB of *every* candidate, which is
+what made the hypothesis tractable: 26k organizations screened in ~20 min.
+
+### 2. The organization sweep (`tools/h056_org.py`) — 28,316 candidates
+
+Axes: block PARTITION (even k | integer-division cut points, i.e. the
+external repo's uneven shape | strided/non-contiguous | ramped sizes) x lag
+DIAGONAL (uniform stagger and non-uniform) x INTERLEAVE (`block` =
+wave-major vs `zip` = group-granular across waves) x wave order x group
+order x drain shape (`tail_df`, `stage_rr`). Every candidate reports LB and
+grader-verified cycles.
+
+**Best LB per (partition, stagger, interleave) cell**, frontier mix,
+`correct: true` only. `cyc` is greedy-realized BEFORE any order search:
+
+| partition | stagger | interleave | best LB | cyc |
+|---|---|---|---|---|
+| even16 (2 groups/blk) | 1 | zip | **996** | 1029 |
+| even16 | 2 | zip | 999 | 1087 |
+| **even8 (4 groups/blk)** | **2** | **zip** | **1001** | **1028** |
+| cut11 | 2 | zip | 1002 | 1051 |
+| cut13 (external shape) | 2 | zip | 1002 | 1071 |
+| cut9 | 2 | zip | 1003 | 1036 |
+| even4 | 4 | zip | 1005 | 1035 |
+| even32 | 1 | zip / block | 1005 | 1087 |
+| ramp4 (uneven sizes) | 4 | zip | 1006 | 1026 |
+| even16 | 1 | block | 1008 | 1033 |
+| even8 | 2 | block | 1010 | 1039 |
+| **even4 = MAINLINE SHAPE** | **3** | **block** | **1013** | **1034** |
+| cut13 | 3 | block | 1019 | 1150 |
+
+Three clean, monotone findings:
+
+1. **`zip` beats `block` at every partition and every stagger.** Interleaving
+   the active waves at GROUP granularity instead of emitting each wave's
+   whole block contiguously is worth 2-9 LB cycles everywhere. This is the
+   largest single organization lever and it had never been measured at the
+   current mix.
+2. **Finer partitions on a tighter stagger lower the LB**: 4 blocks of 8 at
+   stagger 3 (mainline) -> 8 blocks of 4 at stagger 2 -> 16 blocks of 2 at
+   stagger 1 walks LB 1013 -> 1001 -> 996.
+3. The LB moves because the **valu census** moves: 6076 (mainline shape,
+   default order) -> 6032 (F-13 walked) -> 6003 (even8/zip) -> 5971
+   (even16/stag1/zip). Emission order decides the alu-vs-valu race outcomes
+   inside `_sched_vec`, so the organization is choosing the op MIX, not just
+   the placement. F-13's "orders are mix-specific" has an exact converse:
+   **mixes are order-specific, and the organization is the coarse handle.**
+
+Ring-plan confound ruled out by controls: the pinned `parity_ring_plan` is
+liveness-timed to the mainline order and silently killed 63% of candidates
+(`correct: false`, or an out-of-range gather address). The full sweep was
+repeated at `parity_ring_plan=()` (61% correct) and `parity_ring=False`
+(96% correct). **The ranking is the same in all three regimes** (noring:
+lags(0,4,8,12)/zip LB 1014, f13 1016, even16/stag1 1018, mainline shape
+1023) — the finding is not a ring artifact.
+
+### 3. Order walks per candidate (the H-047 discipline) — 1028 -> **1016**
+
+Only candidates with LB <= 1006 earned a walk
+(`emission_order_search.py local`, seeded fresh, `EOS_OVERRIDES` = the
+frontier mix, `EOS_JUMPS` per F-13/G-29's radius finding).
+
+| seed organization | seed cyc | seed LB | walked | walked LB | regret |
+|---|---|---|---|---|---|
+| even8/stag2/zip/**rev**/asc | 1028 | 1001 | **1016** | 1002 | 14 |
+| even8/stag2/zip/**default**/asc | 1027 | 1003 | **1016** | 1005 | 11 |
+| even8/stag2/zip/default/asc (2nd chain, jumps to 32) | 1018 | — | **1016** | 1002 | 14 |
+| even8/stag2/zip/**rot:1**/asc | 1025 | 1002 | 1022 | 1001 | 21 |
+| even16/stag1/zip/rev/asc | 1029 | **996** | 1023 | 1001 | 22 |
+| (control) f13 mainline | 1020 | 1006 | 1020 (G-29: strict 1-move optimum) | 1006 | 14 |
+
+- **1016 is reached by three independent walk chains on two organizations**
+  (wave order `rev` and `default` on the even8/stag2/zip partition), each
+  `correct: true` at seeds 1/2/3/7/42/99. Winning artifact:
+  `tools/h056_best_plan.json` — 1016, LB 1002, fungible 1000, cp 565,
+  valu 6008 / alu 11881 / load 1892 / flow 814.
+- The descent is FAST where F-13's was slow: 1028 -> 1020 in ~3 min
+  (~2.5k evals), 1020 -> 1017 in ~15 more, 1017 -> 1016 by ~30 min.
+  F-13 needed 213k evals for 1034 -> 1020 on the mainline organization.
+  A lower-LB stream is not merely a better floor — it is a
+  **better-conditioned order landscape**.
+- Wider jump sets kept paying past F-13's `1,2,4,8,16,32`: the 1018 -> 1017
+  and 1017 -> 1016 steps both came from chains run with
+  `1,2,3,4,6,8,12,16,24,32`.
+- LB drift to watch: the even16/stag1 stream enters at LB 996 but the walk
+  pulls it back to LB ~1001 — order walks optimise realized cycles and will
+  spend floor to get them.
+
+### 4. The deeper-organization config axes — closed on cycles, two record LBs
+
+Screened on both the mainline and the walked even8/zip plan (184 configs):
+tournament depth, L4 serving sets, priming levels, scratch pool sizes, store
+order, reverse-newest-parity-fold rounds, ring extras, idx_boundary_select,
+lazy_val_loads.
+
+- **Nothing beats the incumbent on realized cycles on either plan.**
+  `tournament_levels` (1,2) and (1,2,3,4) both assert out under mem_prime
+  ("mem_prime stages through the full-width lv scratch"); (1,2,3) is the
+  incumbent. `prime(5,6)`, `pool(16,4)`, `store_group`, `revfold(15,)` are
+  each the local optimum on BOTH plans — H-047/H-055 confirmed under the new
+  organization, i.e. those closures survive the reopen.
+- **But the LB axis is alive here too, and it COMPOSES with the
+  organization**: on the even8/zip organization `l4_gmin(16,32)` gives
+  **LB 992** (realized 1062) and `revfold()` gives LB 999 (realized 1029).
+  992 is the lowest bound ever measured on this kernel's real op stream —
+  10 below the walked stream and 14 below the mainline. As in H-055's gmin
+  table, realized cycles rise monotonically with gmin, so this is a *bound*,
+  not a schedule; it is the correct input to the next round.
+- pool sizes: `(15,4)`, `(17,3)`, `(18,3)` all reach LB 1001-1003 on the
+  even8/zip plan at 1027-1028 realized; `(16,4)` stays the cycle optimum.
+
+### 5. Answer to the gating question, and the new envelope
+
+**Yes — streams below LB 1006 exist, in quantity.** Lowest bounds found:
+
+| stream | LB | realized | note |
+|---|---|---|---|
+| even8/zip + l4_gmin(16,32) | **992** | 1062 | lowest bound ever measured here |
+| even8/zip + l4_gmin(16,31) | 994 | 1059 | |
+| even16/stag1/zip/rev/asc | **996** | 1029 | unwalked, `correct: true` |
+| even8/zip + l4_gmin(16,30) | 996 | 1056 | |
+| even8/zip + revfold() | 999 | 1029 | |
+| **even8/zip walked (the artifact)** | **1002** | **1016** | the accept |
+| f13 mainline | 1006 | 1020 | previous incumbent |
+
+Envelope at the new frontier: realized **1016** / valu-slot floor **1002** /
+fungible **1000**. G-28's "1020 -> 1006, everything left is <= 20 cycles and
+order/packing shaped" is superseded: the organization axis moved the FLOOR
+itself, which nothing in G-25..G-29 could do, and the reachable band is now
+1016 -> 1002 with a demonstrated 992-floor stream in hand.
+
+### 6. Follow-ups (ranked)
+
+- **F-24 (mainline port, do this first)**: 1016 needs NO code change — bake
+  `tools/h056_best_plan.json`'s order into `perf_takehome.py` exactly as
+  F-13 baked the 1020 plan. -4 for a literal swap.
+- **F-25**: walk the LB-996 (even16/stag1/zip) and LB-992
+  (even8/zip + gmin(16,32)) streams properly. They got 45 min and 0 min
+  respectively; 1016 came out of ~45 min on a stream 6 LB cycles worse.
+- **F-26**: the ring plan is re-derivable per organization. The pinned
+  `parity_ring_plan` is worth 6 cycles ON THE MAINLINE ORDER and was carried
+  unchanged onto every new organization (where it also broke 63% of
+  candidates). Re-mining it for even8/stag2/zip is untried, worth up to ~6.
+- **F-27**: order walks with a lexicographic (LB, cycles) objective — the
+  current walk spends floor for cycles (996 -> 1001 above). `h056_screen`
+  makes LB as cheap as a measurement, so this is a one-line objective change.
+- **F-28**: the organization x config CROSS is barely touched. Only gmin,
+  priming and pool sizes were crossed with the winning organization;
+  `parity_ring_plan`, `flow_spelling_plan` (site numbering is
+  order-specific and was left EMPTY throughout H-056 — the H-042 spelling
+  prize has never been re-derived on this organization) and the
+  tie-break/race knobs were not.
+- **G-29 must be re-read as scoped**: it closed 1-move order search *at the
+  mainline mix* and explicitly said "reopen-if the MIX changes". The
+  organization changes the mix, so a fresh exhaustive 1-move scan
+  (`tools/f18_exhaust1.py`) at the 1016 plan is cheap and unrun.
