@@ -114,6 +114,20 @@ Phase 1 ended at 1006 with all axes closed by enumeration/relaxation.
 The frontier (940 under our exact rules) provably runs OUR hash form
 (H-043 decoded corsix's diagrams), so its advantage is STRUCTURAL.
 
+**[CORRECTED 2026-07-28 by H-058] H-044's 931.6 "ideal floor" is WRONG by
+~80 cycles** — tools/ideal_floor.py double-subtracted the 1,848
+gather-address combines (the classifier files st-writes as Idx and
+st-reads as Routing) and dropped the 616-lane-op Setup bucket. Do not use
+its layer-2 numbers as a target. **The joint slot floor of this algorithm
+is 960.8 (measured-slope regression) / 962.7 (structural ISA cost model)
+— two independent models converging — with compute, load and flow all
+binding simultaneously (corsix's 7.5:2:1 ratio re-derived from our own
+census). Honest target for this algorithm: ~960 floor, ~975 realized.**
+Reaching a 940 FLOOR needs -270 vec-ops; REALIZING 940 needs a floor near
+920, i.e. -429 vec-ops (-3,432 lane-ops, 5.8%), because regret is ~20
+cycles while compute binds but ~70 once LOAD binds — a 940 design must
+run load at 100%.
+
 **The binding arithmetic for any sub-940 design.** Hash is fixed at
 46,656 alu+valu lane-ops (closed by four tool classes). At 940 cycles
 the alu+valu capacity is 940*60 = 56,400 lane-ops, leaving **9,744 for
@@ -128,10 +142,43 @@ Slack inventory at 1006: load floor 946 vs valu floor 995 -> **load has
 inverts the Phase-1 intuition: at this balance the profitable direction
 is MORE gathers and FEWER selects, not the reverse.
 
-**The scratch/parallelism trade is the untested structural axis.** Our
+**[CORRECTED by H-058] Scratch was never the binding reason select trees
+lose.** The serve/gather crossover is structural: serving level d costs
+2^d-1 flow slots or 3*2^(d-1)-2 vec-ops per group-round vs 8 loads + 1
+vec-op to gather, and in engine-cycles the crossover falls exactly
+between L4 (2.93 valu-cyc vs 4.13 load-cyc) and L5 (6.13 vs 4.13) —
+where the shipped kernel already sits. L5 loses 2.1 cyc/group-round and
+L6 loses 8.4 REGARDLESS of free scratch. This closes G-23's "reopen if
+256+ words free" clause. Freed scratch is worth ~97 vec-ops (~7 cycles)
+of remaining COND RETENTION, nothing more.
+
+**The scratch/parallelism trade (original framing, now narrowed).** Our
 design keeps 32 groups live simultaneously and spends 1,533/1,536 scratch
 words doing it, which is why select-tree serving died three ways (H-041:
 L5 needs 256 lane-broadcast words). But valu runs at 5.93/6 — we have
 ILP to spare. A design holding FEWER groups live would free hundreds of
 words at no obvious throughput cost, changing which serving strategies
 are affordable. Never tested.
+
+### H-058 verdict (2026-07-28): what 940 would require
+
+Latency is NOT the wall: free-slot oracles measure compute-free 977,
+compute+gathers 650, +selects 331, everything-free 314. A group's 16
+rounds are serial, so K live groups give generations of C*K/32 covering
+a 314-cycle span => K >= 11 suffices at 940; today's K=32 has 626 cycles
+of slack.
+
+**For 940 to exist under our rules, exactly one of four things must be
+true, and three are closed by our own artifacts:**
+1. a shorter hash — closed by four tool classes (~4e12 candidates),
+2. cheaper index maintenance — at floor (950 measured vs 960 theoretical);
+   the address recurrence is constant-free only if forest_values_p == 1,
+   and relocating the forest costs +27.3 vec-ops (126 load-cycles),
+3. cheaper routing — the ISA has no scratch-indexed read and no permute,
+   so per-lane routing is exactly "1 load" or "2^d-1 selects", nothing else,
+4. **a scheduler that realizes a load-100% stream at regret ~0 where ours
+   measures ~70.** <- THE ONLY OPEN ITEM.
+
+(4) is a scheduling hypothesis and should be posed against
+tools/backtrack_sched.py on a deliberately load-bound stream (s4 <= 13)
+where regret is largest and easiest to attribute.
