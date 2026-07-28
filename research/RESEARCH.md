@@ -581,3 +581,76 @@ cell survives P3-D), which realizes ~950-960. **We do not have a design that
 would realize 940.** The index axis is closed as a source of further margin:
 any additional headroom must come from REMOVING COMPUTE, not from re-spelling
 the recurrence. Full detail: research/strains/p3b/STATE.md §9.
+
+### P3-D ADJUDICATION (2026-07-28): SELF-CONSISTENT -- and both models missed why
+
+**VERDICT: the ~937.5 cell is self-consistent.** But the reason is one
+neither prior model states, and my dispatch's suspicion was wrong.
+
+**The mechanism: WHICH ROUND, not how many.** P3-B's 5,888 index floor is
+NOT bought by serving more L4 group-rounds (P3-C correctly prices that as a
+monotone loss). It is bought by serving the SAME number of L4 group-rounds
+**at round 15 instead of round 4** -- identical folds, identical loads,
+-768 lane-ops of index. Both rounds are level 4 (`level(r) = r mod 11`), but
+round 15 is the LAST round and therefore never needs an address. Serving at
+round 4 earns zero index credit because the pack merely moves to round 5 (an
+exact cancellation -- P3-C's own coupling lemma); serving at round 15 earns
+-3 madds per group-round. The source already knows this:
+perf_takehome.py:1494, "unless last round (nothing reads st after)".
+
+**JOINT OPTIMUM** (16,384 per-group schedules x mixtures, index DERIVED
+per-round rather than swept):
+
+| C | alu+valu | load | flow | store | floors | schedule | index derived |
+|---|---|---|---|---|---|---|---|
+| 939 | 56,296 | 1,878 | 939 | 94 | 938.3/939.0/939.0 | 29 groups `SSSS.GGGGGGG.SSSSS` + 3 groups `SSSS.GGGGGGG.SSSSG` (L1-L3 both epochs, L4 at round 15 only, 29/32) | 448 extracts + 297 madds = 5,960 |
+
+Bit-identical to P3-A's C1*.
+
+**ERROR ATTRIBUTION.** P3-A **survives**: `p3a_opt.py:64-66` derives the index
+cost (`exits = 32 + max(0, 32-n4)`) and charges folds and loads in the same
+call, so its sweep was never independent. P3-C **fails on its 946.0 and 937.4
+rows**: its `idx_slack` is a free additive constant applied uniformly to all
+405k designs, granting 5,888 to designs that genuinely cost 6,656, and its
+`index_cost` is level-indexed with successor smearing so it cannot express
+"round 15 not round 4" at all. The joint model reads **953 as-built** (vs
+P3-C's 964.8) and **939 support-free** (vs P3-C's 950.6).
+
+### ACTIONABLE, ON THE SHIPPED KERNEL: the L4 assignment is dominated
+
+`l4_gmin = (6, 31)` (perf_takehome.py:669) serves **26 L4 group-rounds at
+round 4 and only 1 at round 15** -- the dominated assignment. Moving those 26
+to round 15 is worth **624 lane-ops of index at zero fold and zero load
+cost** (~10 cycles of floor). The blocker is the assert at
+perf_takehome.py:729-736 (`2*final_unserved >= 8 + 9*final_served`), which
+caps the final round at 5 served groups because `b3l_fold_diffs` needs
+register funding from unserved groups. **That is an allocation/scratch
+constraint, not a structural one** -- exactly the shape G-33 warns about, and
+admissible to relax under LOOP.md 0b's idealized-machine frame.
+
+### Status of the 940 question, stated honestly
+
+**Floor-wise: YES, reachable -- with 1 cycle of margin that needs four legs
+to hold simultaneously.** The support headroom at 940 is only 16 vec-ops, so
+all of: T2 ring at ~100% coverage, setup at 70 vec-ops (+1 cycle if it is
+really 83), T3 (+2 if omitted), and ideal fold spelling (+4 if the shipped
+`race_sel` spelling is kept). **Realized: NO -- ~950-960.**
+
+**Two named unknowns now decide whether C1* is real at all:**
+
+1. **Ring coverage is uncosted.** T2 assumes the retained-parity ring covers
+   ~100% of served group-rounds; the shipped kernel runs 20-43 rings. At 62
+   vec-ops of residual support the floor is 945; at 160 it is 953. The whole
+   claim lives in that interval.
+2. **K<=16 is census-neutral but may not be cycle-neutral.** T2 at 100%
+   coverage needs 6 vectors/group = 1,533 of 1,536 words, which forces
+   K<=16 (K=32 would need 2,301). P3-C's K-neutrality basis checks out on the
+   census -- but **G-33/H-059 MEASURED that every W<32 loses on realized
+   cycles.** Under our own first methodology rule (score against realized
+   cycles, not engine floors) the measurement outranks the model. **C1* may
+   be floor-feasible and simultaneously unrealizable.**
+
+T3 verified legal but re-priced: flow `add_imm` is scalar (problem.py:332)
+and alu has NO immediate form (problem.py:243-276), so it needs the existing
+`+32`-chain trick (perf_takehome.py:1053) -- 24 lane-ops, not 20. Still
+load-bearing (941 without it).
