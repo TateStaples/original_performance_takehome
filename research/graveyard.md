@@ -712,3 +712,78 @@ Seeded 2026-07-23 from the 2148->1140 campaign's measured rejections.
   bubble — converting compute into loads exactly where 70 load slots and
   ZERO compute slots are free. Opposite of the steady-state trade.
   Bounded <= 35 cycles gross.
+
+### G-35 The "idle engine" hypothesis class (H-063) — RETIRED AS A GENERATOR
+- three directions, all rejected:
+  * **A. bulk-vload the shallow tables: ALREADY THE SHIPPED CODE.**
+    dev.py:2146-2152 fetches the level-1..4 tree words (30 contiguous
+    heap words) with 4 vloads at cycles 6-9, one flow add_imm each, no
+    address arithmetic. Table construction is 59 ops, ALL retired by
+    cycle 14 — the load bubble does not open until cycle 31, and cycles
+    31-64 are 100% steady-state group-round work. Freeing all 78
+    table-construction ops = **0**; freeing EVERY valu op in the head
+    bubble = **0**; only the entire 252-op setup phase together = -13.
+    **The ramp is a CHAIN, not slot pressure.** The residue is lane
+    replication, which memory cannot do: 8 WAW-serialised vstores +
+    1 vload = 9 cycles vs 1 valu slot for vbroadcast (executed, not
+    asserted). And nothing can move IN: only 108 of 1,892 loads have
+    est < 65 against 130 head slots, so 42 head load slots are unusable
+    by ANY scheduler — every load needs an address, and address
+    computation is the compute already saturating the window.
+  * **B. "X +/- b between two live constants" sites: census complete,
+    exactly THREE exist** (via reaching definitions, not addresses —
+    an address-keyed pass gives ~3x false positives because st/nv are
+    both position accumulator and raw parity). (1) steady gather-mode,
+    ALREADY converted by H-029 (166 sites, both arms live); (2)
+    epoch-exit, needs materialised arms, +9; (3) dead under c5_prexor.
+    Fold family re-priced at SCRATCH_SIZE=1e6: auto_fold (1,)/(1,2,3)/()
+    = +18/+23/+28; L4 pairs 0/4/6/8 = +10/+3/+21/+31. The shipped
+    (1,2) x 3 pairs is a STRICT INTERIOR OPTIMUM in both directions.
+  * **C. drain: cpLB > engLB at EVERY cycle 975-1005**, by ~2.5x in the
+    last eleven. Nothing is deferrable in — deferral needs terminal
+    work, and the only terminal work is the 32 result vstores, already
+    at their ready cycles with 0-1 slack.
+- **UNIFYING FINDING: the three "free" resources are unspendable for one
+  reason — 99.6% of this op stream COMPUTES new values, while the idle
+  capacity sits on engines that can only MOVE data.** Four independent
+  closures of the same shape: flow (G-27), store (H-053/G-26), head
+  load, drain load. **"Engine X is idle" is retired as a hypothesis
+  generator on this kernel.**
+- primitive catalogue (validated by execution on frozen_problem.Machine):
+  P1 arbitrary 8-element permute = 8 scalar `store` + 1 vload (8 store
+  slots + 1 load slot + 8 address regs); P2 lane rotation by k = 1-2
+  vstore + 1 vload, 2 cyc latency; P3 8x8 transpose = 8 vstore + 8 vload
+  (8 store + 8 load slots, zero compute). P3 does NOT rescue the
+  sibling-pair vload (16 load slots vs 8, dead by G-34). The scalar
+  `store` opcode remains entirely unused by the kernel.
+- successor ruled in: **H-064 — attack the setup ramp as a 13-cycle
+  CHAIN** (the only setup-side number that is not zero).
+
+### G-36 Planned alu/valu partition vs the retire race (H-060)
+- WEAK ACCEPT (-1) but NOT SHIPPABLE; axis closed.
+- race-margin census (4,357 offloadable sites): 1,024 force_alu, 2,882
+  valu-free (alu never priced), only **451 actually race** (10.4%).
+  ~38% of race outcomes flip under a 1-cycle perturbation — fragile
+  exactly as H-059 predicted. **The real degree of freedom is not the
+  races**: at 2,427 of the 2,882 valu-free sites the alu spelling would
+  have retired on the SAME cycle (+314 within 1), and that reservoir
+  measures worth <= 0.
+- sizing correction: the exchange rate is 8 alu slots per valu slot, so
+  the floors equalize at **17 migrated sites (992/992)**, not 84 — only
+  3 cycles of floor were ever available.
+- sweep: 0 of 60 policy configs beat 1006. Bind walks 995 -> 990 while
+  realized goes 1006 -> 1012 — **third independent confirmation that a
+  lower engine floor is not a win on this kernel**.
+- 0 improving single flips out of 4,357: the race's assignment is an
+  exact local optimum. A neutral-plateau walk reached 1005 (7 seeds +
+  debug_compares, ring audit OK/40, LB 992) but it must pin ALL 4,357
+  sites (a 256-site sparse plan re-drifts to 1009 — G-26
+  self-equilibration measured directly) and it is ORDER-COUPLED: +5
+  median over 150 r12-15 order moves, winning only 16/150. It cannot
+  enter the chain (ring re-mine at fixpoint, l4_gmin pinned by ring
+  literals, order already optimal).
+- **G-33's reopen-if DISCHARGED**: the partition DOES decouple the valu
+  floor from liveness (drift +22 under the race -> flat/-6 at K<=4), but
+  the cycle curve is unchanged (K=16: 1025/1053/1104 vs race
+  1028/1053/1103). H-059's cost was never the floor — it is RAW/chain
+  structure.

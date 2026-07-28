@@ -24,6 +24,13 @@ continue from whatever step the state implies.
    tools/h055_preload_oracle.py (structural/DAG-surgery ceiling, ~2s),
    tools/backtrack_sched.py regret (friction decomposition),
    tools/h059_shadow.py (scratch shadow price).
+   **"ENGINE X IS IDLE" IS RETIRED AS A HYPOTHESIS GENERATOR (G-35).**
+   99.6% of this op stream COMPUTES new values; every idle engine (flow,
+   store, head-window load, drain-window load) can only MOVE data. Four
+   independent closures of that exact shape. Before proposing to spend an
+   idle engine, name the COMPUTE it removes — not the slots it fills.
+   Corollary (G-36, third confirmation): a LOWER ENGINE FLOOR IS NOT A WIN
+   here — bind 995->990 measured realized 1006->1012.
    **NEVER state a constraint in SCRATCH terms without checking it with
    h059_shadow (G-33): three closures — H-041's L5 tables, H-045/H-048's
    ring starvation, H-053's pool purchase — were all phrased as scratch
