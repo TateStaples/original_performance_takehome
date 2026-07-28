@@ -237,6 +237,50 @@ class ListScheduler:
         self.put(engine, slot, cycle, reads, writes, mem_read, mem_write)
         return cycle
 
+    def trial_place(
+        self, encoding: Iterable[tuple[Any, ...]],
+    ) -> tuple[int, list[int]]:
+        """
+        Trial-place one ENCODING (a sequence of `(engine, slot, reads,
+        writes)` micro-ops) against the current schedule WITHOUT committing
+        anything, and report `(retire_cycle, per_micro_op_cycles)`.
+        Micro-ops within the encoding see each other's trial-local
+        RAW/WAW/WAR effects and compete for trial-local engine slots, so the
+        retire time is the max over its micro-ops' placements. Extracted
+        verbatim from `emit_any`'s per-encoding loop, which calls it; H-060's
+        planned alu/valu partition uses it to price an alternative spelling
+        without racing it.
+        """
+        trial_occupancy: dict[Engine, dict[int, int]] = {}
+        trial_last_write: dict[int, int] = {}
+        trial_last_read: dict[int, int] = {}
+        placements: list[int] = []
+        retire = -1
+        for engine, _slot, reads, writes in encoding:
+            cycle = self.ready(reads, writes)
+            for addr in reads:
+                t = trial_last_write.get(addr, -1) + 1
+                if t > cycle:
+                    cycle = t
+            for addr in writes:
+                t = trial_last_write.get(addr, -1) + 1
+                if t > cycle:
+                    cycle = t
+                t = trial_last_read.get(addr, -1)
+                if t > cycle:
+                    cycle = t
+            cycle = self.find_free(engine, cycle, trial_occupancy.setdefault(engine, {}))
+            trial_occupancy[engine][cycle] = trial_occupancy[engine].get(cycle, 0) + 1
+            placements.append(cycle)
+            if cycle > retire:
+                retire = cycle
+            for addr in reads:
+                if trial_last_read.get(addr, -1) < cycle:
+                    trial_last_read[addr] = cycle
+            for addr in writes:
+                trial_last_write[addr] = cycle
+        return retire, placements
+
     def emit_any(
         self,
         encodings: Iterable[Iterable[tuple[Any, ...]]],
@@ -272,34 +316,7 @@ class ListScheduler:
         bias = self.flow_race_bias
         flow_alt: tuple[int, Iterable[tuple[Any, ...]], list[int]] | None = None
         for encoding in encodings:
-            trial_occupancy: dict[Engine, dict[int, int]] = {}
-            trial_last_write: dict[int, int] = {}
-            trial_last_read: dict[int, int] = {}
-            placements: list[int] = []
-            retire = -1
-            for engine, slot, reads, writes in encoding:
-                cycle = self.ready(reads, writes)
-                for addr in reads:
-                    t = trial_last_write.get(addr, -1) + 1
-                    if t > cycle:
-                        cycle = t
-                for addr in writes:
-                    t = trial_last_write.get(addr, -1) + 1
-                    if t > cycle:
-                        cycle = t
-                    t = trial_last_read.get(addr, -1)
-                    if t > cycle:
-                        cycle = t
-                cycle = self.find_free(engine, cycle, trial_occupancy.setdefault(engine, {}))
-                trial_occupancy[engine][cycle] = trial_occupancy[engine].get(cycle, 0) + 1
-                placements.append(cycle)
-                if cycle > retire:
-                    retire = cycle
-                for addr in reads:
-                    if trial_last_read.get(addr, -1) < cycle:
-                        trial_last_read[addr] = cycle
-                for addr in writes:
-                    trial_last_write[addr] = cycle
+            retire, placements = self.trial_place(encoding)
             if best is None or retire < best[0]:
                 best = (retire, encoding, placements)
             if bias and flow_alt is None and len(encodings) > 1 and all(
@@ -319,6 +336,69 @@ class ListScheduler:
         for (engine, slot, reads, writes), cycle in zip(encoding, placements):
             self.put(engine, slot, cycle, reads, writes)
         return retire
+
+
+class _VecPartition:
+    """
+    H-060: a PLANNED (rather than raced) alu/valu assignment for the
+    offloadable vector ops that `_sched_vec` emits.
+
+    Baseline behaviour (`partition is None`, the shipped path) is an
+    emergent, retire-time race: the 8-slot scalar-alu spelling is only ever
+    *considered* when the valu engine happens to be backed up at the site's
+    hazard-ready cycle, and then only wins if it retires no later. H-059
+    (G-33) showed the resulting split is a function of how much ILP is live
+    at each decision (fewer live groups => fewer alu offloads => the 6-wide
+    binder takes more work), and H-053 (G-26) showed it self-equilibrates
+    against deliberate migrations. This object decides the split up front
+    instead.
+
+    Sites are numbered in EMISSION order over every `_sched_vec` call that
+    reaches the scalarizable branch (including `force_alu` ones), which is a
+    pure function of the emission plan and the flag set -- unlike
+    `ListScheduler.aux_site_idx`, which only advances when the race actually
+    fires and so renumbers whenever the schedule shifts.
+
+    Knobs (all inert at their defaults; `active()` False => the caller
+    passes None and the untouched code path runs):
+      plan            {site: 'a'|'v'} forced spelling, applied
+                      unconditionally and overriding `force_alu`. Every
+                      spelling of a site is semantically equivalent, so ANY
+                      plan is correct by construction; only cycles move.
+      tie_offload K   K > 0: at sites where valu was FREE (so the shipped
+                      code never even prices alu), race the two spellings
+                      anyway at every site with `site % K == tie_phase`,
+                      ties going to alu. K = 1 races every such site.
+      reclaim_margin M  M >= 0: at sites where the race DOES fire, hand the
+                      site back to valu whenever alu's win margin is <= M
+                      (M = 0 reclaims exact ties). The inverse direction:
+                      spend >= 0 local cycles to keep 8 alu slots free.
+
+    NOTE: `tie_offload` adds emit_any race sites, which advances
+    `aux_site_idx` and therefore renumbers the negative keys of
+    `flow_spelling_plan`. The two should not be combined without
+    re-deriving the spelling plan (the 1006 frontier ships an empty one).
+    """
+
+    __slots__ = ("plan", "tie_offload", "tie_phase", "reclaim_margin", "site")
+
+    def __init__(self, plan: Iterable[Any] = (),
+                 tie_offload: int = 0, tie_phase: int = 0,
+                 reclaim_margin: int = -1) -> None:
+        # Accepts either sparse `(site, spelling)` pairs or a DENSE sequence
+        # of spellings indexed by site (what the JSON artifacts ship).
+        entries = list(plan)
+        if entries and isinstance(entries[0], str):
+            entries = list(enumerate(entries))
+        self.plan: dict[int, str] = {int(k): str(v) for k, v in entries}
+        assert all(v in ("a", "v") for v in self.plan.values())
+        self.tie_offload = int(tie_offload)
+        self.tie_phase = int(tie_phase)
+        self.reclaim_margin = int(reclaim_margin)
+        self.site = 0
+
+    def active(self) -> bool:
+        return bool(self.plan) or self.tie_offload > 0 or self.reclaim_margin >= 0
 
 
 def _compute_temp_coloring(
@@ -610,13 +690,18 @@ class KernelBuilder:
 
     def _sched_vec(self, scheduler: ListScheduler, op: str, dest: int, a: int, b: int,
                    allow_alu: bool = False, force_alu: bool = False,
-                   valu_ties: bool = False) -> int:
+                   valu_ties: bool = False,
+                   partition: "_VecPartition | None" = None) -> int:
         """
         Emit an elementwise vector op, either as one valu slot or -- when the
         valu engine is backed up and the (otherwise idle) scalar alu can
         retire all 8 lanes no later -- as 8 scalar alu slots. `force_alu`
         skips the comparison and always scalarizes (used to statically
         reserve valu slots for multiply_adds, which alu can't run).
+
+        H-060: when `partition` is given, the alu/valu choice is taken from a
+        pre-decided plan/policy instead of from the retire-time race; see
+        `_VecPartition`. `partition is None` is the untouched path.
         """
         reads = self._v(a) + self._v(b)
         writes = self._v(dest)
@@ -625,6 +710,11 @@ class KernelBuilder:
                 ("alu", (op, dest + i, a + i, b + i), (a + i, b + i), (dest + i,))
                 for i in range(VLEN)
             )
+            if partition is not None:
+                return self._sched_vec_planned(
+                    scheduler, op, dest, a, b, reads, writes, alu_enc,
+                    force_alu, valu_ties, partition,
+                )
             if force_alu:
                 return scheduler.emit_any((alu_enc,))
             hazard_ready_cycle = scheduler.ready(reads, writes)
@@ -641,6 +731,58 @@ class KernelBuilder:
             scheduler.put("valu", (op, dest, a, b), valu_free_cycle, reads, writes)
             return valu_free_cycle
         valu_free_cycle = scheduler.find_free("valu", scheduler.ready(reads, writes))
+        scheduler.put("valu", (op, dest, a, b), valu_free_cycle, reads, writes)
+        return valu_free_cycle
+
+    def _sched_vec_planned(self, scheduler: ListScheduler, op: str, dest: int,
+                           a: int, b: int, reads: tuple[int, ...],
+                           writes: tuple[int, ...],
+                           alu_enc: tuple[Any, ...], force_alu: bool,
+                           valu_ties: bool,
+                           partition: "_VecPartition") -> int:
+        """
+        H-060: `_sched_vec`'s scalarizable branch under a planned alu/valu
+        partition. Only reached when `vec_partition*` is configured; the
+        shipped path never constructs a `_VecPartition` (see
+        build_kernel_scheduled), so this whole method is dead code by
+        default.
+        """
+        site = partition.site
+        partition.site += 1
+        valu_enc = ((("valu", (op, dest, a, b), reads, writes),),)
+
+        def put_valu() -> int:
+            cycle = scheduler.find_free("valu", scheduler.ready(reads, writes))
+            scheduler.put("valu", (op, dest, a, b), cycle, reads, writes)
+            return cycle
+
+        choice = partition.plan.get(site)
+        if choice == "a":
+            return scheduler.emit_any((alu_enc,))
+        if choice == "v":
+            return put_valu()
+        if force_alu:
+            return scheduler.emit_any((alu_enc,))
+
+        hazard_ready_cycle = scheduler.ready(reads, writes)
+        valu_free_cycle = scheduler.find_free("valu", hazard_ready_cycle)
+        if valu_free_cycle > hazard_ready_cycle:
+            # The shipped race site. Optionally RECLAIM it for valu when the
+            # alu spelling's win is marginal (<= reclaim_margin cycles).
+            if partition.reclaim_margin >= 0:
+                alu_retire, _ = scheduler.trial_place(alu_enc)
+                if valu_free_cycle - alu_retire <= partition.reclaim_margin:
+                    scheduler.put("valu", (op, dest, a, b), valu_free_cycle,
+                                  reads, writes)
+                    return valu_free_cycle
+            encs = (alu_enc,) + valu_enc
+            return scheduler.emit_any(encs[::-1] if valu_ties else encs)
+
+        # valu had a free slot: the shipped code takes it without ever
+        # pricing alu. tie_offload races here too (ties -> alu).
+        k = partition.tie_offload
+        if k > 0 and site % k == partition.tie_phase:
+            return scheduler.emit_any((alu_enc,) + valu_enc)
         scheduler.put("valu", (op, dest, a, b), valu_free_cycle, reads, writes)
         return valu_free_cycle
 
@@ -684,6 +826,10 @@ class KernelBuilder:
         parity_ring_extras: tuple[int, ...] = (),
         parity_ring_plan: tuple[tuple[tuple[int, int], tuple[int, int, int]], ...] = (),
         flow_spelling_plan: tuple[tuple[int, int], ...] = (),
+        vec_partition_plan: tuple[tuple[int, str], ...] = (),
+        vec_tie_offload: int = 0,
+        vec_tie_phase: int = 0,
+        vec_reclaim_margin: int = -1,
         flow_race_bias: int = 0,
         flow_race_bias_window: tuple[int, int] | None = None,
         flow_race_bias_budget: int | None = None,
@@ -756,6 +902,12 @@ class KernelBuilder:
           be split into 8 scalar alu slots when that retires them earlier
           (see `_sched_vec`), raising compute throughput from 6 to up to
           7.5 vector-ops/cycle.
+
+        - Planned alu/valu partition (H-060, `vec_partition_plan`,
+          `vec_tie_offload`, `vec_tie_phase`, `vec_reclaim_margin`): decide
+          that split UP FRONT instead of racing it at retire time. See
+          `_VecPartition`; all four knobs default to their inert values and
+          the shipped path never constructs a partition object.
 
         - Parity-early (`parity_early`, H-002): the next round's gather
           address / tournament position needs ONLY bit0 of the hashed
@@ -1681,8 +1833,18 @@ class KernelBuilder:
             scheduler.emit("valu", ("vbroadcast", d, src), (src,), self._v(d))
             return d
 
+        # H-060: planned alu/valu partition. Constructed only when one of the
+        # vec_partition knobs is set; `None` keeps _sched_vec's untouched
+        # retire-race path (bit-identical to the flag's absence).
+        vec_partition: _VecPartition | None = _VecPartition(
+            vec_partition_plan, vec_tie_offload, vec_tie_phase,
+            vec_reclaim_margin)
+        if not vec_partition.active():
+            vec_partition = None
+
         vec: Callable[[str, int, int, int], int] = lambda op, dst, a, b: self._sched_vec(
-            scheduler, op, dst, a, b, alu_offload, valu_ties="vec_valu" in tie_break_modes
+            scheduler, op, dst, a, b, alu_offload, valu_ties="vec_valu" in tie_break_modes,
+            partition=vec_partition,
         )
         # H-007 follow-up: avec's stage1 hash xor-shift ops are normally
         # force_alu'd under alu_offload (blanket-reserve valu for madds;
@@ -1695,7 +1857,8 @@ class KernelBuilder:
             scheduler, op, dst, a, b,
             allow_alu=alu_offload,
             force_alu=alu_offload and not hash1_avec_race,
-            valu_ties="vec_valu" in tie_break_modes
+            valu_ties="vec_valu" in tie_break_modes,
+            partition=vec_partition,
         )
         madd: Callable[[int, int, int, int], int] = lambda dst, a, b, c: self._sched_madd(scheduler, dst, a, b, c)
         vsel: Callable[[int, int, int, int], int] = lambda dst, cond, a, b: self._sched_vsel(scheduler, dst, cond, a, b)

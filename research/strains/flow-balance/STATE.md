@@ -1674,3 +1674,262 @@ makes every extra flow encoding in B lose.
   provably unusable), drain load (H-063 C, cp-bound). Four independent
   closures of the same shape. A resource is only a lever if the op stream
   contains work of that resource's KIND.
+
+## H-060 (Phase 2, 2026-07-28): planned alu/valu partition instead of the retire race — WEAK ACCEPT (-1), AXIS CLOSED
+
+**Question (from G-33's reopen-if + G-26).** `_sched_vec` decides each
+offloadable vector op's spelling — 1 valu slot, or 8 scalar alu slots — by a
+retire-time RACE. H-059 showed the resulting split is a function of live-group
+count (fewer live groups => fewer offloads => the 6-wide binder takes more
+work, valu floor 1008 -> 1010 -> 1018 at W=32/24/16) and H-053 showed it
+self-equilibrates against deliberate migrations. Would a split decided UP
+FRONT — liveness-independent and immune to drift — do better?
+
+**Answer: yes, by exactly 1 cycle, and only as a 4,357-entry per-site plan
+that no chain step can carry. Every *policy* form of the partition is
+neutral-or-worse. G-33's reopen-if is DISCHARGED: the partition really does
+decouple the valu floor from liveness, and the liveness curve still does not
+flatten, because the floor was never what made it rise.**
+
+### 1. The race, instrumented (`tools/h060_race.py`)
+
+Logging copy of `_sched_vec` (verified to reproduce the 1006 instruction
+stream bit-for-bit) prices BOTH spellings at every offloadable site.
+
+| site class | count | meaning |
+|---|---|---|
+| `forced` | 1,024 | hash-stage-1 `^`/`>>`, blanket `force_alu` (H-007) |
+| `valu_free` | 2,882 | valu had a slot at the hazard-ready cycle — **alu is never priced** |
+| `race` | 451 | valu backed up; the two spellings actually race |
+
+**The race almost never runs.** Only 451 of 4,357 sites (10.4%) reach it. Of
+those, alu wins 349 / valu 102.
+
+Margin distribution at the 451 race sites (`r_valu - r_alu`):
+
+| alu-win margin | 0 | 1 | 2 | 3 | 4 | 5 | 6-15 | >15 |
+|---|---|---|---|---|---|---|---|---|
+| count | 29 | 128 | 68 | 42 | 28 | 15 | 25 | 14 |
+
+| valu-win margin | 1 | 2 | 3 | 4 | 5 | 6-10 | 11-21 |
+|---|---|---|---|---|---|---|---|
+| count | 16 | 16 | 6 | 5 | 4 | 28 | 27 |
+
+**157 / 349 alu wins are marginal (margin <= 1); 16 / 102 valu wins are.**
+So ~38% of all race outcomes would flip under a 1-cycle perturbation — the
+race IS fragile, as H-059 said.
+
+**The bigger finding is on the non-race sites.** At **2,427 of the 2,882**
+valu-free sites the alu spelling would have retired on the SAME cycle
+(margin 0), and 314 more within 1 cycle. The shipped code takes valu at all
+of them without ever pricing alu. There is a 2,427-site retire-time-neutral
+offload reservoir the race structurally cannot see — the largest single
+degree of freedom on this axis.
+
+Per op: `^` 1,840 valu_free / 512 forced / 301 race-alu / 83 race-valu;
+`>>` 503 / 512 / 8 / 1; `&` 477 / 0 / 33 / 16; `-` 62 / 0 / 7 / 2.
+
+### 2. The mechanism (`dev.py`, flag-gated, default-OFF)
+
+- `ListScheduler.trial_place(encoding)` — `emit_any`'s per-encoding trial
+  placement extracted verbatim (emit_any now calls it), so a spelling can be
+  PRICED without racing it.
+- `_VecPartition` + `_sched_vec(partition=...)` + `_sched_vec_planned`,
+  driven by four kwargs on `build_kernel_scheduled`:
+  * `vec_partition_plan` — per-site `'a'`/`'v'`, sparse pairs or a dense
+    list. Sites numbered in EMISSION order over every scalarizable
+    `_sched_vec` call (unlike `aux_site_idx`, which only advances when the
+    race fires and so renumbers whenever the schedule shifts).
+  * `vec_tie_offload K` / `vec_tie_phase` — race the alu spelling at
+    valu-FREE sites too (ties -> alu) at every K-th site: the valu -> alu
+    direction, a target-ratio knob.
+  * `vec_reclaim_margin M` — hand race sites back to valu when alu's win
+    margin <= M: the alu -> valu direction.
+- Every spelling is semantically equivalent, so ANY plan is correct by
+  construction; only cycles move.
+
+`tools/h060_verify.py` (programmatic): bit-identical to `git show main:dev.py`
+at {flags absent, flags at inert values} x {frontier, ring-free, ring-free +
+gmin (9,30), hash1_avec_race, tie_break vec_valu} — instruction stream,
+`scratch_next_addr` and the scratch debug map. **And the control that makes
+the sweep meaningful: a 4,357-entry plan read off the raced build replays
+1006 bit-for-bit**, so the mechanism can express the race exactly and any
+difference below is a real policy difference, not a mechanism artifact.
+
+### 3. The balance sweep (`tools/h060_sweep.py`, 1006 frontier)
+
+Sizing first: one migrated site trades 1 valu slot for 8 alu slots, so from
+(alu 11,761 / floor 981; valu 5,966 / floor 995) the floors equalise at
+**x = 17 sites (992/992)** — NOT the ~84 the charter estimated (that used a
+1:1 rate). Total floor relief available from rebalancing is 3 cycles.
+
+| target | realized | valu | alu | valu floor | alu floor | bind | regret |
+|---|---|---|---|---|---|---|---|
+| race (baseline) | **1006** | 5,966 | 11,761 | 995 | 981 | 995 | 11 |
+| tie_offload K=2048 | 1006 | 5,961 | 11,737 | 994 | 979 | 994 | 12 |
+| tie_offload K=1024 | 1006 | 5,955 | 11,769 | **993** | 981 | **993** | 13 |
+| tie_offload K=96 | 1006 | 5,954 | 11,777 | 993 | 982 | 993 | 13 |
+| tie_offload K=64 | 1008 | 5,952 | 11,801 | 992 | 984 | 992 | 16 |
+| tie_offload K=24 | 1012 | 5,940 | 11,865 | **990** | 989 | **990** | 22 |
+| tie_offload K=16 | 1012 | 5,942 | 11,873 | 991 | 990 | 991 | 21 |
+| tie_offload K=12 | 1012 | 5,934 | 11,905 | 989 | 993 | 993 | 19 |
+| tie_offload K=6 | 1019 | 5,914 | 12,017 | 986 | 1,002 | 1,002 | 17 |
+| tie_offload K=4 | 1080 | 5,818 | 12,809 | 970 | 1,068 | 1,068 | 12 |
+| tie_offload K=1 (all) | 2000 | 4,412 | 23,881 | 736 | 1,991 | 1,991 | 9 |
+| reclaim M=0 (ties only) | 1012 | 5,982 | 11,769 | 997 | 981 | 997 | 15 |
+| reclaim M=1 | 1015 | 6,004 | 11,681 | 1,001 | 974 | 1,001 | 14 |
+| reclaim M=3 | 1022 | 6,044 | 11,513 | 1,008 | 960 | 1,008 | 14 |
+| reclaim M=inf (never offload) | 1052 | 6,246 | 9,753 | 1,041 | 813 | 1,041 | 11 |
+
+Plus a phase scan at K in {256,128,64} (24 more points) and 6 K x reclaim
+combinations. **0 of 60 policy configs beat 1006.**
+
+The sweep reproduces G-26's methodology warning exactly: `tie_offload` walks
+the bind from 995 down to **990** (a 5-cycle floor improvement, straight
+through the equalization point) and the realized cycle count goes from 1006
+to **1012**. Regret absorbs the relief 1:1 and then some. Floors are not
+causal here; the schedule is RAW-bound (G-26: freeing ALL 7,051 vector ops
+buys only 13).
+
+### 4. The offline-searched per-site plan (`tools/h060_plan.py`)
+
+`scan`: every single-site flip from the race's own assignment, all 4,357
+sites (~65 s at 8 workers).
+
+| delta | <= -1 | 0 | +1 | +2 | +3 | +5 | +7 | +13 | other |
+|---|---|---|---|---|---|---|---|---|---|
+| flips | **0** | 787 | 120 | 65 | 140 | 428 | 927 | 667 | 1,223 |
+
+**Zero improving single flips out of 4,357.** The race's assignment is an
+exact local optimum of the full per-site partition landscape at 1006 (also
+checked restricted to the 451 race sites alone: 0/451 improving).
+
+`plateau`: the 787 neutral flips form a plateau, so walk it — accept any flip
+that does not raise the count, re-scan, repeat. Round 0 found **1005**. Seven
+further rounds (~1,300 more accepted neutral flips, two seeds) found nothing
+below 1005; every round's best single flip from the incumbent was +0.
+
+**1005 = -1 vs the race**, `correct: true` at {unseeded, 1, 2, 3, 7, 42, 99}
+and under `debug_compares=True`. Artifact `tools/h060_best_plan_1005.json`.
+Census alu 11,713 / valu 5,948 / flow 805 / load 1,892 (20,404 ops, 58 FEWER
+than 1006 — the shifted schedule also re-resolves downstream `dual_fold` and
+idx races). Bounds: LB 992 / energetic 993 / fungible 989 / cp 514 /
+all-lags-zero 1001; regret 13 (ramp 5 + mid 0 + drain 3). Ring audit CLEAN
+(`OK over 40 rings`, 0 new rings fundable — the ring plan is already at its
+fixpoint on the 1005 stream). Grader green flags-off (9/9, CYCLES 1006).
+
+**The plan must pin ALL 4,357 sites.** 256 of them differ from the race's own
+choice (greedily minimised from 400), but shipping only those 256 as a sparse
+plan and letting the rest fall back to the race gives **1009**, not 1005 —
+the unpinned sites re-drift under the shifted schedule and give the cycle
+back. That is G-26's self-equilibration reproduced as a direct measurement:
+**the race actively undoes a partial migration.**
+
+### 5. Composition — the plan cannot enter the chain (`tools/h060_compose.py`)
+
+A `vec_partition_plan` is emission-order-indexed, exactly like
+`flow_spelling_plan`'s negative keys. Over 150 single-displacement order
+perturbations in the productive r12-15 window:
+
+| | best | mean | wins |
+|---|---|---|---|
+| race | 1006 | 1011.3 | — |
+| stale 1005 plan on the same orders | 1005 | 1016.0 | 16 / 150 |
+
+plan-minus-race deltas: min -6, p25 +2, **median +5**, p75 +7, max +15. The
+plan is worth -1 at its own stream and +5 typical one move away. Carrying it
+through an order walk is unsound; co-searching it means nesting a ~10-minute
+plateau search inside every order evaluation.
+
+The other chain steps are no-ops or blocked at this point: ring re-mine
+reports 0 new fundable rings at the 1005 stream (fixpoint); l4_gmin cannot
+re-slide without dropping the ring literals (they pin it, asserts fire); and
+the order itself is at a local optimum — the race's best over the same 150
+perturbations is 1006, i.e. there is no order improvement to compose with.
+
+**Where the partition IS worth something is on UNWALKED streams.** Ring-free
+at the same order, sweeping `tie_offload` x `l4_gmin` (120 points;
+`vec_tie_offload` is order-INdependent so this composes legitimately): race
+best 1026, policy best **1024** at K=16 / gmin (5,31) or (7,31) — **-2**. On
+H-059's own ring-free W=32 reference the policy is worth **-3** (1028 ->
+1025 at K=16). The chain absorbs the partition's value: ~-3 before the chain,
+-1 after it.
+
+### 6. G-33's reopen-if — DISCHARGED (`tools/h060_liveness.py`)
+
+G-33 reopens "if the alu/valu assignment stops depending on live-group count,
+which would decouple the valu floor from liveness and make the curve flat."
+Re-running H-059's own curve points (h059_alias lag vectors, ring-free,
+`group_window` aliasing) under the planned partition:
+
+| policy | W=32 | W=24 | W=16 | valu-floor drift |
+|---|---|---|---|---|
+| race — cycles | 1028 | 1053 | 1103 | |
+| race — valu floor | 1008 | 1016 | 1030 | **+22** |
+| race — alu floor | 993 | 967 | 929 | |
+| K=16 — cycles | 1025 | 1053 | 1104 | |
+| K=16 — valu floor | 1006 | 1009 | 1016 | **+10** |
+| K=4 — cycles | 1087 | 1100 | 1123 | |
+| K=4 — valu floor | 994 | 990 | 988 | **-6 (FLAT)** |
+| K=1 — valu floor | 746 | 746 | 744 | **-2 (FLAT)** |
+
+**The first half of the reopen-if is CONFIRMED and the second half is
+FALSIFIED.** A planned partition genuinely decouples the valu floor from
+liveness (at K <= 4 the floor is flat or falling as W shrinks, versus +22
+under the race) — but the cycle curve does NOT flatten. At K=16 the floors
+move by up to 14 cycles across W while realized cycles are 1025/1053/1104
+against the race's 1028/1053/1103 — the same curve. At W=16 under K=16 the
+bind is 1016 and the realized is 1104: regret 88, unchanged.
+
+**H-059's cost was never the floor.** Liveness reduction costs ~75 cycles of
+RAW/chain structure between W=32 and W=16; the alu/valu split was a
+correlate, not the cause. G-33 stands and its reopen-if is now spent.
+
+### Verdict
+
+**WEAK ACCEPT as a measurement, CLOSE as an axis.** The hypothesis is
+literally true — the race is a myopic policy, it is fragile (38% of its
+outcomes are within 1 cycle of flipping), it never even prices alu at 2,427
+retire-time-neutral sites, and it actively undoes partial migrations — and a
+fully-planned partition does beat it, by **1 cycle (1006 -> 1005)**. But:
+
+1. Every liveness-independent, order-independent, chainable form of the
+   partition (the `tie_offload` / `reclaim` policies, 60 configs) is
+   neutral-or-worse at the frontier. Only a 4,357-entry per-site plan wins.
+2. That plan is a stream-specific artifact: +5 median one order-move away,
+   and it must pin every site or the race re-equilibrates it back to 1009.
+3. The whole rebalancing range is worth 3 cycles of floor (the exchange rate
+   is 8 alu slots per valu slot; equalization is at 17 sites, not 84), and
+   the schedule does not convert floor relief into cycles at all — 5 cycles
+   of bind relief measured as +6 realized.
+4. The partition's value shrinks as the stream is optimised: -3 ring-free,
+   -1 at the chained frontier. The standing chain already captures it.
+
+**SHIP DECISION: do not ship.** -1 for a 4,357-entry order-coupled artifact
+that blocks future order walks (any re-walk silently costs ~+5 unless the
+plan is re-derived) is a bad trade against a frontier whose remaining regret
+is 13. Recorded; mechanism landed default-OFF; artifact kept for
+re-measurement.
+
+reopen-if: (a) the emission order stops being a live search axis (then the
+order-coupling objection disappears and the -1 is free); or (b) a stream
+appears whose regret is dominated by engine floors rather than RAW structure
+— `tools/free_slot_oracle.py` / `tools/h060_sweep.py` decide that in one run;
+or (c) the alu:valu exchange rate changes (an op whose scalar spelling costs
+fewer than 8 slots, or a wider valu), which would move the equalization point
+off 17 sites.
+
+### Follow-ups
+
+- **`tools/h060_race.py` is a cheap standing diagnostic** for any hypothesis
+  phrased as "the offload is going to the wrong engine": it prints the full
+  margin distribution and the size of the unpriced valu-free reservoir in
+  0.25 s.
+- **The 2,427 retire-neutral valu-free sites are the real degree of freedom
+  on this axis** and they are measured worth <= 0 at this mix. Any future
+  respelling hypothesis should be pre-screened against `h060_sweep`'s
+  K-curve before it is built.
+- **Third independent confirmation for the standing methodology: a lower
+  engine floor is NOT a win on this kernel.** G-26 said it, H-059 said it,
+  and H-060's K-sweep says it with a monotone counter-example (bind
+  995 -> 990 while realized goes 1006 -> 1012).
