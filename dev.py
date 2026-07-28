@@ -847,6 +847,9 @@ class KernelBuilder:
         derive_consts: bool = False,
         flow_residual_consts: bool = False,
         alu_val_addrs: bool = False,
+        va_chain_width: int = 0,
+        derive_consts_exclude: tuple[str, ...] = (),
+        setup_lv_addr_alu: bool = False,
         lazy_val_loads: bool = False,
         hash1_avec_race: bool = False,
         store_pair: bool = False,
@@ -1349,6 +1352,8 @@ class KernelBuilder:
                 reverse_newest_parity_fold_at_shallow_levels=reverse_newest_parity_fold_at_shallow_levels,
                 emit_order=emit_order, flow_consts=flow_consts, vals_first=vals_first,
                 tie_break=tie_break, derive_consts=derive_consts, alu_val_addrs=alu_val_addrs,
+                va_chain_width=va_chain_width, setup_lv_addr_alu=setup_lv_addr_alu,
+                derive_consts_exclude=derive_consts_exclude,
                 lazy_val_loads=lazy_val_loads, store_pair=store_pair,
                 store_disjoint_region=store_disjoint_region,
                 mem_prime_ignore_l4_hazard=mem_prime_ignore_l4_hazard,
@@ -1390,6 +1395,8 @@ class KernelBuilder:
                 reverse_newest_parity_fold_at_shallow_levels=reverse_newest_parity_fold_at_shallow_levels,
                 emit_order=emit_order, flow_consts=flow_consts, vals_first=vals_first,
                 tie_break=tie_break, derive_consts=derive_consts, alu_val_addrs=alu_val_addrs,
+                va_chain_width=va_chain_width, setup_lv_addr_alu=setup_lv_addr_alu,
+                derive_consts_exclude=derive_consts_exclude,
                 lazy_val_loads=lazy_val_loads, store_pair=store_pair,
                 store_disjoint_region=store_disjoint_region,
                 mem_prime_ignore_l4_hazard=mem_prime_ignore_l4_hazard,
@@ -2083,6 +2090,13 @@ class KernelBuilder:
             four_c = self.const_map[4]
 
             def dconst(val: int, name: str, *steps: tuple[str, int | None, int | None]) -> int:
+                if name[3:] in derive_consts_exclude:
+                    # H-064: derivation trades a load slot for alu ops AND
+                    # for chain DEPTH -- dc_k0 is the first five ops of the
+                    # est-critical path (const -> dc_eight -> << -> + ->
+                    # vbroadcast).  Naming it here reverts that one
+                    # constant to a plain `load:const`, depth 2.
+                    return const(val, name)
                 addr = self.alloc_scratch(name)
                 for op, a, b in steps:
                     a = addr if a is None else a
@@ -2225,20 +2239,33 @@ class KernelBuilder:
                 # va otherwise book flow solid to ~cycle 40, gating the
                 # val vloads at 1/cycle AND crowding the tournament fold
                 # vselect races off flow).
+                # H-064: `va_chain_width` widens the four chains to W (the
+                # chain depth is then ceil(n_groups / W) instead of 8), by
+                # deriving the extra 8*g offset scalars on the same idle
+                # alu.  W == 0 keeps H-024's exact four-chain emission.
+                W = va_chain_width or 4
                 if not val_addr_offset_consts:
                     c8, c16 = const(8), const(16)
-                    t24 = self.alloc_scratch("va_c24")
-                    scheduler.emit("alu", ("+", t24, c8, c16), (c8, c16), (t24,))
-                    t32 = self.alloc_scratch("va_c32")
-                    scheduler.emit("alu", ("+", t32, c16, c16), (c16,), (t32,))
-                    val_addr_offset_consts.update({1: c8, 2: c16, 3: t24, "step": t32})
+                    off: dict[int | str, int] = {1: c8, 2: c16}
+                    # 8*j for j = 3..W (j == W is the chain step); each is
+                    # one alu add of two already-derived offsets, so the
+                    # offset block itself is only ceil(log2(W)) deep.
+                    for j in range(3, W + 1):
+                        t = self.alloc_scratch(f"va_c{8 * j}")
+                        lo = j // 2
+                        hi = j - lo
+                        rd = (off[lo],) if lo == hi else (off[lo], off[hi])
+                        scheduler.emit("alu", ("+", t, off[lo], off[hi]), rd, (t,))
+                        off[j] = t
+                    off["step"] = off[W]
+                    val_addr_offset_consts.update(off)
                 if g == 0:
                     scheduler.emit("alu", ("|", a, ivp, ivp), (ivp,), (a,))
-                elif g < 4:
+                elif g < W:
                     h = val_addr_offset_consts[g]
                     scheduler.emit("alu", ("+", a, ivp, h), (ivp, h), (a,))
                 else:
-                    prev, stp = val_addrs[g - 4], val_addr_offset_consts["step"]
+                    prev, stp = val_addrs[g - W], val_addr_offset_consts["step"]
                     assert prev is not None
                     scheduler.emit("alu", ("+", a, prev, stp), (prev, stp), (a,))
             else:
@@ -2309,10 +2336,35 @@ class KernelBuilder:
             level_table_word_count = 2 ** ((L4 if has_pair_tournament_service else tournament_level_count) + 1) - 2
             level_table = self.alloc_scratch("lv", ((level_table_word_count + VLEN - 1) // VLEN) * VLEN)
             level_table_addr = self.alloc_scratch("lv_addr")
-            for blk in range(0, level_table_word_count, VLEN):
-                scheduler.emit("flow", ("add_imm", level_table_addr, fp, 1 + blk), (fp,), (level_table_addr,))
-                scheduler.emit("load", ("vload", level_table + blk, level_table_addr),
-                       (level_table_addr,), self._v(level_table + blk), mem_read=True)
+            if setup_lv_addr_alu:
+                # H-064: the shipped form walks ONE `lv_addr` register with
+                # `add_imm` on the 1-wide flow engine, so the four table
+                # vloads are serialised twice over (flow width AND the WAR
+                # edge vload->next add_imm): they land at cycles 6,7,8,9.
+                # Give each block its own address register, computed on the
+                # ramp-idle alu from offsets derived off `one_c`, so all
+                # four vloads are independent and only the 2-wide load
+                # engine orders them.
+                # Scratch is full (1533/1536 words), so this reuses the
+                # existing `lv_addr` word for block 0 and allocates one
+                # word per remaining block: a0 = fp + 1, a_{k} = a_{k-1} + 8.
+                # Depth 1 per block instead of 1 flow slot + a WAR edge.
+                c8 = val_addr_offset_consts.get(1) or const(8)
+                prev = level_table_addr
+                scheduler.emit("alu", ("+", prev, fp, one_c), (fp, one_c), (prev,))
+                scheduler.emit("load", ("vload", level_table, prev),
+                       (prev,), self._v(level_table), mem_read=True)
+                for blk in range(VLEN, level_table_word_count, VLEN):
+                    a_lv = self.alloc_scratch(f"lv_addr{blk}")
+                    scheduler.emit("alu", ("+", a_lv, prev, c8), (prev, c8), (a_lv,))
+                    scheduler.emit("load", ("vload", level_table + blk, a_lv),
+                           (a_lv,), self._v(level_table + blk), mem_read=True)
+                    prev = a_lv
+            else:
+                for blk in range(0, level_table_word_count, VLEN):
+                    scheduler.emit("flow", ("add_imm", level_table_addr, fp, 1 + blk), (fp,), (level_table_addr,))
+                    scheduler.emit("load", ("vload", level_table + blk, level_table_addr),
+                           (level_table_addr,), self._v(level_table + blk), mem_read=True)
             if c5_prexored_value_domain:
                 # Prime every loaded tree word in place: lv[i] ^= C5.
                 for blk in range(0, level_table_word_count, VLEN):

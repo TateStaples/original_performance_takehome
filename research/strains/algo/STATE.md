@@ -2449,3 +2449,243 @@ therefore easiest to attribute.
 - Priming levels >= 8 (section 6).
 - Looking for latency relief: the dependency skeleton is 314 cycles against
   a 940 target (section 7).
+
+## H-064 (2026-07-28): the setup ramp as a dependency CHAIN — **NEGATIVE, and it invalidates its own premise**. The "-13" that motivated the hypothesis is a CONTAMINATED measurement; a clean relaxation prices the entire setup phase at **-2**, every restructuring measured 0 or worse, and H-062 (folded in) is negative by ~80 cycles. This closes the last identified non-zero lever.
+
+Tools: `tools/h064_chain.py` (chain extraction: est / lst / slack / binding
+predecessor for every op, plus the setup-only subgraph), `tools/h064_oracle.py`
+(windowed-capacity + op-level free/pin/lag oracle over `backtrack_sched`'s
+offline greedy, asserted bit-exact against dev's real placement on every run).
+New dev.py flags, all default-OFF and verified BIT-IDENTICAL off (bundle
+stream + `scratch_next_addr` compared against the pre-patch build):
+`va_chain_width`, `setup_lv_addr_alu`, `derive_consts_exclude`.
+
+### 0. THE PREMISE WAS AN ARTIFACT (the most important finding here)
+
+H-063's headline — "freeing every setup engine separately = 0 but freeing
+the whole 252-op setup TOGETHER = -13, therefore the ramp is a serial
+chain" — does not survive checking. `tools/h063_oracle.py` frees ops by
+**rerouting them to the `debug` engine inside a live dev build**, and dev's
+adaptive engine races (`alu_offload`, the idx/flow races) read scheduler
+occupancy to pick an engine. Freeing setup therefore changes the OP STREAM,
+not just its placement:
+
+| census | baseline | setup rerouted to debug | a pure relaxation would give |
+|---|---|---|---|
+| alu | 11,761 | **11,600** | 11,696 |
+| valu | 5,966 | 5,904 | 5,907 |
+| flow | 797 | **782** | 775 |
+| load | 1,892 | 1,832 | 1,832 |
+| store | 46 | 0 | 0 |
+
+That build emits **96 fewer alu ops** and 7 more flow ops than the same
+program with the slots merely removed. And of its 13 cycles, 5 are bundles
+that became *empty* (cycles 0,1,2,3 and 997 hold only debug slots, which do
+not count) and ~8 are floor relief (valu 995 -> 982, alu 981 -> 975) —
+which G-36 has now rejected three times as a proxy for cycles.
+
+**Clean measurement.** `h064_oracle` runs the offline greedy (validated
+`place == real place`, 1006 cycles, 20,462 ops, every invocation) with the
+program held fixed and only slot cost / placement relaxed:
+
+| relaxation of the SETUP phase (program unchanged) | cycles | delta |
+|---|---|---|
+| all 268 setup ops slot-free | 1004 | **-2** |
+| all 268 setup ops slot-free AND pinned to cycle 0 | 1004 | **-2** |
+| ... AND every setup->consumer edge given lag 0 (values resident at c0) | 1004 | **-2** |
+| head setup only (placed < 40) free + pinned + zero-latency | 1005 | -1 |
+| head setup only (placed < 16) free + pinned + zero-latency | 1010 | +4 |
+| head setup only (placed < 12) free + pinned + zero-latency | 1011 | +5 |
+
+**The ceiling for H-064 is 2 cycles**, and that ceiling is physically
+unreachable: the shortest path from program start to any input datum is
+`const`(c0) -> `load` pointer(c1) -> `vload`(c2) -> readable(c3), so setup
+can never be instantaneous. The partial-window rows are *positive* because
+greedy is non-monotone here (section 3).
+
+### 1. THE CHAIN, NAMED (deliverable 1)
+
+268 ops carry `scheduler.tag is None`; 235 are placed in cycles 0..31, the
+rest are mem-prime / result vstores strung along the whole stream. **Every
+setup op has slack >= 494** (cp = 512 against a 1006-cycle schedule), so no
+part of the setup is critical-path binding. Three chains matter:
+
+**(a) the est-critical prefix** — the head of the cp=512 path, 5 ops deep:
+
+```
+#0     load  const        est 0  pl 0  slack 494   -> lit 4
+#9     alu   +            est 1  pl 1  slack 494   dc_eight = 4+4
+#15    alu   <<           est 2  pl 4  slack 494   dc_k0 = dc_sh5 << dc_eight   (16<<8)
+#16    alu   +            est 3  pl 5  slack 494   dc_k0 += 1                   (4097)
+#25    valu  vbroadcast   est 4  pl 6  slack 494   k0[0..7]
+#269   valu  multiply_add est 5  pl 14 slack 494   FIRST hash op (val1*k0 + C0)
+```
+
+`derive_consts` bought a head load slot at the price of 3 cycles of depth
+on exactly this chain. Reverting it for `k0` alone (`derive_consts_exclude=
+("k0",)`, depth 5 -> 2) measures **1026 -> 1028**; every other single
+constant is also +2; the best pair (`k0`,`kq`) is +1. The head load slot is
+worth strictly more than the chain depth.
+
+**(b) the `va` value-address chain — the DEEPEST setup-only chain (48 ops)**:
+`const(6)` -> `load ivp`(est 1) -> `va_c24 = 8+16`(est 2) -> `va3`(est 3) ->
+`va7`(4) -> `va11`(5) -> `va15`(6) -> `va19`(7) -> `va23`(8) -> `va27`(9) ->
+`va31`(est 10) -> `vload val31`(est 11, placed 23). Four parallel `+32`
+chains, depth 8, slack 532 throughout.
+
+**(c) the `lv` table chain**: `const(4)` -> `load fp`(1) -> `add_imm
+lv_addr`(est 2, pl 4) -> `vload lv[0..7]`(pl 6) -> `add_imm`(pl 6) ->
+`vload lv[8..15]`(pl 7) -> ... -> `vload lv[24..31]`(pl 9) -> `^C5`(pl 10)
+-> the 15 scalar diffs + 36 splats (pl 8..14). Doubly serialised: ONE
+`lv_addr` register (WAR edge vload -> next add_imm) on the 1-wide flow
+engine. Slack 502-536.
+
+### 2. WHY THE RAMP IS 4 CYCLES, AND WHY IT IS NOT THE CHAIN
+
+Head occupancy, cycles 0..7 (`h064_chain.py head`):
+
+```
+cyc   0    1    2    3    4    5    6    7
+valu  0/6  1/6  1/6  3/6  6/6  4/6  5/6  4/6     free 24
+alu   0/12 1/12 2/12 5/12 8/12 7/12 6/12 4/12    free 63
+load  2/2  2/2  2/2  2/2  2/2  2/2  2/2  2/2     free  0
+flow  1/1  0/1  1/1  1/1  1/1  1/1  1/1  1/1     free  1
+```
+
+valu is 6/6 from cycle 8 to cycle 957 without exception. The whole ramp
+regret is the **24 free valu slots in cycles 0..7 = 4 cycles**, which is
+exactly the `ramp 4` term of `regret 11 = ramp 4 + mid 3 + drain 4`.
+
+Those slots are a **data-arrival** constraint, not a chain-depth one. No
+steady op can execute before cycle 3 (const -> load -> vload -> read), and
+before cycle 2 there are at most 2 non-zero scalars in scratch to broadcast,
+so >= 10 of the 24 slots are unfillable by ANY program on this ISA. The load
+engine is 2/2 saturated for cycles 0..30 carrying **all 60 setup loads and
+nothing else** (9 `const`, 3 pointer `load`, 4 `lv` vloads, 44 `val`
+vloads); the bubble at [31,65) opens only because the first gather's
+release date is t=51.
+
+### 3. GREEDY IS NON-MONOTONE HERE — capacity relaxations make it WORSE
+
+`h064_oracle.py caps` / `headload`, program fixed, only per-cycle width
+raised inside a head window:
+
+| widened engine | [0,8) | [0,16) | [0,31) | [0,65) |
+|---|---|---|---|---|
+| load -> unbounded | **-2** | +10 | +10 | +12 |
+| valu -> unbounded | 0 | +12 | +10 | +10 |
+| alu -> unbounded | 0 | 0 | +12 | +10 |
+| flow -> unbounded | 0 | 0 | 0 | +10 |
+| store -> unbounded | 0 | 0 | 0 | 0 |
+
+Giving a head engine MORE capacity costs up to 12 cycles. Same phenomenon
+G-32 found by exhaustive re-scheduling (386,090 full re-schedules, best =
+greedy's own 1006): **1006 is a razor-thin greedy optimum and any
+perturbation of the head falls off it.** It also means the section-0
+"ceiling" numbers are not two-sided bounds — but they are the right order
+of magnitude, and no measured restructuring beat them.
+
+### 4. RESTRUCTURINGS ATTEMPTED — all zero or worse (REALIZED cycles)
+
+All screened ring-free (ring plans are address- AND order-specific; any
+scratch change invalidates the shipped `parity_ring_plan` literals — three
+candidate flags crashed with out-of-range gathers before being moved to the
+ring-free baseline). Ring-free baseline at the frontier mix = **1026** (the
+ring plan is worth 20 cycles).
+
+| change | mechanism | realized |
+|---|---|---|
+| `va_chain_width=8` / `16` | va chain depth 8 -> 4 / 2, extra offsets derived on the idle alu | **exactly 0** (on the pool baselines with scratch for it) |
+| model check: va->va edges lag 0 | chain collapsed to depth 1, program fixed | **+0** |
+| `setup_lv_addr_alu` | 4 independent lv address regs on alu; kills the flow serialization AND the WAR chain | **+4** |
+| `derive_consts_exclude=("k0",)` | est-critical chain 5 -> 2 deep, costs 1 head load slot | +2 |
+| ... each of the other 8 derived constants | " | +2 each |
+| ... best pair (`k0`,`kq`) / (`k0`,`sh1`) | " | +1 |
+| `flow_residual_consts` (H-034) | the 6 arbitrary hash addends off load onto flow `add_imm` | +3 |
+| `flow_consts` (H-021) | every constant onto flow | +5 |
+| `derive_consts=False` | every derivable constant back onto load | +6 |
+| `alu_val_addrs=False` | va addresses back onto flow | +19 |
+| `vals_first=True` / `"hash"` | value vloads hoisted ahead of the tables | +5 (1029 -> 1034 on its own baseline) |
+| `emit_order` in {group,round,wave,zip,diag} | setup/steady emission order | 0 (all identical) |
+
+Nothing reached the ring-free baseline, so nothing qualified to be taken
+through the standing chain (re-mine rings from empty -> re-slide `l4_gmin`
+-> re-walk the order). **Mainline is unchanged at 1006.**
+
+Two structural notes for the record:
+- constants can only enter scratch through `load:const` (2/cyc) or
+  `flow:add_imm` (1/cyc); `store` cannot produce scratch values and the alu
+  has no immediate form, so the head's constant bandwidth is hard-capped at
+  3/cycle and the store engine's 116 free head slots are unusable for it.
+  The six residual addends (C0 `0x7ed55d16`, C1 `0xc761c23c`,
+  ap `0xe9f8cc1d`, aq `0xaccf6200`, C4 `0xfd7046c5`, C5 `0xb55a4f09`) are
+  arbitrary 32-bit words with no short derivation from the small pool.
+- **scratch is full**: 1533/1536 words. `va_chain_width=8` needs 4 more
+  words, `setup_lv_addr_alu` needed 3 (met by reusing `lv_addr` for block
+  0). Any further setup restructuring must buy its words from a pool, and
+  G-33 has already shown that is cycle-negative.
+
+### 5. H-062 SETTLED — DEAD (folded in)
+
+H-062: gather instead of serve at levels 1-3 for the group-rounds that
+execute in the head bubble [31,65), converting compute into loads where
+compute is the constraint and loads are idle.
+
+Eligibility (`h064_chain.py`, min-est per (round, group) tag): only **66 of
+512 group-rounds have min-est < 65**, and by tree level that is
+`{L0: 32, L1: 13, L2: 8, L3: 8, L4: 5}` — so at most **29** L1-L3
+group-rounds could ever place a gather inside the bubble.
+
+- **Cost**: 29 conversions x 8 loads = **232 loads** against **68** free
+  load slots in [31,65). The 164 that do not fit land in cycles 65..957,
+  where the load engine is 2/2 saturated for 893 consecutive cycles (G-34)
+  — +82 cycles at 2 loads/cycle.
+- **Benefit, upper-bounded by measurement**: `h063_oracle window=31,65`
+  frees every op the scheduler places in that window — freeing all 107
+  valu ops there is **0**, and freeing all 142 ops on ALL engines is
+  **-3**. The conversion removes strictly less compute than "all of it".
+
+Upside <= 3 cycles, load cost ~82. H-063's evidence applies exactly as
+suspected. **H-062 is closed negative; no per-level serving predicate needs
+to be plumbed.**
+
+### 6. VERDICT — this returns ZERO, and it closes the loop at 1006
+
+- the motivating -13 is a measurement artifact (section 0);
+- the clean ceiling on the entire setup phase is -2, and is physically
+  unreachable (section 0);
+- the ramp's 4 cycles are a data-arrival property of the machine, not a
+  chain that can be re-associated (section 2);
+- every chain-shortening restructuring measured 0 or positive, including
+  the two that provably DO shorten their chains (va depth 8 -> 2 = 0, lv
+  serialization removed = +4) (section 4);
+- H-062, the only other survivor, is negative by ~80 cycles (section 5).
+
+Frontier verification (config unchanged: `tools/h057_best_plan_1006.json`
+`params.mix` + `emission_plan`, `c5_primed_gather_levels=(5,6)`,
+`mem_prime_region_hazards=True`, `mem_prime_dead_reg_staging=True`,
+`flow_spelling_plan=()`):
+
+- correct on seeds {unseeded,1,2,3,7,42,99} and with `debug_compares=True`,
+  1006 cycles on every one;
+- `python3 tests/submission_tests.py` — 9/9 OK, `CYCLES: 1006`, speedup
+  146.85;
+- ring audit `OK over 40 rings`, 0 violations, plan at its grow-then-prune
+  fixpoint (0 new rings addable);
+- bound stack: cp 512 / load 946 (energetic 977, G-34) / alu 981 / **valu
+  995 binds** / realized 1006, regret 11 = ramp 4 + mid 3 + drain 4;
+- dev.py flags-off stream **bit-identical** to the pre-patch build (bundle
+  list + `scratch_next_addr` = 1533).
+
+### 7. Do not re-run
+
+- `h063_oracle.py`'s phase classes as a *chain* diagnostic: the debug-engine
+  reroute changes dev's adaptive race outcomes, so its deltas mix slot
+  relief, floor relief, empty-bundle discounts and a genuinely different op
+  multiset. For chain questions use `h064_oracle.py` (program fixed, greedy
+  validated bit-exact per run).
+- Widening any head engine, or any head-window capacity argument: all
+  measured positive (section 3).
+- Re-associating the va / lv / constant-derivation chains: measured
+  0 / +4 / +2 (section 4).
+- Serving-inversion in the head bubble at any level (section 5).
