@@ -675,6 +675,13 @@ class KernelBuilder:
         debug_compares: bool = True,
         temp_pool_coloring: bool = False,
         temp_pool_coloring_uncapped: bool = False,
+        bcast_alu_copies: bool | Iterable[int] = (),
+        bcast_via_mem: bool | Iterable[int] = (),
+        bcast_mem_addr_regs: Iterable[int] = (),
+        bcast_mem_region: str = "indices",
+        bcast_mem_addr_engine: str = "flow",
+        bcast_mem_addr_min_cycle: int = 0,
+        bcast_mem_hazards: str = "disjoint",
     ) -> None:
         """
         Same maths as `build_kernel_pipelined` (fused hash, gaddr-carried
@@ -1083,6 +1090,28 @@ class KernelBuilder:
         temp_and_cond_pool_sizes[0] is ignored in this mode (the pool is
         sized by the coloring result instead); temp_and_cond_pool_sizes[1]
         (the cond pools) is untouched.
+
+        `bcast_alu_copies` / `bcast_via_mem` (H-053, both default OFF,
+        NEGATIVE -- kept as documented controls): respell selected
+        `vbroadcast` sites (indexed by broadcast_vec call order; True = all)
+        off the nominally-binding valu engine. `bcast_alu_copies` uses 8
+        scalar `|` copies (1 valu -> 8 alu); `bcast_via_mem` uses 8 scalar
+        stores into a private 8-word staging block + 1 vload (1 valu -> 1
+        load, the stores landing in the 98%-idle store engine).
+        `bcast_mem_addr_regs` lists the scratch bases (8 words each, one per
+        concurrently-live staging block) holding the block's 8 store
+        addresses -- permanent scratch is 1533/1536, so these must be
+        BORROWED dead registers (e.g. nv31 @1297, first touched cycle 282);
+        `bcast_mem_addr_engine` arms them on flow (add_imm off inp_values_p)
+        or alu (const + add), `bcast_mem_addr_min_cycle` delays the arming,
+        and `bcast_mem_hazards` picks the coarse whole-mem clock or the
+        `disjoint` model (the staging region is the never-read inp_indices
+        block, so the only true edges are own-stores -> own-vload and block
+        reuse, passed as explicit min_cycles).
+        Measured: every configuration REGRESSES (see
+        research/strains/flow-balance/STATE.md, H-053) -- and an oracle that
+        makes all 59 broadcasts entirely FREE measures 1023 -> 1024, so the
+        class is worth zero cycles no matter how it is spelled.
         """
         if temp_pool_coloring and self._temp_alloc_mode == "static":
             probe = KernelBuilder()
@@ -1471,8 +1500,104 @@ class KernelBuilder:
                 self.const_map[val] = addr
             return self.const_map[val]
 
+        # --- H-053: alternative vbroadcast spellings ---------------------
+        # `vbroadcast` is the kernel's only pure-DATA-MOVEMENT op (every
+        # other valu/alu slot computes something memory cannot supply), so
+        # it is the only class that can be migrated off the BINDING valu
+        # engine onto the 98%-idle store engine. Two respellings, both
+        # semantically identical to the vbroadcast, selected per SITE
+        # (broadcast_vec call index, stable for a fixed config):
+        #   bcast_alu_copies: 8 scalar `|` copies (1 valu -> 8 alu).
+        #   bcast_via_mem:    8 scalar stores of `src` into a private
+        #                     8-word staging block + 1 vload (1 valu ->
+        #                     1 load; the 8 stores are free slots).
+        # The staging block lives in the `inp_indices` region of mem, which
+        # this kernel never reads (see the header comment above: only
+        # inp_values is graded and the kernel carries gaddr in registers)
+        # and which no gather/vload/vstore of ours touches -- that
+        # disjointness is what lets the stores skip the coarse mem-WAR gate
+        # and the vload skip the coarse mem-RAW gate, with the ONLY real
+        # edges (own stores -> own vload, and block reuse) passed as
+        # explicit min_cycles.
+        def _bcast_sites(spec: bool | Iterable[int]) -> set[int] | None:
+            if spec is True:
+                return None  # all sites
+            if not spec:
+                return set()
+            return {int(i) for i in spec}  # type: ignore[union-attr]
+
+        bcast_alu_sites = _bcast_sites(bcast_alu_copies)
+        bcast_mem_sites = _bcast_sites(bcast_via_mem)
+        assert not (bcast_alu_sites is None and bcast_mem_sites is None), \
+            "bcast_alu_copies and bcast_via_mem cannot both be True (all sites)"
+        bcast_mem_addr_bases = tuple(int(a) for a in bcast_mem_addr_regs)
+        bcast_state: dict[str, Any] = {
+            "site": 0, "next_block": 0,
+            "armed": set(), "last_vload": {},
+        }
+
+        def _bcast_block_addrs(blk: int) -> int:
+            """Address-register base for staging block `blk` (lazily armed)."""
+            base = bcast_mem_addr_bases[blk]
+            if blk not in bcast_state["armed"]:
+                bcast_state["armed"].add(blk)
+                if bcast_mem_region == "indices":
+                    # inp_indices_p == inp_values_p - batch_size
+                    region_off = -batch_size
+                else:
+                    raise NotImplementedError(bcast_mem_region)
+                assert 8 * (blk + 1) <= batch_size, "staging block outside the region"
+                for j in range(VLEN):
+                    off = region_off + VLEN * blk + j
+                    if bcast_mem_addr_engine == "alu":
+                        # The 1-wide flow engine's front slots are on the
+                        # setup critical path (lv_addr / rec add_imms), so
+                        # arming on flow costs ~1 cycle per address. `alu`
+                        # spends a dependency-free const (front load slots
+                        # are dependency-dead, G-22) + one 12-wide alu add.
+                        c = const(off % (1 << 32))
+                        scheduler.emit("alu", ("+", base + j, ivp, c), (ivp, c),
+                                       (base + j,), min_cycle=bcast_mem_addr_min_cycle)
+                    else:
+                        scheduler.emit("flow", ("add_imm", base + j, ivp, off),
+                                       (ivp,), (base + j,),
+                                       min_cycle=bcast_mem_addr_min_cycle)
+            return base
+
         def broadcast_vec(src: int, name: str | None = None) -> int:
+            site = bcast_state["site"]
+            bcast_state["site"] = site + 1
             d = self.alloc_scratch(name, VLEN)
+            if bcast_alu_sites is None or site in bcast_alu_sites:
+                for lane in range(VLEN):
+                    scheduler.emit("alu", ("|", d + lane, src, src), (src,), (d + lane,))
+                return d
+            if bcast_mem_sites is None or site in bcast_mem_sites:
+                blk = bcast_state["next_block"] % len(bcast_mem_addr_bases)
+                bcast_state["next_block"] = blk + 1
+                base = _bcast_block_addrs(blk)
+                # WAR against this block's previous reader (memory reads see
+                # start-of-cycle state, so sharing that cycle is exact).
+                war = bcast_state["last_vload"].get(blk, 0)
+                done = war
+                # `coarse` routes the traffic through the whole-mem clock
+                # (measured: every gather then waits on the LAST staging
+                # store, +4.3 cyc/site -- kept as the negative control).
+                # `disjoint` hides it from the clock entirely: the staging
+                # region is read by nothing else and written by nothing
+                # else, so the only real edges are own-stores -> own-vload
+                # and block reuse, both passed as explicit min_cycles.
+                coarse = bcast_mem_hazards == "coarse"
+                for j in range(VLEN):
+                    c = scheduler.emit("store", ("store", base + j, src),
+                                       (base + j, src), (), mem_write=coarse,
+                                       min_cycle=war, ignore_mem_read_hazard=True)
+                    done = max(done, c)
+                c = scheduler.emit("load", ("vload", d, base), (base,), self._v(d),
+                                   mem_read=coarse, min_cycle=done + 1,
+                                   ignore_mem_write_hazard=True)
+                bcast_state["last_vload"][blk] = c
+                return d
             scheduler.emit("valu", ("vbroadcast", d, src), (src,), self._v(d))
             return d
 

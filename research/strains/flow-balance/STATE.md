@@ -1038,3 +1038,203 @@ The l4_gmin threshold will slide there via the standing sweep on its own
 - Driver: file the set-form crash hazard ({0,31},{0,1} IndexError under
   idx_select) against the existing two_minus_fp_vec fallback note in
   backlog (same root cause family, now reachable via set specs).
+
+## H-053 (2026-07-27): store-engine vacancy / binder-to-load migration — REJECTED, the class is worth ZERO cycles even when free
+
+Charter (user-directed): exploit the 98.1%-idle store engine (38/2,046 slots;
+scalar `store` opcode entirely unused) to convert BINDING valu work into load
+work. Predicted balance point: migrate ~95 valu slots -> load, equalizing floors
+at ~993 (-16 from the valu floor 1010). Baseline = the 1023 mainline-equivalent
+dev config (`parity_ring=True`, `l4_gmin=(8,30)`, the 4-ring `parity_ring_plan`,
+`flow_spelling_plan=()`, `emission_plan=tools/h049_best_plan.json`); census
+reproduced exactly: alu 11,793 / valu 6,056 / load 1,892 / flow 786 / store 38.
+
+Everything below is flag-gated, default OFF; the OFF stream is BIT-IDENTICAL to
+HEAD on three configs (mainline-1023, dev defaults 1038, debug_compares=True)
+by programmatic `kb.instrs` compare against `git show HEAD:dev.py`. Full gate
+9/9 green at 1023 with the flags off.
+
+### Leg 1 — THE AUDIT (main deliverable): all 20,565 slots classified
+
+Two independent passes: (a) exact emission-site attribution (dev.py call chain
+recorded per `ListScheduler.put`), (b) lane-exact global value numbering over
+the whole op stream (per-WORD value ids; a slot counts as re-derivation iff
+EVERY word it writes carries a value the machine already produced).
+
+| engine | op | slots | what it computes | memory-supplyable? | re-derivations (VN) |
+|---|---|---|---|---|---|
+| alu | `^` | 6,538 | scalarized hash xors (avec stage-1 + `_sched_vec` alu split) | NO — runtime hash | 0 |
+| alu | `>>` | 4,176 | scalarized hash shifts | NO | 0 |
+| valu | `multiply_add` | 2,922 | 2,048 fused-hash madds + 874 fold/idx madds | NO — arithmetic; also the ONLY op alu cannot spell | 0 |
+| valu | `^` | 1,943 | hash xors + `^C5` prexor | NO | 0 |
+| load | `load` | 1,843 | the gathers | n/a (already load) | 0 |
+| flow | `vselect` | 772 | tournament folds / idx selects | NO — data-dependent choice | 0 |
+| valu | `&` | 537 | parity / cond masks | NO | 0 |
+| valu | `>>` | 502 | hash shifts | NO | 0 |
+| alu | `&` | 336 | mask extraction | NO | 0 |
+| alu | `<<` | 307 | idx-recurrence race spellings + derive_consts | NO | 0 |
+| alu | `+` | 234 | idx race, val addrs, derive_consts | NO | 1 |
+| alu | `-` | 201 | tournament table diffs `tree[a]-tree[b]`, idx race | mostly NO | **28** |
+| valu | `-` | 93 | gathered-tree-value diffs | NO (G-16) | 0 |
+| **valu** | **`vbroadcast`** | **59** | **splat scalar -> 8 lanes: PURE MOVEMENT** | **YES** | **59** |
+| load | `vload` | 40 | val vectors + lv table | n/a | 0 |
+| store | `vstore` | 38 | 32 result writes + 6 mem_prime | n/a | 0 |
+| flow | `add_imm` | 12 | lv / rec / priming addresses | NO | 0 |
+| load | `const` | 9 | residual hash addends | NO | 0 |
+| alu | `\|` | 1 | address alias | — | 0 |
+
+**88 of 20,565 slots (0.43%) re-derive an already-computed value: the 59
+vbroadcasts plus 29 alu ops (28 duplicate table-diff subtractions + 1 `+`).
+87 of the 88 have the earlier copy still RESIDENT in scratch** — so they are
+not scratch-pressure re-derivations at all, they are emission-site duplicates.
+Memory SUPPLIES values, it does not compute; with hash / fold / mask / gather
+all producing genuinely new values, the migratable set is exactly the broadcast
+class (59 slots, arithmetic ceiling -10 valu floor) plus 28 alu slots (-2 alu
+floor, and alu already has 27 cycles of slack). There is NO hidden
+"parity_ring generalized" reservoir: H-045 harvested it, and the VN pass finds
+zero surviving scratch-pressure re-derivation in the 6,056 valu / 11,793 alu
+slots.
+
+Broadcast-class breakdown (all 59 are SETUP-phase; `broadcast_vec` site order):
+4 base vectors (one/two/omf/root_nv), 12 fused hash constants, 2 c5-prexor
+(root_primed/negtwo), 2 gaddr-reconstruction offsets, 17 level-1..3 tournament
+tables (7 evens + 7 diffs + 3 vsel_auto odds), 21 level-4 service tables
+(8 evens + 8 diffs + 3 race odds + four_vec + eight_vec), 1 mem_prime
+`two_minus_fp` (not routed through `broadcast_vec`). First-read slack in the
+1023 schedule: 24 are first read at cycle >= 120 (L4 tables 181-235,
+root_pr_vec 403); 35 are read before cycle 60, i.e. on the ramp.
+
+### Leg 2 — THE ORACLE (the decisive measurement)
+
+Route ops to the 64-wide `debug` engine: dependency edges and 1-cycle latency
+preserved, slot cost ZERO. This upper-bounds ANY respelling of the class.
+
+| freed | cycles | delta |
+|---|---|---|
+| 8 vbroadcasts free | 1023 | 0 |
+| 24 vbroadcasts free | 1024 | +1 |
+| **all 59 vbroadcasts free** | **1024** | **+1** |
+| 300 elementwise vector ops free at emission offset 0 / 500 / 1000 / 1500 / 2000 / 2500 / 3000 | 1020 / 1023 / 1023 / 1023 / 1023 / 1023 / 1023 | 0..-3 |
+| 300 madds free | 1020 | -3 |
+| 300 gathers free | 1023 | 0 |
+| **ALL 7,051 vector ops free** (alu 11,793 -> 65, valu 6,056 -> 525) | **993 real cycles** | **-30** |
+
+**The entire compute census is worth 30 cycles.** The broadcast class is worth
+ZERO at zero cost. The valu "floor 1010" is not causal: at 1023 the schedule is
+RAW/dependency-bound (consistent with G-25: 96.6/109 empty-valu-slot events are
+RAW, not slot-starved). Any hypothesis of the form "move N valu slots to a
+slacker engine" is bounded above by ~0.004 cyc/slot near this operating point,
+not the 1/6 cyc/slot the floor model implies.
+
+Second-order but decisive: **the valu/alu census is self-equilibrating.**
+`_sched_vec`'s retire-time race re-partitions the ~3,000 fungible elementwise
+ops, so freeing valu slots does NOT lower the valu count — it lowers the ALU
+count. Measured (bcast_via_mem, 24 sites): valu floor 1010 -> **1012 (UP)**
+while alu floor 983 -> 961. The predicted -10 valu floor never materializes,
+in ANY spelling.
+
+### Leg 3 — THE PROTOTYPES (all negative; landed as documented controls)
+
+New kwargs on `dev.py:build_kernel_scheduled`, all default OFF:
+`bcast_alu_copies`, `bcast_via_mem`, `bcast_mem_addr_regs`, `bcast_mem_region`,
+`bcast_mem_addr_engine`, `bcast_mem_addr_min_cycle`, `bcast_mem_hazards`.
+Sites are selected by `broadcast_vec` call index (stable for a fixed config);
+`True` = all sites. Correct on seeds 1,2,3,7,42,99 + unseeded, with and without
+`debug_compares`, in every configuration below.
+
+**(a) `bcast_alu_copies` — 1 valu -> 8 scalar `|` alu copies.** No memory, no
+scratch, no new hazards. Sites picked latest-first-read.
+
+| n sites | 0 | 4 | 8 | 16 | 24 | 32 | 48 | 59 |
+|---|---|---|---|---|---|---|---|---|
+| cycles | 1023 | **1023** | 1026 | 1033 | 1036 | 1040 | 1053 | 1057 |
+| valu floor | 1010 | 1009 | 1011 | 1011 | 1009 | 1006 | 1004 | 1003 |
+| alu floor | 983 | 985 | 983 | 984 | 985 | 1001 | 1009 | 1019 |
+
+**(b) `bcast_via_mem` — 8 scalar stores + 1 vload.** Staging block lives in the
+`inp_indices` region of mem: this kernel never reads it (it carries gaddr in
+registers — see the "inp_indices is never read" header comment), the grader only
+compares `inp_values`, and `Machine` copies `mem_dump` so `reference_kernel2` is
+unaffected. 256 free mem words = 32 possible blocks. Address registers must be
+BORROWED (permanent scratch is 1533/1536, 3 free): a scratch-liveness pass over
+the 1023 build found exactly one 8-word run free past cycle 250 (`nv31` @1297,
+first touched 282), a second past 150 (`nv23` @1233), and 131 words past 100.
+
+| hazards \ n sites | 1 | 4 | 8 | 16 | 24 | 36 | 59 |
+|---|---|---|---|---|---|---|---|
+| `disjoint` | 1027 | 1029 | 1032 | 1050 | 1082 | 1129 | 1217 |
+| `coarse` (control) | 1031 | 1046 | 1058 | 1090 | 1122 | 1169 | 1256 |
+
+More parallel staging blocks does not help: n=8 at 1/2/4/8 blocks =
+1032 / 1035 / 1042 / 1069 (each extra block costs 8 more flow `add_imm`s in the
+1-wide front, which is on the setup critical path).
+`bcast_mem_addr_engine="alu"` is unreachable — it needs 8 more const registers
+and scratch is full ("Out of scratch space").
+
+Cost decomposition (why even ONE migrated site costs +4):
+1. **coarse mem clock** (+4.3 cyc/site): staging stores bump
+   `last_mem_write_cycle` and every subsequent gather is gated at
+   `last_mem_write+1`. Fixed by the `disjoint` model (region-exact reasoning in
+   the H-031 style, with explicit min_cycles for own-stores -> own-vload and for
+   block reuse) — this is the reusable piece of the patch.
+2. **flow-engine front contention** (~1 cyc/address): arming 8 addresses via
+   `add_imm` displaces the `lv_addr` / `rec` add_imms that gate the level-table
+   vloads. `bcast_mem_addr_min_cycle` does not recover it (16 and 32 both worse).
+3. **store bandwidth** (4 cyc/site): 8 word-writes at 2 store slots/cycle, and
+   this is irreducible. A replicated 8-word block needs 8 word-writes; the
+   vstore overlap trick (write the source vector at A, A+1, ... A+7 ascending,
+   which leaves `mem[A..A+7]` = 8 copies of `src[0]`) costs 8 store slots too
+   AND serializes them by WAW. Memory has no stride-0 read and no transpose:
+   `vload`/`vstore` are contiguous-only, so replication cannot be amortized.
+
+### Leg 4 — regret profile (tools/backtrack_sched.py, H51_OVERRIDES patched in-process to the 1023 config)
+
+Baseline 1023: `LB 1010` (valu engine bound; cp 489, load 946, alu 983,
+flow 786), **final regret 13**, jumps at c=0,1,3,7 (ramp, 4) /
+c=881,900,905,919,927 (r8-r15 mid-stream seam, 5) / c=996,997,1002,1014
+(drain, 4).
+
+`bcast_alu_copies=(16,38,56,57)` — the one cycle-NEUTRAL variant: `LB 1009`
+(valu floor -1) but **regret 14**, with a NEW ramp jump at c=2; the seam and
+drain profiles are bit-identical. The floor reduction is absorbed 1:1 by ramp
+friction. The mandate's "cycle-neutral but lower floor is a reportable win"
+case was measured and is NOT a win here: the ramp is CP-bound, so floor relief
+there does not bank.
+
+### Verdict
+
+REJECT. Not a spelling problem, not a hazard-model problem, not a scratch
+problem: the class is worth zero cycles even when free. The store engine's
+vacancy cannot be spent because nothing in this kernel is movement — 99.6% of
+the op stream computes new values, and the 0.4% that does not is the setup
+broadcast table, which sits entirely inside a dependency-bound ramp.
+
+reopen-if: (a) the op stream gains a lane-PERMUTATION or replication need —
+memory does give free arbitrary contiguous windows / rotations via one vstore +
+one vload, the only lane-crossing capability the ISA otherwise lacks; or (b) the
+free-compute oracle rises materially above 993 real cycles, i.e. compute
+actually becomes the binder; or (c) a hypothesis needs to SPILL a live vector
+rather than replicate a scalar — 1 vstore (free) + 1 vload is a genuine
+scratch-liberation primitive, and the disjoint-region hazard machinery in this
+patch is directly reusable for it.
+
+### Follow-ups (proposed backlog entries)
+
+- **H-054 memory-backed vector spill — the one live idea from this strain.**
+  A whole 8-lane vector costs 1 vstore (free slot) + 1 vload to park in and
+  recover from memory. No replication, so NONE of leg 3's costs apply. What it
+  buys is SCRATCH, which H-045's ledger prices in real cycles (the parity_ring
+  plan is donor-starved at 4 extra rings; "free conds are worth ~24 cyc vs
+  re-materialization"). Target the ring-funding problem, not the valu floor.
+  Reuses `bcast_mem_hazards="disjoint"`'s region model and the verified
+  256-word inp_indices staging area.
+- **28 duplicate alu table-diff subtractions** (VN pass): the level-4 service
+  table recomputes `tree[a]-tree[b]` pairs the level-1..3 tables already
+  produced. Worth -2 alu floor = 0 cycles today; trivia, not a task.
+- **Retire the "engine floor" framing for this kernel.** The oracle says the
+  whole compute census is worth 30 cycles and 300 free ops ANYWHERE are worth
+  0-3. Hypotheses should be scored against the free-compute bound (993 real
+  cycles) and against RAW structure, not against `ceil(slots/width)`. The
+  oracle harness is ~40 lines (route a class to the `debug` engine, read the
+  span) and should be promoted into `tools/` as a standing pre-screen for any
+  op-removal hypothesis — it would have closed H-053 in one run.
