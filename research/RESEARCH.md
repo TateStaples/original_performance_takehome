@@ -232,3 +232,80 @@ each relaxed machine's own floors; and a relaxation oracle must hold the
 program fixed. Plus standing pre-screens (free_slot_oracle, h054_shadow,
 h055_preload_oracle, h059_shadow, h063_oracle, h064_oracle,
 backtrack_sched, f18_exhaust1) that ceiling a hypothesis in seconds.
+
+---
+
+## Phase 3 charter (2026-07-28): THEORY-ONLY until a design's floor clears 940
+
+**User directive:** "focus on theoretical / structural research until we get a
+code design that can theoretically match the record." Phase 3 therefore has a
+DIFFERENT ACCEPTANCE BAR than Phases 1-2:
+
+> A Phase-3 result is accepted iff it exhibits a DESIGN (op multiset +
+> dependency structure) whose *simultaneous* engine floors are all < 940.
+> Cycle deltas on the shipped kernel are NOT the metric and are not
+> required. A design that is unimplementable today but whose census clears
+> 940 is a WIN; a +/-3 cycle tuning win is NOISE and out of scope.
+
+### The exact arithmetic every Phase-3 hypothesis is scored against
+
+Measured census @1006 (tools/h058_census.py, this commit):
+
+| bucket | alu+valu lane-ops | load slots | flow slots |
+|---|---|---|---|
+| Hash    | 46,464 | 0     | 0   |
+| Idx     |  7,600 | 0     | 0   |
+| Routing |  4,809 | 1,832 | 775 |
+| Setup   |    616 | 60    | 22  |
+| **total** | **59,489** | **1,892** | **797** |
+| **floor** | **991.5** | **946** | **797** |
+
+Capacity at 940 cycles: alu+valu 56,400 lane-ops; load 1,880 slots; flow 940
+slots. **All three must clear simultaneously.**
+
+**The budget chain (this is the whole problem):**
+- Hash is fixed at 46,464 (closed by four tool classes, ~4e12 candidates).
+- 56,400 - 46,464 = **9,936 lane-ops for everything that is not hash.**
+- Index maintenance has a hard 2-vec-op/group-round floor (parity extract +
+  address madd) = 8,192 lane-ops. => any design of this shape floors at
+  (46,464+8,192)/60 = **911 cycles.**
+- That leaves **1,744 lane-ops (218 vec-ops) for setup + ALL serving
+  overhead + wrap.** We currently spend 616 (setup) + 4,217 (serving
+  overhead & wrap) = 4,833.
+
+> **PHASE-3 TARGET, stated exactly: cut non-hash, non-idx-minimum alu/valu
+> from 4,833 lane-ops to <= 1,744 (-64%), while keeping loads <= 1,880 and
+> flow <= 940.** Everything else is already at or below budget.
+
+**Why this is not obviously impossible.** Serving levels 0-4 by tournament is
+what buys the load budget (2,264 lane-rounds served; gathering everything
+would need 4,156 loads = floor 2,078). The overhead is not the vselects
+themselves (those live on flow, which has 143 slots of headroom at 940) but
+the ~527 vec-ops of position-accumulator / condition-prep arithmetic on
+alu+valu that support them. **Migrating or eliminating that support
+arithmetic is the single named path to 940.**
+
+### What was held fixed through ALL of Phases 1-2 (the frames to break)
+
+1. **Lane binding** — walker<->lane is fixed for all 16 rounds. Never varied.
+   Permute costs 8 store + 1 vload (store engine is 46/2012 = idle).
+2. **Serving mechanism** — levels are served by broadcast-table tournaments
+   with a position accumulator. No other mechanism has ever been costed.
+3. **Index representation** — a single live address per lane. Biased/1-based,
+   redundant, or split (level-offset) representations never costed.
+   NB the memory image is FROZEN (tests import build_mem_image from
+   frozen_problem), so forest_values_p == 7 is a hard constant, not a choice.
+4. **Group granularity** — 32 groups of 8, all live. K<32 never tested.
+
+### Phase-3 rules
+
+- No mainline edits. No flag flips. Deliverables are COST MODELS and PROOFS.
+- Every design candidate must be reported as a full census row (alu+valu
+  lane-ops / load slots / flow slots) so it can be scored against the table
+  above. A design that reports only "saves N ops" is not a result.
+- All Phase-1/2 standing pre-screens and the five methodology rules in
+  LOOP.md still apply, in particular: a relaxation oracle must hold the
+  program fixed, and "engine X is idle" is not a hypothesis generator.
+- Negative results are first-class: a proof that the 1,744-lane-op budget is
+  unreachable closes the 940 question permanently, which is the real
+  deliverable if no design clears.
