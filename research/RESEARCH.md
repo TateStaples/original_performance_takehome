@@ -309,3 +309,75 @@ arithmetic is the single named path to 940.**
 - Negative results are first-class: a proof that the 1,744-lane-op budget is
   unreachable closes the 940 question permanently, which is the real
   deliverable if no design clears.
+
+### CHARTER CORRECTION (P3-B, 2026-07-28): the index floor was 24% too high
+
+The charter's "index minimum = 2 vec-ops/group-round x 512 = 8,192 lane-ops"
+is WRONG on both factors, and the "any design of this shape floors at 911
+cycles" line that follows from it is wrong by 26-38 cycles.
+
+**Only 448 of 512 group-rounds emit any index work.** The wrap (L10->L0) and
+the final round cost exactly ZERO -- no compare, no select, not even a parity
+extract -- because the kernel aligns round r to level `r mod 11`, making the
+wrap deterministic and round 10's parity discardable (perf_takehome.py:
+1604-1605, invariant stated at :541). Level-alignment is worth 8,192 lane-ops
+against a non-aligned design and is already banked.
+
+**Cost is level-dependent, not uniform.** A transition costs 1 op (parity
+only) if its successor is tournament-SERVED, 2 ops if its successor gathers
+from an already-packed predecessor, k ops if it must pack k-1 loose bits, and
+0 if its successor is level 0 or it is the last round. Measured
+(tools/p3b_attrib.py): L0->L1 1.00, L1->L2 1.00, L2->L3 1.41, L3->L4 3.59,
+L4->L5 4.06, L5..L10 exactly 2.00 valu + 1 flow, wrap 0.00, round 15 0.00.
+Total 898 vec-ops = 7,184 lane-ops measured against a floor of **6,608**
+(or 5,888 if the epoch-2 L4 gathers go to zero).
+
+> **Design-floor line, corrected: (46,464 + 6,608)/60 = 884.5 cycles** at
+> today's serving policy, or 872.5 under a b=0 L4 policy. NOT 911.
+
+**Second misattribution: Routing's 504 `multiply_add` slots (4,032 lane-ops)
+are NOT address arithmetic.** They are tournament table selects spelled as
+`cond*diff + lo`, emitted by `race_sel`/`race_leaf`/`dual_fold` whenever the
+scheduler's race puts a select on valu instead of the 1-slot flow engine
+(perf_takehome.py:1456, :1474-1477, :1486-1489, :1539-1545). They belong to
+the SERVING axis. This matters because it is a spelling already under
+scheduler control: flow has ~143 slots of headroom at 940 and every vselect
+moved off valu is -8 lane-ops.
+
+**Corrected budget chain.** The absolute cut is invariant at 3,089 lane-ops
+(fixed by the census total), but the pool it must come from is larger:
+
+| index floor used | non-hash non-index budget @940 | current spend | required cut |
+|---|---|---|---|
+| charter's 8,192 | 1,744 | 4,833 | -3,089 (-64%) |
+| **P3-B 6,608 (today's policy)** | **3,328** | **6,417** | **-3,089 (-48%)** |
+| P3-B 5,888 (b=0 policy) | 4,048 | 7,137 | -3,089 (-43%) |
+
+**Third correction: the index axis is not at floor.** It carries 576 lane-ops
+of slack (352 of it the deliberate alu-spelling of 44 madds -- a race that
+trades census for realized cycles per G-36; ~224 genuine accumulator slop at
+L2->L4), and up to 1,296 if the L4 policy changes. The charter listed this
+axis as closed; it is 92% done, not done.
+
+**Coupling discovered (important for design enumeration): serving a level
+makes its PREDECESSOR transition cheaper on the index axis too.** The served-
+level set S does not merely trade flow slots against load slots -- it also
+moves index cost. Any enumeration that treats the three engine costs as
+separable in S is wrong.
+
+**What P3-B closed.** The 2-vec-op floor is PROVED for gathered-successor
+transitions (1,548,224 structural forms enumerated, 0 solutions) and REFUTED
+for tournament-served transitions (floor 1). The wrap is at floor (zero).
+The -6 address bias already costs 0 alu/valu lane-ops -- absorbed by a flow
+vselect between two live constants -- and carrying the address itself is the
+UNIQUE zero-extra-op affine representation (`idx+1`, `idx+3`, level-offset
+split, and redundant-state forms are each +1,280 lane-ops; the memory-table
+advance is +1,280 LOAD slots on the one engine already over budget).
+New ISA fact: `val | 0xFFFFFFFE` = parity-2 is the only single-op parity form
+with a free additive bias -- 5 families survive a 12,048-form search --
+useful only if flow becomes the binding engine. Full detail:
+research/strains/p3b/STATE.md.
+
+Remaining soft joint: the ">= 4 madds to pack 5 loose bits" step is an
+operand-arity argument, not a machine-checked enumeration. If a 3-op packing
+exists the floor drops another 256 lane-ops.
