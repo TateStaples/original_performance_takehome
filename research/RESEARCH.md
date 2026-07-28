@@ -186,3 +186,49 @@ true, and three are closed by our own artifacts:**
 (4) is a scheduling hypothesis and should be posed against
 tools/backtrack_sched.py on a deliberately load-bound stream (s4 <= 13)
 where regret is largest and easiest to attribute.
+
+## Phase 2 closing summary (2026-07-28)
+
+**Final: 1006 cycles, grader-verified 9/9, speedup 146.85x.** Session
+trajectory 1038 -> 1006 (-32, 3.1%) across nine accepted changes, each
+ported flag-free into perf_takehome.py and independently re-verified
+(bundle stream bit-identical to dev, ring audit clean over 40 rings,
+10 seeds with value-trace compares).
+
+**Why the loop stopped.** Not budget — the hypothesis space is closed:
+
+| axis | closed by | evidence |
+|---|---|---|
+| hash op-count | four independent tool classes | ~4e12 candidates (G-10/G-20/G-24) |
+| index algebra | algebraic impossibility | G-21, re-derived by H-058 |
+| routing | ISA structure | no scratch-indexed read, no permute: per-lane routing is exactly 1 load or 2^d-1 selects |
+| load count | saturation + contiguity | 0.00% lane contiguity; 893 consecutive 2/2 cycles (G-16/G-34) |
+| emission order | enumeration | k=1 (25,550 moves) and k=2 interacting space (438k evals) both empty (G-30/G-31) |
+| packing | 386,090 re-schedules | greedy never beaten; energetic bound (G-25/G-32) |
+| organization | ~82,000 candidates | zero below greedy 1019 (G-29 area) |
+| flow / store / idle engines | relaxation | infinite-width flow = 0; four closures of one shape (G-27/G-35) |
+| scratch | relaxation | freed scratch buys nothing at any size (G-33) |
+| alu/valu assignment | exact local optimum | 0 improving flips of 4,357 (G-36) |
+| setup ramp | clean relaxation | ceiling 2, physically unreachable (G-37) |
+
+**The bound.** Algorithm floor 960.8 / 962.7 (two independent models).
+Realized ceiling ~975. We are at 1006 with regret 11 = ramp 4 (data
+arrival) + mid 3 + drain 4 (latency, cpLB > engLB at every cycle
+975-1005).
+
+**On 940.** Proved unreachable under this served-levels structure:
+940 requires <= 1,758 steady-state loads and we issue 1,831 (G-34). The
+frontier is therefore NOT scheduling our load stream better — it must
+have a materially different op census. We verified corsix's published
+hash is identical to ours (H-043), but that entrant scores 971/994; the
+940 holder (@josusanmartin) has published nothing, so their structure is
+inferred, never observed. That is the one honest unknown left.
+
+**Methodology yield** (the durable output). Five rules now in LOOP.md,
+each bought with a wrong answer: score against realized cycles not
+engine floors; "engine X is idle" is not a hypothesis generator; never
+state a constraint in scratch terms; read joint shadow prices against
+each relaxed machine's own floors; and a relaxation oracle must hold the
+program fixed. Plus standing pre-screens (free_slot_oracle, h054_shadow,
+h055_preload_oracle, h059_shadow, h063_oracle, h064_oracle,
+backtrack_sched, f18_exhaust1) that ceiling a hypothesis in seconds.
