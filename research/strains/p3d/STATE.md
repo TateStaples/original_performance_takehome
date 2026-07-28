@@ -256,3 +256,148 @@ not.**
   finding. Its realized-cycle effect is unknown and the shipped allocator
   caps final-round serving at 5 groups; do not treat 624 lane-ops as 10
   cycles.
+
+---
+
+# ADDENDUM (P3-D, after G-38): reconciliation with the measurement
+
+**Headline: my index prediction was exactly right; my "identical folds"
+premise was wrong; and C1\* does NOT survive. Corrected joint floor 945-946,
+not 939. 940 is NOT cleared.**
+
+Tool: `tools/p3d_attrib.py` — monkeypatches `dev.ListScheduler.put`, builds
+`l4_gmin=(6,31)` and `(32,6)` ring-free with `reverse_newest_parity_fold=()`
+at both ends (the builder's exact apples-to-apples pair), and DIFFS every
+emitted slot by (call-site chain, engine, opcode). Reproduces G-38's
+aggregates exactly: alu 11841->10737, valu 6059->6169, flow 843->820,
+load 1892->1900, alu+valu 60,313 -> 60,089 (-224).
+
+## 1. The +110 valu is NOT new work — 138 vec-ops of it is a spelling swap
+
+Top two site pairs in the diff, both `vec("^", vl, vl, nvsrc)` (the hash
+fold-in, dev.py:3213 and :3218):
+
+```
+ +784 lane   +98 slots  valu ^   <lambda>:1873 <- _round_stage_generator:3213
+ -784 lane  -784 slots  alu  ^   <lambda>:1873 <- _round_stage_generator:3213
+ +320 lane   +40 slots  valu ^   <lambda>:1873 <- _round_stage_generator:3218
+ -320 lane  -320 slots  alu  ^   <lambda>:1873 <- _round_stage_generator:3218
+```
+
+1,104 alu slots -> 138 valu vec-ops. Identical op count, identical lane-ops
+(1,104 -> 1,104). **This accounts for the ENTIRE -1104 alu delta and +138 of
+the +110 valu.** It is the `alu_offload` retire race re-equilibrating —
+H-053's "freeing valu RAISES valu, lowers alu", run backwards. G-38 read the
+two engine counters as if they were work; they are a spelling.
+
+Consequence: G-38's inference #3 ("the index work that disappears is
+alu-hosted; alu had ~90 cycles of slack") is **false**. The index work that
+disappears is valu-hosted. The alu drop is hash xor moving OFF alu.
+
+## 2. The index credit is real and is exactly the predicted number
+
+```
+ -184 lane  -23 slots  valu multiply_add  race_idx_madd:1977 <- _round_stage_generator:3301
+ -192 lane  -24 slots  valu -             <lambda>:1873      <- _round_stage_generator:3305
+ -160 lane  -20 slots  valu multiply_add  race_idx_madd:1977 <- fold_position:1982
+  -48 lane  -48 slots  alu  +             race_idx_madd:1977 <- fold_position:1982
+  -48 lane  -48 slots  alu  <<            race_idx_madd:1977 <- fold_position:1982
+                                                   TOTAL  -632 lane-ops
+```
+
+dev.py:3301-3305 is the epoch-exit gaddr reconstruction. **Predicted -624,
+measured -632.** The `-3 madds per group-round moved to round 15` credit is
+CONFIRMED by direct call-site attribution. G-38's "the saving is -224, not
+-624" conflated the credit with an unrelated cost.
+
+## 3. The genuine residual: +488 lane-ops of SERVING work
+
+```
+ +168 lane  +21 slots  valu multiply_add  _sched_madd:790 <- <lambda>:1891
+ +120 lane  +15 slots  valu multiply_add  dual_fold:1916  <- <lambda>:3118
+  +72 lane   +9 slots  valu multiply_add  dual_fold:1916  <- _round_stage_generator:2972
+  +64 lane   +8 slots  valu multiply_add  dual_fold:1916  <- _round_stage_generator:2921
+  +40 lane   +5 slots  valu multiply_add  dual_fold:1916  <- _round_stage_generator:2971
+  +24 lane   +3 slots  valu multiply_add  race_sel:1940   <- _round_stage_generator:3146
+                                                   TOTAL  +488 lane-ops
+```
+
+All `first_fold` / `dual_fold` / `w_fold` / `race_sel` — the L1-L3 tournament
+and the L4 pair tournament. **No alu counterpart at any of these sites**, so
+this is genuinely more ops, not a re-spelling. **Serving an L4 group-round at
+round 15 costs ~2.35 vec-ops MORE of fold machinery than serving one at round
+4** (~2.96 after correcting for `(32,6)` serving 26 where `(6,31)` serves 27
+— that is also the whole of the +8 loads, so load-neutrality per group-round
+IS confirmed).
+
+My model charged both positions the same `2^d - 1 = 15` nodes. That premise
+is falsified. Why round 15 is dearer is not fully closed; the strongest
+candidate is that the L4 pair tournament's shared inputs (`st` folded to
+b0b1b2b3, the L3 winner) are by-products the group needs ANYWAY at round 4
+because it continues to round 5, whereas at round 15 nothing else consumes
+them (`perf_takehome.py:1494`: st is not folded on the last round), so they
+must be materialised for the tournament alone.
+
+## 4. DOES C1\* SURVIVE? NO.
+
+`tools/p3d_joint.py` re-solved with a per-round-15-served-L4 penalty:
+
+| penalty (vec-ops/gr) | provenance | min feasible C | census | r15 served |
+|---|---|---|---|---|
+| 0.00 | P3-D as written | **939** | 56,296 / 1,878 / 939 | 29 |
+| 2.35 | measured, uncorrected | **945** | 56,654 / 1,890 / 945 | 28 |
+| 2.96 | measured, serve-count corrected | **946** | 56,719 / 1,892 / 946 | 27 |
+| 4.00 | pessimistic | 948 | 56,840 / 1,896 / 948 | 14 |
+
+**CORRECTED VERDICT: C1\* does not clear 940.** At 940 it is over by
+254-319 alu+valu lane-ops (4.2-5.3 cycles) and over on load and flow too.
+The corrected joint floor is **945-946**. Note the optimizer still serves
+27-28 at round 15 — the index credit is real and still worth taking, it is
+just no longer worth 9 cycles.
+
+This lands on **946.0**, which is exactly P3-C's best-case cell. The two
+models now agree, from opposite directions.
+
+## 5. Artifact or intrinsic? Partly open — but it does not rescue 940
+
+* It is **NOT** the `depth_first_fold` / `leaf_dead_temp_a/b=None`
+  degradation. The apples-to-apples pair ran `reverse_newest_parity_fold=()`
+  (b3_last OFF) at BOTH ends, so the safe-fallback path is not taken in
+  either build. That artifact is real but it is in the `safe b3l` rows
+  (1358 cycles), not the 1190 row.
+* It **is** partly a spelling knob. dev.py:3118 chooses
+  `w_fold = vsel | dual_fold | madd` from `flow_first_fold_level_set` and
+  `pair_tournament_race_pair_indices`, and `dual_fold` emits 2 valu ops where
+  `madd` emits 1. Those knobs were tuned at `l4_gmin=(6,31)` and were NOT
+  re-tuned at `(32,6)`; +15 of the +61 vec-ops sit on `dual_fold` at that one
+  site. An implementation that re-tunes the pair-index set at round 15 would
+  recover some of it. **But even recovering ALL of the dual_fold rows
+  (+296 of the +488) leaves penalty ~1.2 vec-ops/gr -> C = 942**, still
+  above 940. There is no re-tune that restores 939.
+
+## 6. What this changes in the main body above
+
+* Section 1's "identical folds, identical loads" is **WRONG on folds**
+  (right on loads). Read it as: identical fold NODE COUNT in the abstract
+  `2^d - 1` model, +2.4-3.0 vec-ops/gr in every measured spelling.
+* Section 1's actionable corollary (move the 26 to round 15 for -624
+  lane-ops) is **retracted** — G-38 is correct as a mainline verdict. The
+  -632 lane-op index credit exists but is paid back 77% by fold machinery
+  and, on realized cycles, is catastrophic (1026 -> 1190) for reasons
+  (drain-window placement, ring plan invalidation) that are outside the
+  census frame entirely.
+* Section 3's JOINT OPTIMUM row stands as the *model's* answer at penalty 0
+  and is superseded by the penalty-2.35/2.96 rows.
+* Section 6's "THE 940 ANSWER: yes" becomes **NO**: 945-946, on all three
+  engines, with the round-15 index credit taken and priced.
+
+## 7. Methodology note (LOOP.md 0a, again)
+
+I priced a design in undifferentiated lane-ops and asserted a spelling-level
+equivalence (`2^d - 1` nodes wherever the level occurs) that I never
+measured. The index half of the prediction was exact; the half I assumed was
+wrong by 77% of the credit. **The lesson is not "engine floors are the wrong
+metric" — it is that a census model must be calibrated per SITE, not per
+LEVEL, whenever the same level occurs at two different points in the
+schedule.** Both P3-A's and P3-C's models share this defect and both are
+now known to be optimistic on round-15 service.

@@ -720,3 +720,67 @@ Remaining unaudited item, named by P3-D: **both P3-A's and P3-C's models
 calibrate per-LEVEL rather than per-SITE, and every partially-served level
 other than L4 is unaudited for the same defect.** Until that is checked, the
 946 itself carries the same class of error that produced the phantom 939.
+
+### P3-E (2026-07-28): the two unknowns are ONE constraint, and it measures NO
+
+**C1* STATUS: ARTIFACT at 939; REAL at 948.**
+
+100% ring coverage *is* K<=16 -- they are the same constraint, not two.
+
+**Ring coverage ceiling = 40/64 group-epochs = 62.5%**, binding constraint
+scratch words. `tools/h059_ringmax.py` funds exactly 40 of 64;
+`tools/audit_ring_windows.py` independently tops out at 36. Word arithmetic
+agrees to one ring: T2 needs 24 extra words per covered (epoch, group) =
+1,536 at 100%, against 3 spare + 960 borrowed = 62.7% available. Residual
+support scales as 259*(1-coverage) vec-ops, so 62.5% coverage costs 97
+vec-ops => **floor 948** (952 with the shipped fold spelling). **939 would
+need >=94% coverage.**
+
+**K<=16 is not realizable: it costs +75 realized cycles.** One base, only
+`group_window` toggled: W=32 1028/1028, W=24 1049/1053, W=20 1060/1073,
+**W=16 1074/1103**. C1* needs the aliased column (that is what frees the
+words), so the penalty is +75 -- **more than C1*'s entire 56-cycle floor
+advantage.** Attribution: valu floor +21.7 (offload race -- and the race
+column reproduces G-36's 1028/1053/1103 exactly) plus regret +53.3 (chain/
+ILP plus WAR from register reuse). Census stays flat at ~60.3k and scratch
+at K=16 is 1,149 words, **confirming P3-C's K-neutrality model exactly** --
+K is census-neutral and cycle-expensive at the same time.
+
+**G-33 CORRECTION.** Its penalty table mixed bases: the W=32 entry was the
+RINGED 1006 while the W<32 entries were ring-free from base 1026. True
+penalties are +21/+45/+75, not +39/+58/+91 -- **G-33 overstated the K
+penalty by ~20 cycles.** The conclusion nevertheless generalises to C1*,
+and not marginally: 56 < 75.
+
+Open (uncosted, both directions): T2 deletes `st`, and `st` vectors are ~40%
+of the mined ring donors, so the 40 rings may not survive a T2 re-mine.
+Optimistic bound if they do and coverage reaches ~79% is 944.
+
+### PHASE-3 ANSWER: 940 is unreachable. Three models converge on 944-952.
+
+| model | route | floor |
+|---|---|---|
+| P3-C | independent enumeration, ~405k designs | 946.0 |
+| P3-D | joint model, index derived, penalty measured | 945-946 (942 best case) |
+| P3-E | measured ring ceiling + measured K penalty | 948 (944 optimistic, 952 shipped spelling) |
+
+Three models, built from different directions and disagreeing at every
+intermediate step, converge on **944-952 floor, realizing ~965-970**.
+
+**The record is 940 REALIZED, which needs a floor near 925 -- about 157
+vec-ops (0.31 per group-round) below anything this design space contains.**
+
+**Why no further lever of that size exists inside the space.** At 940 the
+budget is 7,050 vec-ops. The hash alone is 5,808 (82.4%), closed. Index at
+its proved floor is 826. Serving needs 1,139 folds plus 227 `omf` selects =
+1,366 flow-eligible ops against at most 940 flow slots, so >=426 land on
+valu. 5,808 + 826 + 426 + ~70 setup = 7,130 vec-ops > 7,050, and the load
+engine fails independently (227 gathered group-rounds = 1,876 loads against
+1,840 at 920). Every one of those terms is now individually closed by
+enumeration, measurement, or algebra.
+
+**Therefore: if 940 exists under these rules, the hash must be shorter than
+11 ops.** It is the only term large enough to matter, and it is the one whose
+closure is weakest -- G-10 was exhaustive PER ADJACENT SEGMENT of the 11-op
+chain, explicitly "inexhaustive at global scale". corsix published a hash
+identical to ours and scores 971/994; the 940 holder has published nothing.
