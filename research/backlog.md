@@ -1306,7 +1306,7 @@ correct, measured worse at every configuration tried]
   mem (mem_prime pattern) so the preload returns post-C5 values.
 - predicted_gain: bounded by 13; realistic 3-6. cost: M-L.
 
-### H-053 [strain: flow-balance] [status: testing] (user-directed: exploit store vacancy)
+### H-053 [strain: flow-balance] [status: REJECTED -> graveyard G-26 (broadcast class worth 0; free_slot_oracle proves ALL compute free = 993, so the engine-floor framing is retired)]
 - statement: convert BINDER work into load work using the idle store
   engine (38/2046 slots used; scalar `store` opcode entirely unused).
   Census at 1023: valu 6,056 (floor 1009, BINDING), alu 11,793 (983),

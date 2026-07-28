@@ -5,7 +5,18 @@ wake signal); a ScheduleWakeup heartbeat (+1s) is the fallback. If resuming
 from a compacted/fresh context: read this file + RESEARCH.md + backlog.md, then
 continue from whatever step the state implies.
 
-0. **RESEARCH MODE (user directive 2026-07-27): ALGO-FIRST under an
+0a. **SCORING FRAME (G-26, 2026-07-27): engine floors are RETIRED as the
+   scoring metric.** `tools/free_slot_oracle.py` measured that making ALL
+   7,051 vector ops free costs only 30 cycles (1022 -> 993): the schedule
+   is RAW-DEPENDENCY-bound, not slot-bound, and the valu floor is not
+   causal (marginal valu slot ~0.004 cyc). Score every hypothesis against
+   the free-compute bound (993) and the RAW structure, NOT ceil(slots/
+   width). **Run free_slot_oracle as a PRE-SCREEN before prototyping any
+   op-migration/respelling hypothesis** — it upper-bounds the whole class
+   in one run and would have closed H-053 immediately. Corollary: "lowers
+   the floor but cycle-neutral" is NOT automatically a win — the CP-bound
+   ramp absorbs floor relief 1:1.
+0b. **RESEARCH MODE (user directive 2026-07-27): ALGO-FIRST under an
    idealized machine.** Evaluate hypotheses assuming INFINITE SCRATCH and
    PERFECT SLOT ALLOCATION: what matters is the op multiset (per-engine
    slot counts), the dependency span, and the resulting ideal floor

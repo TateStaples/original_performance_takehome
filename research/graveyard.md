@@ -385,3 +385,40 @@ Seeded 2026-07-23 from the 2148->1140 campaign's measured rejections.
   or chain-shortening target (H-049's axis), not a packing one.
 - reopen-if: the op stream changes materially (H-049 order win, H-047
   restructure) — the tool re-measures residual packing slack in ~2 min.
+
+### G-26 Store-vacancy precompute / the engine-floor framing itself (H-053)
+- claim (user-directed): the 98%-idle store engine can convert binder
+  (valu) work into load work; lead candidate the 59 vbroadcast slots
+  (pure movement), predicted -10..-16 floor.
+- audit (exhaustive, all 20,565 slots; dev.py emission-site attribution
+  + lane-exact global value numbering): only **88 slots (0.43%)
+  re-derive an existing value**, and 87 still have the earlier copy
+  resident. NO hidden scratch-pressure recompute reservoir (H-045 took
+  it). Migratable set = 59 broadcasts + 28 duplicate table diffs.
+  Everything else computes on runtime data; memory supplies, not computes.
+- measured REJECT, three ways: bcast_via_mem (8 scalar stores + 1 vload,
+  staging in the never-graded inp_indices region) costs +4.3 cyc/site
+  (1 site 1027, 59 sites 1217); bcast_alu_copies 4 sites 1023 -> 59
+  sites 1057; irreducible cost is 8 word-writes per replicated block
+  (2 store slots/cyc = 4 cyc/site) since memory has no stride-0 read
+  and no transpose.
+- **THE DECISIVE RESULT — tools/free_slot_oracle.py (landed).** Route an
+  op class to the 64-wide free `debug` engine (edges + 1-cyc latency
+  preserved, slot cost zero) = an upper bound on ANY respelling.
+  Freeing ALL 7,051 vector ops (alu 11,793->65, valu 6,056->525) gives
+  **993 real cycles**. The entire compute census is worth 30 cycles.
+  The valu floor (1010) is NOT CAUSAL — the schedule is RAW-bound.
+  Marginal value of a valu slot ~0.004 cyc, not 1/6. Freeing all 59
+  broadcasts: 1024 (+1, WORSE).
+- also: _sched_vec's retire-time race SELF-EQUILIBRATES — freeing valu
+  slots RAISES valu and lowers alu (floor 1010->1012, alu 983->961 at
+  24 sites). Migrations can be silently undone; re-census after changes.
+- also: the CP-bound ramp absorbs floor relief 1:1 (variant with LB 1009
+  gained a ramp jump, regret 13->14) — "cycle-neutral but lower floor"
+  is NOT automatically a win on this kernel.
+- MORAL / METHODOLOGY CHANGE: retire ceil(slots/width) engine floors as
+  the scoring frame. Score against the free-compute bound (993) and RAW
+  structure. free_slot_oracle is the standing PRE-SCREEN — it would have
+  closed H-053 in one run.
+- reopen-if: the RAW structure changes materially (chain shortening,
+  H-052), which would move the 993 bound itself.
