@@ -808,7 +808,7 @@ valu AND load together:
   chain/structure hypothesis, alongside `free_slot_oracle` (op-migration)
   and `h054_shadow` (resource).
 
-## H-056 (2026-07-28): re-open the PROGRAM ORGANIZATION — ACCEPTED, strain frontier 1020 -> 1016 (-4), and the first sub-1006 op streams ever measured (LB 996 / 992)
+## H-056 (2026-07-28): re-open the PROGRAM ORGANIZATION — ACCEPTED, strain frontier 1020 -> 1015 (-5), and the first sub-1006 op streams ever measured (LB 996 / 992)
 
 Baseline: mainline **1020** (`tools/f13_best_plan_1020.json` on the H-047
 mix); `tests/submission_tests.py` 9/9 green, all nine CYCLES lines 1020 —
@@ -820,8 +820,9 @@ H-056 is a pure search + measurement result: two new tools and one plan
 artifact. Flags-off bit-identity is therefore trivially satisfied.
 
 New tools: `tools/h056_screen.py`, `tools/h056_org.py`.
-New artifact: `tools/h056_best_plan.json` (1016, `correct: true` at seeds
-1/2/3/7/42/99).
+New artifact: `tools/h056_best_plan.json` (**1015**, `correct: true` at seeds
+1/2/3/7/42/99, LB 1003, fungible 998, cp 572, valu 6013 / alu 11761 /
+load 1892 / flow 817).
 
 ### 0. Why the reopen was justified (and what it found)
 
@@ -907,7 +908,7 @@ repeated at `parity_ring_plan=()` (61% correct) and `parity_ring=False`
 lags(0,4,8,12)/zip LB 1014, f13 1016, even16/stag1 1018, mainline shape
 1023) — the finding is not a ring artifact.
 
-### 3. Order walks per candidate (the H-047 discipline) — 1028 -> **1016**
+### 3. Order walks per candidate (the H-047 discipline) — 1028 -> **1015**
 
 Only candidates with LB <= 1006 earned a walk
 (`emission_order_search.py local`, seeded fresh, `EOS_OVERRIDES` = the
@@ -915,7 +916,7 @@ frontier mix, `EOS_JUMPS` per F-13/G-29's radius finding).
 
 | seed organization | seed cyc | seed LB | walked | walked LB | regret |
 |---|---|---|---|---|---|
-| even8/stag2/zip/**rev**/asc | 1028 | 1001 | **1016** | 1002 | 14 |
+| even8/stag2/zip/**rev**/asc | 1028 | 1001 | **1015** | 1003 | 12 |
 | even8/stag2/zip/**default**/asc | 1027 | 1003 | **1016** | 1005 | 11 |
 | even8/stag2/zip/default/asc (2nd chain, jumps to 32) | 1018 | — | **1016** | 1002 | 14 |
 | even8/stag2/zip/**rot:1**/asc | 1025 | 1002 | 1022 | 1001 | 21 |
@@ -924,17 +925,22 @@ frontier mix, `EOS_JUMPS` per F-13/G-29's radius finding).
 
 - **1016 is reached by three independent walk chains on two organizations**
   (wave order `rev` and `default` on the even8/stag2/zip partition), each
-  `correct: true` at seeds 1/2/3/7/42/99. Winning artifact:
-  `tools/h056_best_plan.json` — 1016, LB 1002, fungible 1000, cp 565,
-  valu 6008 / alu 11881 / load 1892 / flow 814.
+  `correct: true` at seeds 1/2/3/7/42/99; a fourth chain off the 1016 plan
+  reached **1015**. Winning artifact: `tools/h056_best_plan.json` — 1015,
+  LB 1003, fungible 998, cp 572, valu 6013 / alu 11761 / load 1892 /
+  flow 817.
 - The descent is FAST where F-13's was slow: 1028 -> 1020 in ~3 min
-  (~2.5k evals), 1020 -> 1017 in ~15 more, 1017 -> 1016 by ~30 min.
-  F-13 needed 213k evals for 1034 -> 1020 on the mainline organization.
+  (~2.5k evals), 1020 -> 1017 in ~15 more, 1017 -> 1016 by ~30 min,
+  1016 -> 1015 in one more chain. F-13 needed 213k evals for 1034 -> 1020
+  on the mainline organization.
   A lower-LB stream is not merely a better floor — it is a
   **better-conditioned order landscape**.
-- Wider jump sets kept paying past F-13's `1,2,4,8,16,32`: the 1018 -> 1017
-  and 1017 -> 1016 steps both came from chains run with
-  `1,2,3,4,6,8,12,16,24,32`.
+- **RE-SEEDING A FRESH CHAIN AT THE PLATEAU IS THE PRODUCTIVE MOVE.** Every
+  single-cycle step (1018 -> 1017 -> 1016 -> 1015) came from restarting a
+  new walk chain, with a different RNG seed and a different `EOS_JUMPS` set,
+  from the previous chain's best; each chain then plateaued for ~10k evals.
+  Wider jump sets kept paying past F-13's `1,2,4,8,16,32`
+  (`1,2,3,4,6,8,12,16,24,32` and `1,2,3,5,8,13,21,34` both produced steps).
 - LB drift to watch: the even16/stag1 stream enters at LB 996 but the walk
   pulls it back to LB ~1001 — order walks optimise realized cycles and will
   spend floor to get them.
@@ -973,23 +979,23 @@ lazy_val_loads.
 | even16/stag1/zip/rev/asc | **996** | 1029 | unwalked, `correct: true` |
 | even8/zip + l4_gmin(16,30) | 996 | 1056 | |
 | even8/zip + revfold() | 999 | 1029 | |
-| **even8/zip walked (the artifact)** | **1002** | **1016** | the accept |
+| **even8/zip walked (the artifact)** | **1003** | **1015** | the accept |
 | f13 mainline | 1006 | 1020 | previous incumbent |
 
-Envelope at the new frontier: realized **1016** / valu-slot floor **1002** /
-fungible **1000**. G-28's "1020 -> 1006, everything left is <= 20 cycles and
+Envelope at the new frontier: realized **1015** / valu-slot floor **1003** /
+fungible **998**. G-28's "1020 -> 1006, everything left is <= 20 cycles and
 order/packing shaped" is superseded: the organization axis moved the FLOOR
 itself, which nothing in G-25..G-29 could do, and the reachable band is now
-1016 -> 1002 with a demonstrated 992-floor stream in hand.
+1015 -> 1003 with a demonstrated 992-floor stream in hand.
 
 ### 6. Follow-ups (ranked)
 
-- **F-24 (mainline port, do this first)**: 1016 needs NO code change — bake
+- **F-24 (mainline port, do this first)**: 1015 needs NO code change — bake
   `tools/h056_best_plan.json`'s order into `perf_takehome.py` exactly as
-  F-13 baked the 1020 plan. -4 for a literal swap.
+  F-13 baked the 1020 plan. -5 for a literal swap.
 - **F-25**: walk the LB-996 (even16/stag1/zip) and LB-992
   (even8/zip + gmin(16,32)) streams properly. They got 45 min and 0 min
-  respectively; 1016 came out of ~45 min on a stream 6 LB cycles worse.
+  respectively; 1015 came out of ~75 min on a stream 5-7 LB cycles worse.
 - **F-26**: the ring plan is re-derivable per organization. The pinned
   `parity_ring_plan` is worth 6 cycles ON THE MAINLINE ORDER and was carried
   unchanged onto every new organization (where it also broke 63% of
@@ -1006,4 +1012,4 @@ itself, which nothing in G-25..G-29 could do, and the reachable band is now
 - **G-29 must be re-read as scoped**: it closed 1-move order search *at the
   mainline mix* and explicitly said "reopen-if the MIX changes". The
   organization changes the mix, so a fresh exhaustive 1-move scan
-  (`tools/f18_exhaust1.py`) at the 1016 plan is cheap and unrun.
+  (`tools/f18_exhaust1.py`) at the 1015 plan is cheap and unrun.
