@@ -1954,3 +1954,167 @@ and baked into `perf_takehome.py` by F-33.
   re-conditioning by re-mine from an already-clean frontier point;
   audit-aware acceptance as a *cycle* lever (it is a soundness/search-shaping lever
   only — 19 recoveries, 0 cycles).
+
+
+## F-37 (2026-07-28): multi-move (k-entry simultaneous displacement) in rounds 12-15 — NEGATIVE; the k=2 INTERACTING space at 1006 is EXHAUSTED, and the order axis is now closed at every k it can be closed at
+
+No improvement on 1006. Frontier unchanged, `perf_takehome.py` untouched,
+`dev.py` untouched, no shared tool modified. New drivers only:
+`tools/f37_lib.py` (composable `(src, anchor)` move algebra),
+`tools/f37_single.py` (banded single-move map), `tools/f37_multi.py`
+(k-entry search + build-only screen), `tools/f37_bounds.py` (bound stack at
+an arbitrary artifact's own mix). Spend: **445,553 cycle-exact evals**
+(7,306 phase-A singles + 438,247 multi-move) in ~105 min of wall clock.
+
+### 1. Why this shape, and the move algebra that makes it possible
+
+G-30 closed single moves by enumeration (25,550 moves, zero below 1006), so
+any surviving order win must be a **strictly paired escape**, and G-30's
+window-productivity map says it must live in **rounds 12-15**. f18's `(i, j)`
+reinsertion coordinates do not compose (the second `j` is measured in a list
+the first move already shifted), so `tools/f37_lib.py` re-coordinatises a
+move as `(src, anchor)` in BASE-index space: displace base entry `src` to sit
+immediately before base entry `anchor` (`anchor = -1` = append at end). k
+moves are then applied by deleting all k entries at once and re-inserting
+each before its still-present anchor. For k=1 this reproduces
+`q.insert(j, q.pop(i))` **exactly** — verified on all 25,550 f18 moves,
+0 mismatches, and `enumerate_moves(rounds=None)` returns exactly f18's 25,550.
+
+### 2. The screen: build-only, and it is exact
+
+`machine.cycle == len(kernel_builder.instrs)` identically (VLIW, one bundle
+per cycle), so the cycle count needs the BUILD only: 0.074 s vs 0.103 s for
+build+simulate+reference, and the problem image is built once per worker
+instead of once per eval. Validated against the shared
+`run_variant.measure` on 60 random composed pairs: **0 mismatches**. Every
+candidate strictly below base would have been re-measured with the full
+build + frozen grader before being reported (`f37_multi.py` does this
+inline); **0 candidates ever reached that path.** Realised throughput
+~70 evals/s on 8 workers vs 49/s for full measure.
+
+### 3. The plateau inside rounds 12-15 (phase A)
+
+`tools/f37_single.py` at `tools/h057_best_plan_1006.json`, source round in
+{12,13,14,15}, destination interval unbounded by construction:
+
+    7,306 single displacements, ZERO below 1006
+
+| cycles | n | | cycles | n |
+|---|---|---|---|---|
+| **1006 (plateau)** | **1,641** | | 1010 | 1,110 |
+| 1007 | 196 | | 1011 | 836 |
+| 1008 | 170 | | 1012-1032 | 1,699 |
+| 1009 | 175 | | INCORRECT | 1,479 |
+
+**Plateau size within rounds 12-15 = 1,641** (22.5% of the band; the
+whole-plan figure is 7,487/25,550 = 29%). By round: r15 541, r12 402,
+r14 359, r13 339. The 1007-1009 "slightly worse" set is **541** moves —
+that is the raw material for the +1/-2 pairing that single-move search
+structurally cannot see.
+
+### 4. k=2: exhaustive over the interacting space, ZERO
+
+A pair can only do something a single move cannot if the two displacements
+**interact**, so pairs are split by whether their base-index spans overlap.
+The overlapping half is enumerated exhaustively; the disjoint half is
+sampled as a control (section 5).
+
+| mode | pairing | candidates | evaluated | min | landed exactly 1006 | **below 1006** |
+|---|---|---|---|---|---|---|
+| `nn` | neutral x neutral, spans overlap | 219,184 | 209,311 | 1006 | 126,947 | **0** |
+| `nn_res` | ...anchor-clash subset, anchor resolved | 6,488 | 6,488 | 1006 | 4,135 | **0** |
+| `wn` | worse(1007-9) x neutral, spans overlap | 97,591 | 92,175 | 1006 | 20,848 | **0** |
+| `wn_res` | ...anchor-clash subset, resolved | 4,479 | 4,479 | 1006 | 915 | **0** |
+| `ww` | worse x worse, spans overlap | 27,568 | 25,570 | 1006 | 1,027 | **0** |
+| `ww_res` | ...anchor-clash subset, resolved | 1,822 | 1,822 | 1006 | 167 | **0** |
+| | **k=2 interacting, total** | | **339,845** | **1006** | 154,039 | **0** |
+
+The only pairs not evaluated are the **4,498 whose composite violates the
+per-group round order** (both members in the same group, crossing) — those
+are not valid emission plans at all, not a coverage hole. The 12,789 pairs
+whose anchor is swept away by the partner ARE a coverage hole in the naive
+composition, so they were re-run with the anchor slid forward to the
+surviving entry (`--only-resolved`): all 12,789 resolve to valid plans, and
+all measure >= 1006.
+
+Two facts worth carrying: the interaction is real and strong — **20,848
+worse-x-neutral pairs and 1,027 worse-x-worse pairs come back to exactly
+1006**, i.e. a +1..+3 penalty fully cancelled by a partner — and yet not one
+of 339,845 interacting pairs ever crosses below. The plateau composes, it
+just never descends.
+
+### 5. The disjoint-span control (and an honest caveat)
+
+Disjoint-span neutral pairs are **not** additive: only 71% of a 69,811-pair
+random sample (of 1,095,747, = 6.4%) returns 1006; 29% go UP (1010 x 12,838,
+1011 x 4,398, 1007 x 2,112, ...). **Zero go below 1006.** So the split is a
+prioritisation, not a proof: k=2 is exhaustive over the interacting subset
+and a 6.4% random sample of the non-interacting subset. Full enumeration of
+the disjoint half is ~4.3 h of compute and, given that the mechanism for a
+paired escape is interaction and the interacting half is provably empty, is
+not worth it.
+
+### 6. k=3, and where k=4 was stopped
+
+`ktuples` samples k-cliques in the span-interaction graph (mutually
+overlapping triples of plateau moves — a triple with a non-interacting
+member only re-tests the additive case section 5 already covers).
+
+    k=3: 35,000 sampled, 28,591 valid composites, min 1006, ZERO below
+
+**k=4 not run, deliberately.** The loop's diminishing-returns rule applies:
+k=2 over the rounds-12-15 plateau is exhausted with zero and k=3 sampling
+is flat, so k=4 sampling is budget with no prior behind it.
+
+### 7. Frontier re-verification (unchanged, this session)
+
+    tools/h057_best_plan_1006.json -> 1006
+    correct: true at seeds {unseeded x2, 1, 2, 3, 7, 42, 99}
+    correct: true with debug_compares=True at {unseeded, 1, 42}
+    ring audit at the shipped order with the shipped 20-ring plan:
+        "OK over 40 rings"   (0 violations)
+
+Bound stack re-derived at this artifact's own mix (`tools/f37_bounds.py`,
+which captures through `backtrack_sched` at the artifact's mix instead of
+the H-047/1022 config the shared tools are pinned to):
+
+    realized 1006 | LB 995 (engine: valu 995 alu 981 load 946 flow 797
+    store 23) | energetic 996 | fungible 992 | cp 512 | all-lags-zero 1004
+    ops 20462: alu 11761 valu 5966 load 1892 flow 797 store 46
+    slot floor 995, regret 11   (recorded decomposition: ramp 4 + mid 3 + drain 4)
+
+No `tools/f37_best_plan_*.json` was written: nothing descended, and the
+1006 point is already shipped as `tools/h057_best_plan_1006.json` and baked
+into `perf_takehome.py`. No l4_gmin re-slide and no audit-aware re-walk were
+run either — both are conditioned on a descent, and there was none.
+
+### 8. Verdict: the order axis is closed
+
+Combining G-29 (1020), G-30 (1006, k=1 exhaustive, round-window map) and
+this section (1006, k=2 exhaustive over the interacting space + k=3
+sampled), at the shipped mix and organization:
+
+- k=1: **enumerated, empty** (25,550).
+- k=2 in the only productive band, interacting: **enumerated, empty**
+  (339,845). Non-interacting: 6.4% sampled, empty.
+- k=3 in that band, mutually interacting: 28,591 sampled, empty.
+- every other band (`r:0-*`, `ramp`, `mid`) was already worth exactly zero
+  from a perturbed start, so a pair confined there cannot pay either.
+
+There is no cheaper structure left to try on the emission order at this
+mix. Anything further requires a different mix or a different program
+organization, both of which are closed by their own artifacts (G-24/G-28,
+~82k organization screens).
+
+### 9. Follow-ups
+
+- **F-38 (basin-width probe) is now the only order-flavoured item left**,
+  and its value is diagnostic, not productive: it asks whether a DIFFERENT
+  basin exists, which is the one question sections 1-8 cannot answer by
+  local enumeration.
+- **DEAD (measured here, do not re-run)**: k=2 multi-move at 1006 in rounds
+  12-15, in any pairing (neutral/neutral, worse/neutral, worse/worse),
+  overlapping or not; k=3 in that band; k=4 (never worth starting given the
+  above); any composition built on the 1006 plateau. The plateau composes
+  fine and never descends — 154,039 interacting pairs return to exactly
+  1006 and not one goes below.
