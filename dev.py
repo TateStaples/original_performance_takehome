@@ -837,6 +837,7 @@ class KernelBuilder:
         reverse_newest_parity_fold: bool | Iterable[int] = (),
         newest_parity_last_fold_race: bool = True,
         newest_parity_last_leaf_diff_tables: bool = False,
+        b3l_safe_leaf_fallback: bool = False,
         reverse_newest_parity_fold_at_shallow_levels: bool | Iterable[int] = (),
         emit_order: str = "group",
         emission_plan: tuple[Any, ...] = (),
@@ -1169,6 +1170,24 @@ class KernelBuilder:
           valu drains. Applies to the final round only (earlier rounds'
           st vectors are live; those keep H-023's race_leaf path).
 
+        - `b3l_safe_leaf_fallback` (P3-D): make the final-round dffold
+          FALLBACK (taken when the b3l dead-register pool cannot fund
+          another served group privately) pass `leaf_dead_temp_a/b=None`
+          instead of lv[0..31]. The lv spelling is what makes the fallback
+          unsafe: lv[24..31] IS omf1_vec (two_minus_fp_vec, read by every
+          steady-gather idx_select) and lv[0..15] hosts idx_boundary_select's
+          rec+/-1 arms, so a fallback group silently corrupts later-stream
+          gather addresses (H-029 bug guard). With None the 4 leaf selects
+          spell as plain flow vselects off the BROADCAST tables and the
+          fold's whole working set is the group's own tournament pool
+          registers (tm/tmM/t/condA/condB) -- zero extra scratch, provably
+          no lv reuse. Cost: those 4 leaves can no longer race to valu, so
+          they serialize on the 1-wide flow engine. Effect: the private
+          dead-register pool stops being a HARD cap on how many groups may
+          be served at the final round (it caps only how many get the fast
+          private spelling), which is what makes l4_gmin's round-15
+          threshold freely explorable.
+
         - `emit_order` / `flow_consts` / `vals_first` / `tie_break`
           (H-021): pure EMISSION-ORDER / setup-encoding / tie-break
           experiments; none changes the maths. `emit_order="group"`
@@ -1349,6 +1368,7 @@ class KernelBuilder:
                 reverse_newest_parity_fold=reverse_newest_parity_fold,
                 newest_parity_last_fold_race=newest_parity_last_fold_race,
                 newest_parity_last_leaf_diff_tables=newest_parity_last_leaf_diff_tables,
+                b3l_safe_leaf_fallback=b3l_safe_leaf_fallback,
                 reverse_newest_parity_fold_at_shallow_levels=reverse_newest_parity_fold_at_shallow_levels,
                 emit_order=emit_order, flow_consts=flow_consts, vals_first=vals_first,
                 tie_break=tie_break, derive_consts=derive_consts, alu_val_addrs=alu_val_addrs,
@@ -1392,6 +1412,7 @@ class KernelBuilder:
                 reverse_newest_parity_fold=reverse_newest_parity_fold,
                 newest_parity_last_fold_race=newest_parity_last_fold_race,
                 newest_parity_last_leaf_diff_tables=newest_parity_last_leaf_diff_tables,
+                b3l_safe_leaf_fallback=b3l_safe_leaf_fallback,
                 reverse_newest_parity_fold_at_shallow_levels=reverse_newest_parity_fold_at_shallow_levels,
                 emit_order=emit_order, flow_consts=flow_consts, vals_first=vals_first,
                 tie_break=tie_break, derive_consts=derive_consts, alu_val_addrs=alu_val_addrs,
@@ -2647,6 +2668,31 @@ class KernelBuilder:
             if len(newest_parity_last_dead_reg_pool) < 8 + 9:  # diffs + one private group
                 newest_parity_last_leaf_diffs_e, newest_parity_last_leaf_diffs_d, newest_parity_last_dead_reg_pool = [], [], []
                 return
+            if b3l_safe_leaf_fallback:
+                # P3-D (MEASURED, 2026-07-28): this pool is ordered
+                # earliest-dead-first but its TAIL is not actually dead --
+                # an unserved group's `nv` only dies after that group's own
+                # round-15 fold-in xor, and `st` only after its round-15
+                # gather issue, both of which are still ahead of the pool
+                # writes for late groups. The old "fund every served group
+                # or assert" invariant (perf_takehome.py:729-736) kept pops
+                # shallow enough that this never bit. Opening the fallback
+                # makes PARTIAL funding reachable, and partial funding pops
+                # deep: l4_gmin=(32,24) (8 served / 24 unserved, 44 pops)
+                # builds a kernel that RUNS BUT COMPUTES THE WRONG ANSWER,
+                # and (32,12) pops past the end of the pool entirely.
+                # So the flag keeps the original all-or-nothing rule: use
+                # the private path only when the pool funds EVERY served
+                # group (exactly the validated regime, pops unchanged),
+                # otherwise take the shared-pool fallback for all of them
+                # and never touch the pool at all.
+                epoch_ = r // period
+                served_ = [g for g in range(n_groups) if is_pair_tournament_served(r, g)]
+                ringed_ = sum(1 for g in served_ if (epoch_, g) in parity_ring_map)
+                demand = 8 + 5 * ringed_ + 9 * (len(served_) - ringed_)
+                if len(newest_parity_last_dead_reg_pool) < demand:
+                    newest_parity_last_leaf_diffs_e, newest_parity_last_leaf_diffs_d, newest_parity_last_dead_reg_pool = [], [], []
+                    return
             newest_parity_last_leaf_diffs_e, newest_parity_last_leaf_diffs_d = [], []
             for k in range(2 ** tournament_level_count // 2):
                 for tabs, out in ((level4_evens, newest_parity_last_leaf_diffs_e), (level4_diffs, newest_parity_last_leaf_diffs_d)):
@@ -3036,13 +3082,26 @@ class KernelBuilder:
                             b3l_fold_diffs(st, nv, ring)
                         else:
                             nonlocal two_minus_fp_vec_clobbered
-                            two_minus_fp_vec_clobbered = True  # see the bug guard note above
+                            # P3-D (b3l_safe_leaf_fallback): the lv leaf
+                            # temps below are what makes this fallback
+                            # unsafe (lv[24..31] IS omf1_vec; lv[0..15] are
+                            # idx_boundary_select's arms). With the flag on,
+                            # pass None: race_leaf degrades to a plain flow
+                            # vselect off the broadcast tables and the fold
+                            # touches nothing outside this group's own
+                            # tournament pool registers.
+                            if b3l_safe_leaf_fallback:
+                                lvt = (None, None, None, None)
+                            else:
+                                two_minus_fp_vec_clobbered = True  # see the bug guard note above
+                                lvt = (level_table, level_table + VLEN,
+                                       level_table + 2 * VLEN, level_table + 3 * VLEN)
                             depth_first_fold(st, level4_evens, tm[j], tmM[j], t,
-                                   condA[j], condB[j], leaf_dead_temp_a=level_table,
-                                   leaf_dead_temp_b=level_table + VLEN)                # E_win->condB
+                                   condA[j], condB[j], leaf_dead_temp_a=lvt[0],
+                                   leaf_dead_temp_b=lvt[1])                            # E_win->condB
                             depth_first_fold(st, level4_diffs, tm[j], tmM[j], t,
-                                   condA[j], tm[j], leaf_dead_temp_a=level_table + 2 * VLEN,
-                                   leaf_dead_temp_b=level_table + 3 * VLEN)            # D_win->tm
+                                   condA[j], tm[j], leaf_dead_temp_a=lvt[2],
+                                   leaf_dead_temp_b=lvt[3])                            # D_win->tm
                             if should_fold_b3:
                                 fold_position(st, nv)       # st=b0b1b2b3 (exit)
                             madd(nv, nv, tm[j], condB[j])  # E + b3*D

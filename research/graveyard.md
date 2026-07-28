@@ -828,3 +828,40 @@ Seeded 2026-07-23 from the 2148->1140 campaign's measured rejections.
   adaptive engine choices changes the program, and the resulting number
   measures the new program, not the relaxation. Always assert
   `offline place == real place` after freeing (h064_oracle does).
+
+### G-38 Serving level 4 at round 15 instead of round 4 (P3-D's actionable claim) — NEGATIVE
+
+- claim: rounds 4 and 15 are both level 4, but round 15 is the last round and
+  a group served there needs no address afterwards (perf_takehome.py:1494), so
+  moving the 26 round-4-served L4 group-rounds to round 15 buys -624 lane-ops
+  of index "at zero fold and zero load cost" (~10 cycles of floor).
+- evidence: MEASURED NEGATIVE. Builder implemented default-OFF
+  `b3l_safe_leaf_fallback` (dev.py:840) which removes the b3l register-funding
+  assert as the constraint; 26 group-rounds at round 15 now build correctly.
+  Apples-to-apples `(6,31)` -> `(32,6)` with b3_last off both ends:
+  alu 11841->10737 (-1104 slots), **valu 6059->6169 (+110 vec-ops)**,
+  load 1892->1900 (+8), flow 843->820 (-23). Net alu+valu **-224 lane-ops,
+  not -624**. Realized **1026 -> 1190**. The best round-15-heavy engine FLOOR
+  is 1015, above the shipped REALIZED 1006, so no scheduling or ring work can
+  rescue it.
+- **P3-D's "identical folds, identical loads" premise is FALSIFIED**: the
+  served group-round count is unchanged yet valu rose 110 vec-ops. The
+  residual was not attributed. This is a live threat to C1*'s 939, whose
+  joint optimum serves L4 at round 15 only (29/32) and inherits the same
+  premise -- referred back to P3-D.
+- byproduct (positive): the funding question had a clean answer. The fallback
+  never needed MORE registers, it needed DIFFERENT ones -- routing all 26
+  through `depth_first_fold` with `leaf_dead_temp_a/b=None` degrades the 4
+  leaf selects to plain flow vselects off the broadcast tables, so the fold's
+  working set is the group's own tournament pool. Zero extra scratch. The
+  assert was never deleted or weakened; the private-funding maximum is still
+  5 (supply `2*(32-S) - 3R` vs demand `8 + 5R + 9(S-R)` gives S <= 5; at S=26
+  supply is 12 vectors against demand 242).
+- **latent miscompile exposed (not fixed, flag preserves the original
+  invariant so it is unreachable; `perf_takehome.py` never exposed):** with
+  partial funding reachable, the dead-register pool's tail is not dead.
+  `l4_gmin=(32,24)` built a kernel that RAN AND RETURNED THE WRONG ANSWER;
+  `(32,12)` popped past the end of the pool. Filed as a separate task.
+- reopen-if: the +110 vec-op residual is attributed to a cause that a
+  different emission order or fold spelling removes, AND the resulting floor
+  drops below the shipped realized count.
