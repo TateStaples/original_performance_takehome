@@ -654,3 +654,69 @@ T3 verified legal but re-priced: flow `add_imm` is scalar (problem.py:332)
 and alu has NO immediate form (problem.py:243-276), so it needs the existing
 `+32`-chain trick (perf_takehome.py:1053) -- 24 lane-ops, not 20. Still
 load-bearing (941 without it).
+
+### P3-D RETRACTION (2026-07-28): C1* does not survive. 940 is NOT cleared.
+
+**Corrected joint floor: 945-946 (best case 942). The Phase-3 bar is not met.**
+
+Call-site attribution (`tools/p3d_attrib.py`, a direct per-slot diff of the
+two builds) splits G-38's residual three ways:
+
+1. **The entire -1,104 alu delta is a SPELLING SWAP, not index credit.**
+   `vec("^", vl, vl, nvsrc)` (dev.py:3213/:3218) moves 1,104 alu slots into
+   138 valu vec-ops -- 1,104 -> 1,104 lane-ops, exactly neutral. This is
+   H-053/G-36 self-equilibration running backwards. G-38's inference that
+   "the index work that disappears is alu-hosted" is FALSE; the index work is
+   valu-hosted.
+2. **The index credit is CONFIRMED at -632 lane-ops** (predicted -624), all
+   at `race_idx_madd` + the `-` combine (dev.py:3301/3305, the epoch-exit
+   gaddr reconstruction). **The -3 madds/group-round rule holds.**
+3. **The genuine residual is +488 lane-ops (+61 vec-ops) of FOLD machinery**
+   -- `_sched_madd`, `dual_fold`, `race_sel` -- with no alu counterpart at any
+   of those sites, i.e. genuinely more ops. That is +2.35 vec-ops per
+   round-15-served group-round, or +2.96 correcting for the differing serve
+   counts (which also accounts for the whole +8 loads, so per-group-round
+   load-neutrality IS confirmed).
+
+**C1* recomputed with the penalty charged per round-15 service:**
+
+| penalty | floor | census |
+|---|---|---|
+| 0 (P3-A/P3-D original) | 939 | 56,272 / 1,880 / 940 |
+| 2.35 vec-ops | **945** | 56,654 / 1,890 / 945 |
+| 2.96 vec-ops | **946** | 56,719 / 1,892 / 946 |
+| 4.0 vec-ops | 948 | -- |
+
+At 940 it is over by 254-319 lane-ops (4.2-5.3 cycles) plus load and flow.
+**This lands on 946.0 -- exactly P3-C's independent best-case cell. The two
+models now agree from opposite directions**, one having swept index cost as
+a free parameter and the other having derived it, and both arriving at ~946.
+
+**Artifact vs intrinsic.** It is NOT the `depth_first_fold` /
+`leaf_dead_temp=None` degradation -- the apples-to-apples pair ran b3_last
+OFF at both ends, so that path was untaken. It IS partly a spelling knob:
+dev.py:3118 selects `w_fold = vsel | dual_fold | madd`, tuned at `(6,31)`
+and never re-tuned at `(32,6)`; `dual_fold` emits 2 valu ops where `madd`
+emits 1, and +296 of the +488 sits on dual_fold rows. **But recovering ALL
+of it still gives 942. No re-tune restores 939.** Best explanation for the
+intrinsic part: at round 4 the pair tournament's inputs (folded `st`, the L3
+winner) are by-products the group needs anyway for round 5; at round 15
+nothing else consumes them (perf_takehome.py:1494).
+
+P3-D's Section-1 corollary (move the 26 to round 15 for -624 lane-ops) is
+**RETRACTED**. G-38 stands as the mainline verdict, with its reopen gate
+now requiring a floor below **946**, not below 1006.
+
+### Phase-3 status: the structural floor is 942-946, and 940 is out of reach
+
+Two independent models, built from opposite directions and disagreeing at
+every intermediate step, converge on a floor of **~946**, realizing **~965**.
+The record is 940 REALIZED, which needs a floor near 925 -- **157 vec-ops
+(0.31 per group-round) below anything this design space contains.** That is
+not a tuning gap or a rounding error; the record holder is doing something
+structurally outside every frame we have enumerated.
+
+Remaining unaudited item, named by P3-D: **both P3-A's and P3-C's models
+calibrate per-LEVEL rather than per-SITE, and every partially-served level
+other than L4 is unaudited for the same defect.** Until that is checked, the
+946 itself carries the same class of error that produced the phantom 939.
