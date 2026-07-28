@@ -1489,3 +1489,44 @@ correct, measured worse at every configuration tried]
   diagonal has LB 1000 / energetic 1002 vs the current 1011 realized.
 - method: rank on GREEDY CYCLES, LB-screen survivors on
   max(lb_total, energetic).
+
+### H-057 result [ACCEPTED — frontier 1006 (-5); the CHAIN is the lever, not the diagonal]
+- winner tools/h057_best_plan_1006.json: F-24's diagonal (8 blocks of 4,
+  lags (0,3,6,6,10,10,13,14), zip/default/asc) + 20-ring re-mined plan +
+  gmin (6,31) + re-walked order + empty spelling. Driver-verified 1006
+  correct on 8 seeds; ring audit clean (0 violations / 40 rings).
+- **F-25's causal mechanism reproduced on a DIFFERENT organization**:
+  rings buy FLOOR only (LB 1000->995) at +5 realized cost, the floor
+  funds a serving slide, the changed stream re-opens the order landscape.
+  Stage table: 1011 base -> 1016 (rings) -> 1014 (gmin (6,31)) -> 1010
+  (walk) -> 1006 (walk/re-mine/walk x2). **The chain is worth -5 on
+  F-24's diagonal and -7 on the second one (which F-24 had walked to only
+  1014 without it) — the CHAIN is the lever, not the diagonal.**
+- **NEW SEARCH AXIS: ROUND windows, not position windows.** Position
+  windows (both/all/ramp/mid/drain) plateaued at 1010 for 62k evals over
+  10 re-seeded chains at every jump set 1..64. EVERY step below 1010 came
+  from `--window r:11-15` (epoch-1 round window) or `drain`.
+- **Ring soundness is SEARCH-SHAPING, not just a check.** ~half the
+  walked orders invalidate their own plan (1008 order: 80 violations/40
+  rings) — and the unsound points are the FASTER ones, correct:true on
+  all 7 seeds. Re-mining them costs 1-3 cycles but yields a
+  differently-conditioned stream that re-walks lower. Path:
+  1010 clean -> 1008 dirty -> re-mine 1011 -> walk 1007 dirty ->
+  re-mine 1008 clean -> walk 1006 clean. ALSO: always RE-MINE FROM EMPTY
+  — mining from a carried plan yields an unsound set where mining from
+  () yields a clean one.
+- **ORGANIZATION SEARCH CLOSED**: 52,361 more organizations screened
+  (elitist perturbation over diagonals x uneven blocks x wave/group order
+  x interleave, k in {6,8,10,16}, 2 seeds) -> ZERO below greedy 1019.
+  With F-24's 29,296 that is ~82k organizations. F-24's "still
+  descending" was its first 44 seeds descending, not the search.
+- **Greedy ranking INVERTS under the chain**: the greedy-1019 diagonal
+  walks to 1007, the greedy-1021 one to 1006. Screen on greedy, but walk
+  more than the top candidate.
+- spelling re-derived at 1006 (flow + aux) = EMPTY, fifth independent
+  confirmation. Spend: 280,528 walk evals / 48 chains, 52,361 org
+  screens, ~150 mine+audit fixpoints.
+- follow-ups: F-33 port 1006 (dispatched); F-34 finer ROUND windows
+  crossed with the re-mine loop (the live axis); F-35 make the walk
+  audit-aware so it can keep the currently-discarded fast-but-dirty
+  points (re-mine in-loop instead of rejecting).
