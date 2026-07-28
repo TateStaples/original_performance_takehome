@@ -1323,3 +1323,115 @@ H-047-mix walk E's own descent had flattened by t~1300 s of 2700 s.
 - Unchanged conclusion from H-049/F-14: ramp 4 + drain 4 are
   chain-bound and order-resistant; H-052's chain shortening remains the
   only lever aimed at them.
+
+## F-18 (2026-07-27): radius escalation past F-13 — NEGATIVE, and the
+## single-entry radius axis is now CLOSED BY EXHAUSTION, not by sampling
+
+Charter: F-13 showed the productive axis was the jump RADIUS, not the
+restart seed (+-8 walks found zero over 62k evals; +-16/+-32 walks
+descended 1023 -> 1020 and 1022 -> 1020), and queued the untested
+escalation: +-64, +-128, and 2-entry COMPOUND moves. This is that
+escalation, run from the live-board 1020 (tools/f13_best_plan_1020.json
+on the H-047 mix, re-verified here at 1020 correct).
+
+### Result: no improvement. Frontier unchanged at 1020.
+
+~130k sim-verified evals, zero below 1020 in every tier.
+
+### New tooling (region tools/f18_*, emission_order_search.py untouched)
+
+- `tools/f18_radius_walk.py` — imports `_eval`/`FRONTIER_OVERRIDES` from
+  emission_order_search read-only, adds move kinds beyond its single
+  fixed-offset move: `jump` (F-13's, radius from --jumps), `free`
+  (re-insert an entry UNIFORMLY inside its maximal feasible interval =
+  unbounded radius, and always feasible so it does not burn evals on
+  invalid candidates), `comp2` (two independent single moves in one
+  candidate), `pairg` (two CONSECUTIVE same-group entries displaced
+  together), `block` (contiguous run of 2-4 entries as a unit).
+  Also checkpoints the CURRENT plan (`.cur.json`), not just the best, so
+  chained rounds continue the sideways drift instead of restarting.
+- `tools/f18_exhaust1.py` — enumerates and measures EVERY valid
+  single-entry reinsertion of a plan (26,415 of them for the 1020 plan),
+  chunked by --start/--stop.
+
+### Why `pairg` is the move that actually raises the radius
+
+A single entry cannot travel past its own group's next round-entry, so
+long fixed jumps are mostly rejected: at radius 128 the walk rejected
+6,972 of 17,372 proposals, and the >128 displacements that survive are
+uniformly harmful (see the histogram below). The barrier is the group's
+own successor, so the compound move that lifts the cap is moving two
+consecutive same-group entries together — hence `pairg`.
+
+### Sampled portfolio (6 walks, 63.8k evals, all from the 1020 point)
+
+| rd | walk | moves | radius | evals | result |
+|---|---|---|---|---|---|
+| 1 | A | jump | <=64 | 10,400 | 1020, ZERO |
+| 1 | B | jump | <=128 | 10,400 | 1020, ZERO |
+| 2 | C | free | unbounded | 10,784 | 1020, ZERO |
+| 2 | D | pairg/comp2/block | <=128 | 10,784 | 1020, ZERO |
+| 3 | C2 | free+jump (chained from C drift) | <=64 | 10,752 | 1020, ZERO |
+| 3 | D2 | pairg/comp2/block (chained from D drift) | <=128 | 10,688 | 1020, ZERO |
+
+Compound-move evals specifically: pairg 9,533 + comp2 8,126 + block
+3,813 = 21,472. The drift is real, not a stuck walk: C2/D2 ended
+286/276 of 512 positions away from the F-13 seed and still measured
+exactly 1020.
+
+### Positive control (the zeros are not a broken driver)
+
+Seeded with the H-047 1022 order on the H-047 mix, the same walker
+descended 1022 -> 1021 -> 1020 in 12.5k evals / 300 s, reproducing
+F-13's walk E. So the machinery finds order wins when they exist —
+and it lands on the SAME 1020, from a different start.
+
+### Exhaustive proof (52.9k evals) — this is the part that closes it
+
+`f18_exhaust1` measured ALL 26,415 valid single-entry displacements of
+the 1020 plan (every entry to every position in its feasible interval,
+i.e. radius unbounded by construction). Zero below 1020. The 1020 plan
+is therefore a STRICT 1-move local optimum at ANY radius — not a
++-8-local optimum as 1023 turned out to be. Repeating the full scan at
+a far-drifted plateau point (D2's checkpoint, 276/512 positions moved,
+26,449 moves) also returned zero.
+
+Neighborhood histogram of the 26,415 scanned moves:
+
+| cycles | count |
+|---|---|
+| incorrect (ring-borrow window broken) | 2,026 |
+| 1020 (neutral) | 13,464 |
+| 1021 | 1,093 |
+| 1022 | 618 |
+| 1023 | 5,777 |
+| >=1024 | 3,437 (worst 1047) |
+
+Two readings worth keeping:
+- **The plateau is enormous**: 55% of all correct single-move neighbors
+  measure exactly 1020. Order search here is mostly neutral drift, which
+  is why sampled walks look "still alive" long after they are done.
+- **Radius has a ceiling, and we are past it**: fraction of neutral-or-
+  better neighbors by displacement — <=8: 4,293/7,583 (57%); 9-32:
+  7,107/13,101 (54%); 33-128: 2,064/3,667 (56%); >128: 0/38 (0%).
+  Displacements longer than 128 are uniformly harmful. F-13's radius
+  effect was real but saturates: it bought the step from +-8 to +-32 and
+  there is nothing further out to buy.
+
+### Verdict
+
+The single-entry radius axis is EXHAUSTED — closed by enumeration, not
+by a budget running out. Compound moves are only closed by sampling
+(21.5k evals, zero); the 2-move space is ~7e8 and cannot be enumerated,
+but with the 1-move neighborhood provably flat-or-worse in every
+direction, a 2-move win would have to be a strictly-paired escape, and
+9.5k pairg proposals did not find one. Recommendation: retire the
+emission-order local search on this mix. Consistent with F-13/H-049/
+F-14, the residual regret 14 (ramp 4 + mid/seam 6 + drain 4) is not
+order-shaped; only a mix change (which invalidates the order artifact
+per F-13's cross-application table) or chain shortening (H-052/H-055)
+can move it.
+No artifact written: tools/f18_best_plan_*.json would have been a
+duplicate of f13_best_plan_1020.json. No verification sweep, l4_gmin
+re-sweep or regret re-profile was run — all three were conditioned on an
+improvement that did not occur; the F-13 numbers stand.
