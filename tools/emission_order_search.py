@@ -54,6 +54,19 @@ FRONTIER_OVERRIDES: dict[str, Any] = {
 }
 
 
+def _tuplify(v: Any) -> Any:
+    return tuple(_tuplify(x) for x in v) if isinstance(v, list) else v
+
+
+# F-13: the frontier config is a moving target (H-047 changed the serving
+# mix under the same order machinery). EOS_OVERRIDES is a JSON dict merged
+# onto FRONTIER_OVERRIDES so a walk can be pointed at a new mix without
+# editing the driver; unset = the H-049/H-042 mix above.
+if os.environ.get("EOS_OVERRIDES"):
+    FRONTIER_OVERRIDES.update(
+        {k: _tuplify(v) for k, v in json.loads(os.environ["EOS_OVERRIDES"]).items()})
+
+
 def default_blocks() -> list[list[int]]:
     return [list(range(b * 8, (b + 1) * 8)) for b in range(4)]
 
@@ -282,6 +295,10 @@ def local(budget: float, workers: int, out_path: str, seed_json: str | None,
     best_c = start[0]
     r.best = (best_c, {"seed": seed_json}, plan)
     rng = random.Random(int(os.environ.get("EOS_SEED", "0")))
+    # F-13: reinsertion offsets are a portfolio knob (EOS_JUMPS, e.g.
+    # "1,2,4,8,16,32" -- signs are mirrored); default = H-049's set.
+    jumps = tuple(int(x) for x in os.environ.get("EOS_JUMPS", "1,2,4,8").split(","))
+    jumps = tuple(sorted(set(jumps) | {-j for j in jumps}))
     t0 = time.time()
 
     def valid(p: list[Any]) -> bool:
@@ -303,14 +320,22 @@ def local(budget: float, workers: int, out_path: str, seed_json: str | None,
         return min(r_ for r_, _ in members)
 
     round_window: tuple[int, int] | None = None
+    pos_window: tuple[int, int] | None = None
     if window.startswith("r:"):
         lo, hi = window[2:].split("-")
         round_window = (int(lo), int(hi))
+    elif window.startswith("p:"):
+        # F-13: position window (plan-index range), e.g. p:404-483 for the
+        # F-14 epoch-seam entries (median scheduled cycle in c=850-940).
+        lo, hi = window[2:].split("-")
+        pos_window = (int(lo), int(hi))
     while time.time() - t0 < budget:
         batch = []
         for _ in range(workers * 8):
             p = list(cur)
-            if round_window is not None:
+            if pos_window is not None:
+                i = rng.randrange(max(0, pos_window[0]), min(n, pos_window[1] + 1))
+            elif round_window is not None:
                 idxs = [k for k, e in enumerate(p)
                         if round_window[0] <= round_of(e) <= round_window[1]]
                 if not idxs:
@@ -327,7 +352,7 @@ def local(budget: float, workers: int, out_path: str, seed_json: str | None,
             else:
                 i = (rng.randrange(0, min(120, n)) if rng.random() < 0.5
                      else rng.randrange(max(0, n - 120), n))
-            j = i + rng.choice((-8, -4, -2, -1, 1, 2, 4, 8))
+            j = i + rng.choice(jumps)
             if not (0 <= j < n):
                 continue
             e = p.pop(i)

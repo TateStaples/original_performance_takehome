@@ -1216,3 +1216,110 @@ nothing.** The flow engine's shadow price is exactly zero at every width.
   free_slot_oracle.py as standing pre-screens. Any hypothesis that
   claims cycles by moving work OFF an engine should show that engine's
   shadow price first; it costs one run.
+
+## F-13 (2026-07-27): H-049 restart-portfolio continuation —
+## 1023 -> 1020 on the H-049 mix AND 1022 -> 1020 on the H-047 mix;
+## the jump-radius knob, not the restart seed, is what re-opened descent
+
+Charter: continue H-049's emission-order local search from the 1023
+frontier (the walks were still descending ~1-2 cycles/round when H-049's
+budget ran out), with a restart portfolio over seeds and window
+emphases, re-targeted on F-14's fresh regret sites (ramp 4, epoch seam
+5 at c=881-927, drain 4; provable stream floor 1011).
+
+### Driver additions (tools/emission_order_search.py, all default-off)
+
+- `--window p:LO-HI`: local search restricted to a PLAN-INDEX range.
+  F-14 localizes regret in CYCLES, so the sites were first mapped
+  index<->cycle by capturing the 1023 build with backtrack_sched and
+  taking each entry's median op cycle: seam c=881-927 -> entries
+  432-471, wide seam c=850-940 -> 404-483, drain c>=960 -> 479-511.
+- `EOS_JUMPS`: the reinsertion offset set (default `1,2,4,8`, H-049's).
+- `EOS_OVERRIDES`: JSON merged onto FRONTIER_OVERRIDES so a walk can be
+  pointed at a different serving mix without editing the driver (needed
+  the moment H-047 changed the mix mid-run).
+Defaults unchanged: greedy with no emission_plan on the H-049 mix still
+measures 1032, as in H-049.
+
+### Restart portfolio (6 walks x 2700 s, ~213k sim-verified evals)
+
+| rd | walk | mix | seed | window | jumps | result |
+|---|---|---|---|---|---|---|
+| 1 | A | H-049 | 1111 | p:404-483 (F-14 seam) | 1,2,4,8 | 1023, ZERO (31.4k) |
+| 1 | B | H-049 | 2222 | ramp+drain | 1,2,4,8 | 1023, ZERO (30.8k) |
+| 2 | C | H-049 | 3333 | all | +16,32 | **1020** (-3; 38.0k) |
+| 2 | D | H-049 | 4444 | p:432-511 | 1,2,4,8 | 1021 (-2; 38.4k) |
+| 3 | E | H-047 | 5555 | all | +16,32 | **1020** (-2; 42.3k) |
+| 3 | F | H-049 (from 1020) | 6666 | all | +16,32 | 1020, ZERO (31.9k) |
+
+The discriminating variable is the JUMP RADIUS, not the restart seed:
+round 1 re-ran H-049's exact move set (max +-8) under two fresh seeds
+and two window emphases and found nothing in 62k evals, while both
+walks that added +-16/+-32 descended. H-049's plateau is escapable only
+by displacements longer than its own move set — the 1023 point was a
++-8-local optimum, not an order-space optimum. Windowing at the F-14
+regret sites (A, D) was WORSE than the unrestricted window (C, E): the
+paying moves reshape chains that cross the site boundaries, so
+position-restricted walks cannot express them.
+
+### Frontier(s)
+
+- **H-047 mix (live board): 1020** (-2 vs 1022) — parity_ring=True,
+  l4_gmin=(7,30), 4-ring parity_ring_plan, c5_primed_gather_levels=(5,6),
+  mem_prime_region_hazards=True, mem_prime_dead_reg_staging=True,
+  flow_spelling_plan=(), emission_plan = tools/f13_best_plan_1020.json.
+- **H-049 mix: 1020** (-3 vs 1023) — same but l4_gmin=(8,30), no
+  mem_prime/c5(5,6); emission_plan = tools/f13_best_plan_1020_h049mix.json.
+Both verified: seeds {unseeded,1,2,3,7,42,99} 1020 correct, plus
+debug_compares=True 1020 correct. l4_gmin re-sweep (7..9 x 29..31) at
+each: the mix's own gmin stays optimal (H-047 mix (7,30), margin 3-12;
+H-049 mix (8,30) tied with (7,30), margin 4-8) — no P-3 slide, as in
+H-049. Spelling re-search SKIPPED by driver instruction: H-047 already
+fixpointed at zero wins over 1,157 flips on its 1022 order (third
+independent confirmation that order absorbs the spelling prize).
+
+### Orders are mix-specific (cross-application measured)
+
+| order | on H-049 mix | on H-047 mix |
+|---|---|---|
+| F-13 1020 (H-049-mix walk C) | 1020 | 1022 |
+| H-047 1022 | 1027 | 1022 |
+
+The two -2/-3 wins are NOT the same reordering rediscovered; neither
+order transfers. Any mix change invalidates the order artifact (and
+vice versa) — the plan-search toolchain must be re-run per candidate
+mix, exactly as H-047's re-scope assumed.
+
+### New regret decomposition (backtrack_sched capture+regret, both at 1020)
+
+H-047 mix (ops 20473, offline model reproduces the greedy placement
+exactly): LB 1006 (valu-engine bound; staircase 1007), CP 541, final
+regret 14 = ramp 4 (c=0,1,3,7) + mid/seam 6 (c=744, 813, 848, 911, 913,
+922 — rounds 5-15, the r9-11 epoch cluster persists and has SPREAD
+earlier) + drain 4 (c=993, 994, 999, 1011, cpLB>=engLB throughout).
+H-049 mix (ops 20554): LB 1007, CP 554, regret 13 = ramp 4 + mid/seam 5
+(c=311, 792, 880, 911, 923) + drain 4 (identical drain signature).
+Reading: the -2/-3 came out of the MID/SEAM band (F-14's 5-cycle
+c=881-927 cluster is now spread over c=744-922 at lower total cost);
+ramp 4 and drain 4 are byte-for-byte the same sites as F-14 and did not
+move under 213k order evals across three rounds. The H-047 mix buys a
+cheaper op stream (LB 1006 vs 1007) but currently spends one more cycle
+of regret, so both mixes land on 1020.
+
+### Stop rule and follow-ups
+
+Stopped per the diminishing-returns rule: round 3's continuation walk F
+re-ran the winning move set (jumps to +-32, unrestricted window, fresh
+seed) from the 1020 point for 31.9k evals with ZERO descent, and the
+H-047-mix walk E's own descent had flattened by t~1300 s of 2700 s.
+- F-18 (cheap, queued): one more radius escalation (EOS_JUMPS with
+  +-64/+-128, or a 2-entry compound move) from either 1020 — the round-1
+  vs round-2 contrast says radius is the live axis and the current stop
+  is only evidence about radius <= 32.
+- Mainline port: tools/f13_best_plan_1020.json is a drop-in replacement
+  for the `_EMISSION_ORDER` literal that F-15 baked from
+  h047_best_plan_1022.json (same 512 plain (r,g) entries, same shape
+  guard) — -2 on the live board with no other change.
+- Unchanged conclusion from H-049/F-14: ramp 4 + drain 4 are
+  chain-bound and order-resistant; H-052's chain shortening remains the
+  only lever aimed at them.
