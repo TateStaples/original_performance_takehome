@@ -422,3 +422,38 @@ Seeded 2026-07-23 from the 2148->1140 campaign's measured rejections.
   closed H-053 in one run.
 - reopen-if: the RAW structure changes materially (chain shortening,
   H-052), which would move the 993 bound itself.
+
+### G-27 The flow prize: bubbles, select-readiness anti-correlation, flowmax (H-054)
+- claim (F-17/LP/corsix-derived): ~33-60 cyc are locked behind the
+  select-readiness x flow-bubble anti-correlation; breaking it reaches
+  the floor-990 stream.
+- CLOSED BY RELAXATION, not exhaustion (the strong form):
+  * **Infinite-width flow** (tools/h054_width.py — strictly dominates
+    EVERY legal flow-side mechanism): width 1/2/4/8 -> 1022/1023/1023/
+    1023 while valu falls 6052->5903. Best over 19 order families at
+    width 8: 1023. Flow's shadow price is **0 at every width**.
+  * **Select free-slot oracle** (G-26 method): freeing all 395
+    flow-capable sites -> 1026 (+4); all 1,560 vselects -> 1021 (-1);
+    all 1,033 race sites -> 1020 (-2). The entire select class is worth
+    **<=2 cycles**.
+- burst data (for the record, now moot): flowmax bursts peak backlog 5,
+  a 5-deep buffer absorbs all of them; the wait comes from flow's ~560
+  non-race baseline ops, not bursts. Only 23/159 flow-lost sites satisfy
+  wait<=slack; the rest need ~50 cyc of slack nobody has.
+- mechanisms tried, ALL >=1022: flow_race_bias (1026), window-restricted
+  bias (zero candidates exist in the bubble-rich windows), bias x budget
+  (1024), batch-forcing the 23 feasible sites (1024), cadence de-sync
+  over 19 order families x 6 biases (1022 incumbent, bias monotone-
+  negative on every family), order re-search on the migrated stream
+  (1023/1025).
+- **THE REAL FINDING — per-engine shadow prices** (tools/h054_shadow.py):
+  flow 0, store 0, alu 12->16/24 = -2/-7, valu 6->8/12 = -6/-8,
+  load 2->3 = **-7**. JOINT: valu8+alu16 = -14, alu16+load4 = -48,
+  **valu8+load4 = -181 (841 cycles)**, all doubled = 612. Single-resource
+  relief is worth 5-8 cycles anywhere; **valu+load relief is wildly
+  superadditive**. c100-c800 runs valu 100% AND alu 100% AND load 100%
+  simultaneously. The binding structure is an ALTERNATING valu<->load
+  chain (vector compute <-> gather addresses), which is why relieving
+  either alone does nothing.
+- reopen-if: never for the flow axis. The successor is F-20 (find and
+  shorten the alternating valu/load chain).

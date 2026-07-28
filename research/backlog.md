@@ -1358,3 +1358,31 @@ correct, measured worse at every configuration tried]
   floor cycles.
 - F-18: e1 composition plateau ({29,30}/{27,30} tie) = free DOF for
   H-052's drain restructure.
+
+### H-055 [strain: algo] [status: testing] (F-20 successor; absorbs H-052 + the user's drain mechanism)
+- statement: SHORTEN THE ALTERNATING valu<->load CHAIN. H-054's shadow
+  prices are decisive: flow 0, store 0, alu -2, valu -6, load -7 alone,
+  but **valu8+load4 = -181** (841 cycles). c100-c800 runs valu/alu/load
+  all at 100% simultaneously. The critical structure alternates vector
+  compute with gathers: parity -> address madd -> gather -> hash ->
+  parity. Every prior axis (spelling G-24-adjacent, packing G-25, order
+  H-049 residual, flow G-27, compute-migration G-26) is closed; this
+  alternation IS the remaining structure.
+- primary mechanism (user proposal, 2026-07-27): DEINTERLEAVED left/right
+  pair-preload. Because both children are indexed by the walker's CURRENT
+  position, the loads hoist a full round ahead of the parity, and the
+  step becomes parity -> vselect, DELETING the address-madd link from
+  between the parity and the gather — i.e. it removes one valu<->load
+  alternation per level. G-18 closed the GENERAL form on load throughput
+  (+3,472 loads); the point now is that load throughput relief and valu
+  relief are superadditive (-181), so the trade must be re-measured
+  JOINTLY, not on the load axis alone.
+- secondary sites (H-052's regret targets at 1022): ramp 4 cyc
+  (vbroadcast RAW on setup loads), r8-r15 seam 5 cyc, drain 4 cyc
+  (CP-bound, rounds 14-15 — the F-18 e1 composition plateau
+  {29,30}/{27,30} is free DOF here).
+- pre-screens available (run BEFORE prototyping): tools/h054_shadow.py
+  (20 s, ceilings any candidate), tools/free_slot_oracle.py,
+  tools/h054_oracle.py, tools/backtrack_sched.py regret.
+- predicted_gain: unknown but this is where the -181 joint signal lives;
+  the free-compute bound is 993 and CP-bound regions dominate it.
