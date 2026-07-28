@@ -505,3 +505,31 @@ Seeded 2026-07-23 from the 2148->1140 campaign's measured rejections.
   G-20/G-24, idx closed G-21); below 993 needs fewer loads (contiguity
   0.00%, G-16). Both legs closed inside this organization.
 - reopen-if: a different program organization (not this one's schedule).
+
+### G-29 Emission-order local search at the 1020 mix (F-18) — CLOSED BY ENUMERATION
+- claim: F-13's radius finding (+/-8 was a local optimum; +/-16/32 paid)
+  should extend to +/-64, +/-128, unbounded, and compound moves.
+- evidence: NEGATIVE, ~130k sim-verified evals. Radius <=64: 10,400 zero.
+  <=128: 10,400 zero. Unbounded `free`: 21,536 zero. Compound (pairg
+  9,533 / comp2 8,126 / block 3,813): 21,472 zero. Positive control from
+  1022 reproduced 1022->1021->1020, so the machinery works.
+- **EXHAUSTIVE 1-MOVE SCAN (tools/f18_exhaust1.py): every valid single
+  displacement of the 1020 plan (each entry to every position in its
+  group's feasible interval, radius unbounded by construction) — 26,415
+  moves, ZERO below 1020.** Repeated at a plateau point 276/512
+  positions away: 26,449 moves, also zero. The 1020 plan is a STRICT
+  1-move local optimum at any radius (1023 was only +/-8-local).
+- two carry-forward facts: (a) the PLATEAU IS ENORMOUS — 13,464 of
+  24,389 correct neighbors (55%) measure exactly 1020, so order walks
+  always *look* alive while doing neutral drift; 2,026 moves break
+  correctness (ring-borrow windows). (b) RADIUS SATURATES — neutral-or-
+  better fraction by displacement: <=8 57%, 9-32 54%, 33-128 56%,
+  **>128: 0/38**. F-13's radius effect was real but bought only the
+  +/-8 -> +/-32 step.
+- compound moves closed by sampling only (2-move space ~7e8), but with
+  the whole 1-move neighborhood provably flat-or-worse a 2-move win must
+  be a strictly-paired escape, and 9.5k pairg proposals (the move that
+  lifts the same-group barrier) found none.
+- reopen-if: the MIX changes (orders are mix-specific per F-13's
+  cross-application table — a new mix invalidates this artifact and the
+  search must be re-run from scratch).
