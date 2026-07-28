@@ -1019,3 +1019,200 @@ tests/submission_tests.py 9/9 green, all nine CYCLES lines 1023, both
 runs. Literal programmatically verified equal to the committed JSON
 artifact. dev.py and tests/ untouched. Mainline == dev frontier again;
 F-14 (backtrack re-localization at 1023) can now run against main.
+
+## H-054 (2026-07-27): select-readiness x flow-bubble anti-correlation —
+## REJECTED, and the 33-cycle prize is proven NOT TO EXIST. Two independent
+## relaxations (infinite-width flow engine; free-slot oracle on the select
+## class) both say the entire select class is worth <= 2 cycles. The
+## floor-990 board (F-17) is a single-engine-metric artifact.
+
+Charter (F-17): break the anti-correlation on the floor-990 stream — the
+loop's single largest identified prize (~33 cycles) with every other axis
+measured-closed. Target board = H-047's mp56+gmin(7,30) mix at flow-heavy
+spellings (any-packing floor 990/992, actual greedy 1104).
+
+Region: dev.py scheduler (one new default-off kwarg family) +
+tools/h054_*.py wrappers. emission_order_search.py / backtrack_sched.py /
+free_slot_oracle.py / mem_prime code untouched.
+
+### Mechanism landed (dev.py, `flow_race_bias`, default 0 = bit-identical)
+
+The brief's direction 4 in its general form: an online spelling POLICY
+instead of a per-site plan. `emit_any` accepts a pure-flow encoding whose
+retire time is up to B cycles LATER than the race winner's — "wait up to B
+cycles for the 1-wide flow engine rather than burn a valu slot". Companion
+knobs `flow_race_bias_window=(lo,hi)` (restrict to a cycle band) and
+`flow_race_bias_budget=K` (cap total biased placements; the literal
+"flow gets one per cycle, valu takes the overflow" policy). B=0 is the
+untouched code path; `sched_snap`/`sched_install` carry the counter.
+Verified bit-identical vs bd27795 on BOTH the mainline (1038) and the
+H-047 frontier (1022) by object comparison of the bundle lists
+(tools/h054_identity.py); full gate flags-off 9/9 green, all nine CYCLES
+lines 1022.
+
+### Burst characterization (the deliverable), measured ON the target board
+
+tools/h054_diag.py instruments `emit_any` to record, per race site,
+`arrival = ready(reads,writes)` (when the select COULD take a flow slot)
+and `placed = find_free('flow', arrival)`.
+
+| | greedy 1022 stream | flowmax stream (395 sites forced) |
+|---|---|---|
+| cycles / max engine floor | 1022 / 1009 (valu) | 1104 / 992 (valu) |
+| engine slots valu/flow/alu | 6052 / 796 / 11761 | 5949 / 955 / 10945 |
+| flow-capable sites on flow | 236 / 395 | 395 / 395 |
+| flow busy | 796/1022 = 77.9%, 226 bubbles | 955/1104 = 86.5%, 149 bubbles |
+| selects ready per cycle | 1:187, 2:20, 3:3 (210 arrival cycles, 23 bursts) | 1:292, 2:43, 3:1, 4:1, 5:2 (339 arrival cycles, 47 bursts) |
+| burst inter-arrival | median ~20, tail to 39+ | mode 3-7, median 5 |
+| wait = placed-arrival | 0:145 1:36 2:17 3:6 ... max 42, mean 1.82 | 0:158 1:31 2:26 3:23 4:18 ... max 106, mean **10.38** |
+| required 1-server FIFO queue depth (arrivals only) | peak backlog **3** | peak backlog **5** |
+| bubble -> nearest arrival cycle | 55 at d=1, 80 at d>=10 | 30 at d=1, 33 at d>=10 |
+
+The queue-depth answer is the first surprise: a 5-deep buffer in front of
+flow would absorb every burst. The bursts are NOT the problem — the mean
+wait of 10.4 comes from flow's *baseline* load (the ~560 non-race flow
+ops), not from select clustering.
+
+Joint slack oracle (tools/h054_slack.py) — H-042 measured the two sides
+separately at the old order/mix (46/155 slack>0; 0/155 with a bubble
+within retire-delta 3); re-measured jointly on THIS stream, per flow-lost
+site: `wait` = retire(flow enc) - retire(chosen), `slack` = (first
+consumer cycle - 1) - retire(chosen).
+
+- 159 flow-lost sites. wait histogram 1:34 2:33 3:20 4:13 5:11 ... 40:1.
+- slack histogram -1:24 0:37 1:37 2:12 3:10 ... 20+:9.
+- **JOINT feasible (wait <= slack): 23 / 159**, in rounds {1,2,4,13,15}.
+- Independent cross-check (tools/h054_windows.py): the window-local
+  pairing bound min(bubbles, lost) per window is **23 at W=10** (exact
+  agreement with the slack oracle) and 77 at W=50 — but W=50 pairing
+  needs ~50 cycles of slack, which no site has.
+
+Occupancy context (tools/h054_windows.py, 100-cycle windows): from c100
+to c800 the frontier runs **valu 100%, alu 100% AND load 100%
+simultaneously**. The steady state is jointly saturated on three engines,
+which is why the single-engine valu floor is not causal.
+
+### Every mechanism tried, and what it recovered
+
+| mechanism | evals | best | note |
+|---|---|---|---|
+| `flow_race_bias` B = 1/2/3/4/6/8/12/16/24/40/100 | 11 | **1026** at B=1 | monotone; floor falls 1009->993, realized rises ~2.5-3 cycles per floor cycle |
+| bias restricted to a cycle window (8 windows x 3 B) | 24 | 1022 (=) | in the bubble-rich windows c640-720 / c740-820 the policy finds **zero** candidates — the anti-correlation is exact, not statistical |
+| bias x budget cap K (direction 4 literal) | 42 | 1024 | "one per cycle, valu takes overflow" is what greedy already does |
+| batch-force the 23 jointly-feasible sites (direction 2) | 12 | 1024 | census barely moves: valu 6052->6050, flow 796->797 |
+| force by round window (r1/r2/r4/r13/r15 feasible subsets) | 5 | 1022 (=) | |
+| **cadence de-synchronization (direction 3)**: 19 emission-order families (lags (0,2,4,6)..(0,8,16,24), 8/16/32 blocks x stagger 1-4, zip, group_rev, stage_rr per-step and per-wave) x 6 biases, correctness-checked | 114 | **1022** (the incumbent) | bias is monotone-negative on EVERY family; no desync family within +4 at any bias |
+| emission-order local re-search ON the migrated stream (tools/h054_local.py, seeded from the 1022 plan) | 12.0k @ B=2; 11k @ B=4 | 1023 (from 1027); 1025 (from 1031) | "order absorbs spelling" still holds — it recovers 4-6 — but never back to 1022 |
+
+Self-equilibration confirmed at site granularity (H-053 point 4): forcing
+20 slack-feasible sites onto flow moved the census by valu -2 and flow
++1, because the forcing displaces ~19 sites greedy would otherwise have
+put on flow, and the `_sched_vec` alu/valu split races re-balance behind
+it (alu 11761 -> 11481 at B=2). Any per-site migration is silently undone.
+
+### The closure: two independent relaxations, both zero
+
+**(A) Infinite-width flow engine** (tools/h054_width.py; mutates
+`problem.SLOT_LIMITS['flow']`, illegal programs, cycles only). Widening
+flow is a strict relaxation that dominates every legal flow-side
+mechanism — spelling plan, emission order, placement policy, burst
+buffering, any of them:
+
+| flow width | 1 | 2 | 4 | 8 |
+|---|---|---|---|---|
+| greedy cycles | **1022** | 1023 | 1023 | 1023 |
+| valu slots (single-engine floor) | 6052 (1009) | 5948 (992) | 5906 (985) | 5903 (984) |
+
+With flow bandwidth FREE, greedy migrates 149 valu slots away by itself
+and the schedule does not move. Re-running all 19 emission-order families
+under flow width 8: best 1023. There is no flow-side schedule at 990.
+
+**(B) Free-slot oracle on the select class** (tools/h054_oracle.py —
+G-26's method, new classes for the ops H-054 is about; routes them to the
+64-wide `debug` engine, dependency edges and 1-cycle latency preserved):
+
+| class freed | ops | on the 1022 stream | on the flowmax (1104) stream |
+|---|---|---|---|
+| `sel` (all 395 flow-capable race sites) | 395 | 1026 (**+4**) | 1026 (-78) |
+| `sel_lost` (the 159 migration targets) | 159 | 1026 (**+4**) | 1025 (-79) |
+| `vselect` (every vselect however spelled) | 1560 | 1021 (**-1**) | 1021 (-83) |
+| `race` (all 1033 multi-encoding sites) | 1033 | 1020 (**-2**) | 1020 (-84) |
+
+**The entire select class is worth <= 2 cycles.** Freeing the selects on
+the flowmax stream removes exactly the flowmax penalty and lands back at
+the baseline, never below it. The anti-correlation is not slot-shaped:
+there is nothing on the other side of it.
+
+### Derived intel: per-engine shadow prices (tools/h054_shadow.py)
+
+Counterfactual engine widenings at the 1022 frontier (illegal, cycles
+only). This is the map the loop should steer by now that G-26 has retired
+`ceil(slots/width)`:
+
+| relaxation | cycles | delta |
+|---|---|---|
+| baseline | 1022 | — |
+| flow 1 -> 2 / 4 / 8 | 1023 / 1023 / 1023 | **0** |
+| store 2 -> 4 | 1022 | 0 |
+| alu 12 -> 14 / 16 / 24 | 1022 / 1020 / 1015 | -0 / -2 / -7 |
+| valu 6 -> 7 / 8 / 12 | 1021 / 1016 / 1014 | -1 / -6 / -8 |
+| load 2 -> 3 / 4 | 1015 / 1016 | **-7** / -6 |
+| valu 8 + alu 16 | 1008 | -14 |
+| alu 16 + load 4 | 974 | -48 |
+| **valu 8 + load 4** | **841** | **-181** |
+| valu 8 + alu 16 + load 4 | 800 | -222 |
+| all widths x2 | 612 | -410 |
+
+Free-slot oracle by class at the same config (G-26's tool, frontier
+overrides): gather -5, madd -6, vec -18, all-compute -34 (988), bcast +1.
+
+Two things fall out. (i) Every single-resource relief is worth 5-8
+cycles and no more — the kernel sits in a near-balanced multi-resource
+regime (corsix's ratio, third sighting). (ii) valu and load relief are
+wildly SUPERADDITIVE (-6 and -6 alone, -181 together): there is a chain
+that alternates vector compute and gathers, and relieving either engine
+alone just moves the stall to the other. That is the largest unexplained
+signal on the board.
+
+### Verdict
+
+**0 of the 33 cycles materialized, and the 33 was never there.** The
+floor-990 stream is reachable, its any-packing floor is real, and it is
+irrelevant: the single-engine `ceil(valu_slots/6)` metric that produced
+990 does not bound this schedule, and two independent relaxations that
+strictly dominate every possible flow-side mechanism both return 0. F-17
+retargeted the loop onto a board that does not exist; this closes it.
+
+The correct restatement of G-4/G-12/H-042/H-045 is stronger than
+"selects cannot reach the flow bubbles": **reaching them is worth
+nothing.** The flow engine's shadow price is exactly zero at every width.
+
+### Follow-ups (driver)
+
+- F-19: retire "flow bubbles" / "select-readiness anti-correlation" /
+  "the ~40-60 cycle modeled flow prize" as open levers, in the same
+  motion G-26 retired engine-floor scoring. Four hypotheses (G-4, G-12,
+  H-042, H-054) and one LP have now spent budget on this; the answer is
+  0 and it is now proven by relaxation, not by exhaustion.
+- F-20 [the successor]: the valu+load superadditivity (-6, -6, -181) is
+  the biggest live signal. Probe: which dependency chains alternate
+  `_sched_vec`/`_sched_madd` output with `load` gather addresses, and
+  does any algebraic restructure (address precompute, gather batching,
+  deeper mem priming) break the alternation? This is an algo-strain
+  question with a scheduler-strain measurement (h054_shadow.py gives the
+  ceiling for any candidate in one 20 s run).
+- F-21: `flow_race_bias` stays in dev.py as a default-off,
+  measured-negative lever (same status as `flow_spelling_plan`). It is
+  the cheapest re-test of this axis after any mix change: one 11-point
+  sweep, ~5 s, via tools/h054_curve.py.
+- F-22: cadence de-synchronization is now closed THREE independent ways
+  — at greedy spellings (H-049 phase1), at flow-heavy spellings (this
+  section, 114 evals), and under a free flow engine (19 families, best
+  1023). Finer-than-(round,group) emission granularity was deliberately
+  NOT built: with the select class worth <= 2 cycles there is nothing
+  for it to win.
+- F-23: tools/h054_shadow.py (per-engine and joint shadow prices) and
+  tools/h054_oracle.py (select-class free-slot oracle) join
+  free_slot_oracle.py as standing pre-screens. Any hypothesis that
+  claims cycles by moving work OFF an engine should show that engine's
+  shadow price first; it costs one run.
