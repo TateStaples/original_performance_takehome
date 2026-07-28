@@ -48,26 +48,30 @@ from problem import (
 _SCALARIZABLE = {"+", "-", "*", "^", "&", "|", "<<", ">>", "<", "=="}
 
 
-# H-049 emission order (2026-07-27): explicit (round, group) emission plan
-# replacing the (4,3)-skew diagonal step loop for the graded 32-group,
+# H-049/H-047 emission order (2026-07-27): explicit (round, group) emission
+# plan replacing the (4,3)-skew diagonal step loop for the graded 32-group,
 # 16-round shape. Found by tools/emission_order_search.py (windowed
 # single-entry local search + sideways plateau walk from the default
 # diagonal order; committed artifact tools/h049_best_plan.json): 1031 ->
-# 1023 cycles. Order-load-bearing AND ring-liveness-timed -- the parity
-# rings' borrow windows are validated against THIS order, so do not
-# regenerate, simplify, or locally reorder it; re-derive via the search
-# driver after any kernel change. Covers every (round, group) exactly
-# once with per-group rounds ascending (asserted at use).
+# 1023 cycles. H-047 then re-searched the plan jointly with the serving-mix
+# change below (mem-prime levels {5,6} + l4_gmin (7,30)) and descended a
+# further 26 entries to 1022 (artifact tools/h047_best_plan_1022.json).
+# Order-load-bearing, MIX-matched AND ring-liveness-timed -- the plan is
+# only worth 1022 at exactly that op mix, and the parity rings' borrow
+# windows are validated against THIS order -- so do not regenerate,
+# simplify, or locally reorder it; re-derive via the search driver after
+# any kernel change. Covers every (round, group) exactly once with
+# per-group rounds ascending (asserted at use).
 _EMISSION_ORDER: tuple[tuple[int, int], ...] = (
-    (0, 1), (0, 2), (0, 0), (0, 5), (0, 4), (1, 1), (1, 4), (0, 3),
-    (0, 7), (0, 6), (1, 0), (1, 3), (1, 2), (1, 5), (1, 6), (1, 7),
+    (0, 2), (0, 1), (0, 0), (0, 5), (0, 4), (1, 1), (1, 4), (0, 7),
+    (1, 2), (0, 6), (0, 3), (1, 0), (1, 3), (1, 5), (1, 6), (1, 7),
     (2, 1), (2, 2), (2, 0), (2, 5), (3, 0), (2, 6), (2, 7), (3, 1),
-    (3, 2), (3, 6), (2, 4), (4, 0), (2, 3), (3, 5), (0, 8), (3, 7),
-    (3, 4), (3, 3), (0, 11), (4, 5), (0, 14), (0, 12), (4, 2), (0, 9),
-    (0, 10), (0, 15), (4, 1), (4, 6), (4, 4), (4, 7), (0, 13), (5, 0),
-    (1, 13), (4, 3), (1, 15), (1, 8), (5, 2), (1, 9), (5, 4), (1, 12),
+    (3, 2), (3, 6), (2, 4), (4, 0), (2, 3), (3, 5), (3, 4), (0, 8),
+    (3, 7), (3, 3), (0, 11), (4, 5), (0, 14), (0, 12), (4, 2), (0, 9),
+    (0, 10), (4, 3), (0, 15), (4, 1), (4, 6), (4, 4), (4, 7), (0, 13),
+    (5, 0), (1, 13), (1, 15), (1, 8), (5, 2), (1, 9), (5, 4), (1, 12),
     (1, 14), (1, 10), (5, 6), (1, 11), (5, 5), (2, 8), (5, 3), (5, 7),
-    (2, 12), (5, 1), (6, 2), (2, 10), (6, 4), (2, 9), (6, 0), (6, 5),
+    (2, 12), (5, 1), (6, 2), (2, 10), (6, 0), (6, 4), (2, 9), (6, 5),
     (2, 11), (3, 9), (6, 1), (2, 14), (6, 3), (3, 10), (2, 13), (2, 15),
     (6, 6), (3, 13), (6, 7), (3, 8), (3, 15), (3, 12), (3, 14), (0, 18),
     (7, 2), (0, 17), (0, 19), (7, 4), (0, 23), (7, 0), (7, 1), (0, 20),
@@ -111,8 +115,8 @@ _EMISSION_ORDER: tuple[tuple[int, int], ...] = (
     (7, 27), (14, 9), (11, 20), (14, 15), (14, 11), (14, 14), (14, 10), (11, 17),
     (8, 28), (15, 12), (11, 19), (7, 31), (8, 31), (14, 8), (11, 22), (11, 16),
     (11, 18), (8, 29), (11, 23), (8, 24), (8, 25), (8, 26), (11, 21), (12, 17),
-    (15, 8), (15, 15), (15, 14), (15, 11), (15, 13), (15, 10), (8, 27), (12, 19),
-    (12, 16), (15, 9), (8, 30), (12, 23), (12, 20), (12, 18), (12, 22), (12, 21),
+    (15, 8), (15, 15), (15, 14), (15, 11), (15, 13), (15, 10), (8, 27), (12, 23),
+    (12, 16), (12, 19), (15, 9), (8, 30), (12, 20), (12, 18), (12, 22), (12, 21),
     (9, 24), (9, 25), (9, 30), (9, 26), (9, 27), (9, 29), (9, 28), (13, 19),
     (9, 31), (13, 18), (13, 23), (13, 17), (13, 16), (13, 21), (13, 20), (13, 22),
     (10, 24), (10, 25), (10, 26), (10, 27), (10, 30), (10, 29), (14, 18), (14, 17),
@@ -152,7 +156,13 @@ class ListScheduler:
     default, but `ignore_mem_read_hazard` lets a caller that can prove its
     write's address range is statically disjoint from every prior read's
     range skip it (H-031: the final result vstores target a memory range
-    the kernel's gathers never touch).
+    the kernel's gathers never touch). Symmetrically,
+    `ignore_mem_write_hazard` lets a mem_read skip the RAW-style gate
+    against prior mem writes when its address range is statically disjoint
+    from every prior write's range (H-039: the mem-priming waves and the
+    gathers of a primed level touch only that level's tree block, which no
+    other wave and no other level's gather ever writes; those gathers are
+    gated instead on the exact per-level `mem_prime_store_done_cycle`).
 
     Placement scans start from a per-engine `hint` = first cycle known to
     possibly have a free slot on that engine (monotone, since slots only
@@ -176,6 +186,7 @@ class ListScheduler:
         mem_write: bool = False,
         min_cycle: int = 0,
         ignore_mem_read_hazard: bool = False,
+        ignore_mem_write_hazard: bool = False,
     ) -> int:
         cycle = min_cycle
         lw = self.last_write
@@ -191,7 +202,8 @@ class ListScheduler:
             t = lr.get(addr, -1)
             if t > cycle:
                 cycle = t
-        if mem_read and self.last_mem_write_cycle + 1 > cycle:
+        if (mem_read and not ignore_mem_write_hazard
+                and self.last_mem_write_cycle + 1 > cycle):
             cycle = self.last_mem_write_cycle + 1
         if mem_write:
             # Same-cycle mem WRITES ok: commit end-of-cycle, disjoint addrs exact, kernel never writes a word twice; reads keep full ordering vs writes both ways.
@@ -274,8 +286,10 @@ class ListScheduler:
         mem_write: bool = False,
         min_cycle: int = 0,
         ignore_mem_read_hazard: bool = False,
+        ignore_mem_write_hazard: bool = False,
     ) -> int:
-        cycle = self.ready(reads, writes, mem_read, mem_write, min_cycle, ignore_mem_read_hazard)
+        cycle = self.ready(reads, writes, mem_read, mem_write, min_cycle,
+                           ignore_mem_read_hazard, ignore_mem_write_hazard)
         cycle = self.find_free(engine, cycle)
         self.put(engine, slot, cycle, reads, writes, mem_read, mem_write)
         return cycle
@@ -576,7 +590,9 @@ class KernelBuilder:
           trace-liveness of emit_any-raced operands (the losing encoding's
           reads never land in the trace, so such liveness is unsound).
           This combined relief funds the epoch-0 `l4_gmin` slide from 9 to
-          8 (+1 served L4 group-round vs the ringless 9).
+          8 (+1 served L4 group-round vs the ringless 9), and -- once the
+          level-6 mem priming below deletes another ~184 alu slots -- on
+          to 7 (H-047).
 
         - alu offload: elementwise vector ops are split into 8 scalar alu
           slots when that retires them no later (see `_sched_vec`), raising
@@ -594,7 +610,13 @@ class KernelBuilder:
           order with odd-base/negated-diff so the fold emission is unchanged,
           and the epoch-exit gaddr conversion becomes a madd by a -2 vector
           plus an add/sub. `primed_gather_levels` extends the in-mem
-          priming to level 5's gathered tree words so round 4 can elide too.
+          priming to levels 5 and 6's gathered tree words so rounds 4 and 5
+          can elide too. Level 6 only pays in composition (H-047): its
+          waves are staged through wave-private DEAD registers so they land
+          in the dependency-idle cycle-0..50 load window, its stores stay
+          off the coarse whole-mem write clock (exact per-level gather
+          gating instead), and the ~184 alu slots it frees are what fund
+          the `l4_gmin` (8,30) -> (7,30) slide. Neither leg wins alone.
 
         - Newest-parity-last fold at the final round: fold the level-4 E/D
           tables by the OLDER bits b0,b1,b2 (already in `st` at round start)
@@ -633,10 +655,13 @@ class KernelBuilder:
         # --- shape/tuning constants (not toggles; they define the kernel) ---
         # Levels 1..k folded as "tournaments" (broadcast tables + position accumulator), not gathered; l4_gmin = per-epoch group threshold (or explicit set) for two-stage level-(k+1) "pair" tournament; temp_and_cond_pool_sizes/skew size scratch pools + software-pipeline diagonal.
         tournament_levels = (1, 2, 3)
-        l4_gmin = (8, 30)
+        l4_gmin = (7, 30)
         temp_and_cond_pool_sizes = (16, 4)
         skew = (4, 3)
-        primed_gather_levels = {5}  # deeper gather levels primed in mem
+        # Deeper gather levels primed in mem; a level only exists to prime
+        # if it is a real gather level of THIS tree (5..height), so shorter
+        # forests just prime fewer (the graded height-10 shape gets {5, 6}).
+        primed_gather_levels = {d for d in (5, 6) if d <= forest_height}
 
         active_tournament_levels = tuple(l for l in tournament_levels if l < forest_height)
         assert active_tournament_levels == tuple(range(1, len(active_tournament_levels) + 1)), "tournament levels must be 1..k"
@@ -1131,9 +1156,14 @@ class KernelBuilder:
                 scheduler.emit("store", ("vstore", primed_store_addr, src),
                        (primed_store_addr,) + self._v(src), (), mem_write=True)
 
+        # Last priming-store cycle per primed level; that level's gathers
+        # wait on THIS exact cycle (min_cycle) instead of the coarse
+        # whole-mem write clock -- see the wave loop below.
+        mem_prime_store_done_cycle: dict[int, int] = {}
         if primed_gather_levels:
-            # Prime deeper gather levels in mem via vload/^C5/vstore waves through lv[0..23] (per-address WAR + mem hazards keep every store ahead of the first gather); lv[24..31] permanently holds the omf1 = 2 - fp vector for elided gather-mode exits.
+            # Prime deeper gather levels in mem via vload/^C5/vstore waves; lv[24..31] permanently holds the omf1 = 2 - fp vector for elided gather-mode exits.
             assert level_table is not None and level_table_addr is not None
+            assert state_vecs is not None and node_val_vecs is not None
             two_minus_fp_s = self.alloc_scratch("omf1")
             scheduler.emit("alu", ("+", two_minus_fp_s, one_minus_fp_s, one_c),
                    (one_minus_fp_s, one_c), (two_minus_fp_s,))
@@ -1143,15 +1173,52 @@ class KernelBuilder:
             k = 0
             for d in sorted(primed_gather_levels):
                 for off in range(0, 2 ** d, VLEN):
-                    stage = level_table + (k % 3) * VLEN
+                    # H-039 dead-register staging: staging every wave
+                    # through the shared lv[0..23] scratch and a single
+                    # shared address scalar would chain the waves behind
+                    # registers the setup BROADCASTS must read first,
+                    # pushing the priming vloads into the contended
+                    # ~50..100 load window where they displace early
+                    # gathers / val vloads 1-for-1 (the real cost of
+                    # priming, NOT mem-model serialization). Wave-PRIVATE
+                    # dead registers place them in the 0..50 window
+                    # instead, whose ~90 free load slots nothing else can
+                    # use (no other load's deps are ready): the tail
+                    # groups' nv vectors stage the block (first genuinely
+                    # written at those groups' round 0, ~cycle 300+ under
+                    # the lag-3 skew) and the last group's st lanes carry
+                    # the addresses. Emission order (all priming before
+                    # every round) makes the borrow safe for ANY skew: the
+                    # running-maxima hazard model can only push the owning
+                    # group's first write AFTER these reads, never reorder
+                    # priming after the group.
+                    stage = node_val_vecs[n_groups - 1 - (k % min(VLEN, n_groups))]
+                    wave_addr = state_vecs[n_groups - 1] + (k % VLEN)
                     k += 1
-                    scheduler.emit("flow", ("add_imm", level_table_addr, fp, 2 ** d - 1 + off),
-                           (fp,), (level_table_addr,))
-                    scheduler.emit("load", ("vload", stage, level_table_addr),
-                           (level_table_addr,), self._v(stage), mem_read=True)
+                    scheduler.emit("flow", ("add_imm", wave_addr, fp, 2 ** d - 1 + off),
+                           (fp,), (wave_addr,))
+                    # Every priming wave's vload reads a tree block no
+                    # OTHER wave's store writes (the waves are in-place and
+                    # block-disjoint), and the only prior mem writes are
+                    # the level-4 priming stores (level 4 < d), so the
+                    # coarse RAW gate is address-provably skippable.
+                    scheduler.emit("load", ("vload", stage, wave_addr),
+                           (wave_addr,), self._v(stage), mem_read=True,
+                           ignore_mem_write_hazard=True)
                     vec("^", stage, stage, fused_hash_const_vecs["C5"])
-                    scheduler.emit("store", ("vstore", level_table_addr, stage),
-                           (level_table_addr,) + self._v(stage), (), mem_write=True)
+                    # The priming store leaves the coarse mem-write clock
+                    # untouched (mem_write=False): it writes ONLY level d's
+                    # block, which nothing but level-d gathers ever reads
+                    # (setup vloads stop at level 4, the final vstores
+                    # target the inp region). Those gathers are gated
+                    # instead on the exact per-level cycle recorded here,
+                    # so priming level d no longer serializes ahead of
+                    # every OTHER level's gathers.
+                    store_cycle = scheduler.emit(
+                        "store", ("vstore", wave_addr, stage),
+                        (wave_addr,) + self._v(stage), ())
+                    mem_prime_store_done_cycle[d] = max(
+                        mem_prime_store_done_cycle.get(d, -1), store_cycle)
 
         newest_parity_last_leaf_diffs_e: list[int] | None = None
         newest_parity_last_leaf_diffs_d: list[int] | None = None
@@ -1540,9 +1607,23 @@ class KernelBuilder:
                     )
                     vsel(par, par, hi, lo)
                     multiply_add(st, st, two_vec, par)
+                # This lane loop is the ONLY reader of tree levels >= 5. A
+                # gather here prefetches round r+1's level, so when that
+                # level is primed it must follow that level's priming
+                # stores -- an exact per-level min_cycle -- and may ignore
+                # the coarse whole-mem write clock (every other mem write
+                # standing at this point is level-4 / another level's
+                # priming, address-disjoint from level(r+1)'s block).
+                gather_gate = 0
+                gather_ignore_writes = False
+                if next_level in primed_gather_levels:
+                    gather_gate = mem_prime_store_done_cycle[next_level] + 1
+                    gather_ignore_writes = True
                 for lane in range(VLEN):
                     scheduler.emit("load", ("load", nv + lane, st + lane),
-                           (st + lane,), (nv + lane,), mem_read=True)
+                           (st + lane,), (nv + lane,), mem_read=True,
+                           min_cycle=gather_gate,
+                           ignore_mem_write_hazard=gather_ignore_writes)
 
         def emit_group_round(r: int, g: int) -> None:
             for _ in _round_stage_generator(r, g):

@@ -552,7 +552,8 @@ mix prize this iteration: 1 cycle of the modeled ~20.
 
 ### Follow-ups (driver)
 
-- F-15 [mainline flip candidate]: the 1022 config (needs porting
+- F-15 [DONE — see the F-15 section below, mainline is 1022]: the 1022
+  config (needed porting
   mem_prime(5,6) + region-hazards + dead-reg staging + gmin (7,30) +
   the new 512-entry emission plan into perf_takehome.py's flag-free
   form; same shape guard as F-12).
@@ -568,3 +569,46 @@ mix prize this iteration: 1 cycle of the modeled ~20.
   plateau for drain restructures (H-052 site 3).
 - Plans remain config-specific artifacts: h047_best_plan_1022.json is
   measured at its exact config; re-derive after any change (~15 min).
+
+## F-15 (2026-07-27): H-047 mainline port — perf_takehome.py 1023 -> 1022
+
+Ported the verified 1022 config into the flag-free submission, all four
+deltas together (the H-047 2x2 says they don't decompose):
+
+1. `l4_gmin` (8,30) -> (7,30).
+2. `primed_gather_levels` {5} -> {5,6}.
+3. `mem_prime_region_hazards` + `mem_prime_dead_reg_staging` inlined
+   unconditionally: priming waves stage through wave-private dead
+   registers (`nv[n-1-(k % 8)]` blocks, `st[n-1]` lanes as addresses)
+   instead of shared lv[0..23] + the single lv address scalar; their
+   vstores drop `mem_write` and each primed level's gathers gate on the
+   exact recorded `mem_prime_store_done_cycle[d] + 1` instead.
+4. `_EMISSION_ORDER` replaced from tools/h047_best_plan_1022.json (26 of
+   512 entries differ from the F-12 plan).
+
+Non-obvious adaptations (only two):
+
+- Delta 3 needed a scheduler change: perf's `ListScheduler` had
+  `ignore_mem_read_hazard` but not dev's symmetric
+  `ignore_mem_write_hazard`, so that parameter was added to
+  `ready`/`emit` (+ docstring) before the priming waves and the primed
+  levels' gathers could skip the coarse whole-mem write clock. Dev's
+  `mem_prime_min_cycles` is empty at this config, so no per-wave floors
+  were ported.
+- Delta 2 would have newly broken height-5 builds (the existing
+  `L4 < d < forest_height + 1` assert fires on d=6), so the constant is
+  written shape-clamped, `{d for d in (5, 6) if d <= forest_height}` —
+  identical {5,6} at the graded shape.
+
+No adaptation needed for the parity ring plan: H-047's raw
+`parity_ring_plan` addresses (185/193/201, 601-625, 1225/1233/1297) are
+exactly what F-6's named-vector derivation already produces, and
+`flow_spelling_plan` was empty. No temp-pool or emission-order drift:
+1022 on the first build, like F-6/F-12 and unlike F-1.
+
+Gates (each run twice): `perf_takehome.py Tests.test_kernel_cycles`
+CYCLES: 1022; `tests/submission_tests.py` 9/9 green, all nine CYCLES
+lines 1022. Extra: seeds 1/2/3/7/42/99/123/2026 all correct at 1022,
+`test_kernel_trace` (debug vcompares) green. Off-shape sweep at
+batch 256 / 16 rounds moved with it, no regressions: h5 1043->1042,
+h6 1020->1014, h7 1125 (=), h8 1079->1077, h9 1062->1060.
