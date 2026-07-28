@@ -495,7 +495,7 @@ candidate's op stream (greedy spellings).
 | baseline (8,30) = 26 served, prime L5 | 1023 | (= frontier) | 1011 | reference |
 | mem_prime(5,6)+rdr + (7,30) = 27 served, prime L5+L6 | 1025 | **1022** (2 descents, ~29k evals; ext. +25k evals window=all plateau) | **1010** | WINNER -1 |
 | gmin(7,30) = 27 served | 1027 | 1023 (tie, 3 descents) | 1012 | serve+1 alone: tie |
-| mem_prime(5,6)+rdr @ (8,30) = prime alone | 1028 | 1023 (tie) | 1011 | prime alone: tie |
+| mem_prime(5,6)+rdr @ (8,30) = prime alone | 1028 | 1024 (600s budget; floor allows 1023) | 1011 | prime alone: no win |
 | e1={29,30} (26 served, drain recomposition) | 1024 | 1023 (tie, 18.5k evals) | 1011 | plateau member |
 | e1={27,30} / {26,30} | 1024 / 1028 | not searched | 1011 / 1011 | plateau members |
 | e1 pairs without g30 ({28,29},{27,28}) | 1031-1033 | — | — | plan-incompat, reject |
