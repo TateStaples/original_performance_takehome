@@ -1,0 +1,20 @@
+# name\tspec (dict merged over BASELINE; emission_plan added by sweep unless --no-plan)
+gmin(6,30)_planminus06	{"l4_gmin": (6, 30), "parity_ring_plan": (((0, 5), (193, 201, 601)), ((0, 15), (185, 1225, 1233)), ((0, 16), (193, 201, 1297)))}
+gmin(5,30)_planminus056	{"l4_gmin": (5, 30), "parity_ring_plan": (((0, 15), (185, 1225, 1233)), ((0, 16), (193, 201, 1297)))}
+gmin(6,30)_noplan	{"l4_gmin": (6, 30), "parity_ring_plan": ()}
+gmin(5,30)_noplan	{"l4_gmin": (5, 30), "parity_ring_plan": ()}
+gmin(4,30)_noplan	{"l4_gmin": (4, 30), "parity_ring_plan": ()}
+gmin(6,29)_planminus06	{"l4_gmin": (6, 29), "parity_ring_plan": (((0, 5), (193, 201, 601)), ((0, 15), (185, 1225, 1233)), ((0, 16), (193, 201, 1297)))}
+set_e0_56u8+_planminus056	{"l4_gmin": (frozenset({5, 6}) | frozenset(range(8, 32)), 30), "parity_ring_plan": (((0, 15), (185, 1225, 1233)), ((0, 16), (193, 201, 1297)))}
+set_e0_6u8+_planminus06	{"l4_gmin": (frozenset({6}) | frozenset(range(8, 32)), 30), "parity_ring_plan": (((0, 5), (193, 201, 601)), ((0, 15), (185, 1225, 1233)), ((0, 16), (193, 201, 1297)))}
+set_e0_56u8+_noplan	{"l4_gmin": (frozenset({5, 6}) | frozenset(range(8, 32)), 30), "parity_ring_plan": ()}
+set_e1_2931	{"l4_gmin": (8, frozenset({29, 31}))}
+set_e1_2831	{"l4_gmin": (8, frozenset({28, 31}))}
+set_e1_2930	{"l4_gmin": (8, frozenset({29, 30}))}
+memprime56_rdr	{"c5_primed_gather_levels": (5, 6), "mem_prime_region_hazards": True, "mem_prime_dead_reg_staging": True}
+memprime56_plain	{"c5_primed_gather_levels": (5, 6)}
+memprime567_rdr	{"c5_primed_gather_levels": (5, 6, 7), "mem_prime_region_hazards": True, "mem_prime_dead_reg_staging": True}
+memprime56_rdr_gmin730	{"l4_gmin": (7, 30), "c5_primed_gather_levels": (5, 6), "mem_prime_region_hazards": True, "mem_prime_dead_reg_staging": True}
+memprime56_rdr_gmin829	{"l4_gmin": (8, 29), "c5_primed_gather_levels": (5, 6), "mem_prime_region_hazards": True, "mem_prime_dead_reg_staging": True}
+gmin(7,30)_noplan	{"l4_gmin": (7, 30), "parity_ring_plan": ()}
+gmin(8,29)_check	{"l4_gmin": (8, 29)}

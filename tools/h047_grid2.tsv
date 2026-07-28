@@ -1,0 +1,15 @@
+# compositions of the round-1 leaders
+e1_2930_gmin7	{"l4_gmin": (7, frozenset({29, 30}))}
+e1_2930_mp56	{"l4_gmin": (8, frozenset({29, 30})), "c5_primed_gather_levels": (5, 6), "mem_prime_region_hazards": True, "mem_prime_dead_reg_staging": True}
+e1_2930_mp56_gmin7	{"l4_gmin": (7, frozenset({29, 30})), "c5_primed_gather_levels": (5, 6), "mem_prime_region_hazards": True, "mem_prime_dead_reg_staging": True}
+mp56_gmin729	{"l4_gmin": (7, 29), "c5_primed_gather_levels": (5, 6), "mem_prime_region_hazards": True, "mem_prime_dead_reg_staging": True}
+mp56_gmin630_noplan	{"l4_gmin": (6, 30), "parity_ring_plan": (), "c5_primed_gather_levels": (5, 6), "mem_prime_region_hazards": True, "mem_prime_dead_reg_staging": True}
+mp56_set_e0_56u8+	{"l4_gmin": (frozenset({5, 6}) | frozenset(range(8, 32)), 30), "parity_ring_plan": (((0, 15), (185, 1225, 1233)), ((0, 16), (193, 201, 1297))), "c5_primed_gather_levels": (5, 6), "mem_prime_region_hazards": True, "mem_prime_dead_reg_staging": True}
+e1_2930_set_e0	{"l4_gmin": (frozenset({5, 6}) | frozenset(range(8, 32)), frozenset({29, 30})), "parity_ring_plan": (((0, 15), (185, 1225, 1233)), ((0, 16), (193, 201, 1297)))}
+e1_2830	{"l4_gmin": (8, frozenset({28, 30}))}
+e1_2730	{"l4_gmin": (8, frozenset({27, 30}))}
+e1_293031	{"l4_gmin": (8, frozenset({29, 30, 31}))}
+e1_28293031	{"l4_gmin": (8, frozenset({28, 29, 30, 31}))}
+e1_2930_gmin9	{"l4_gmin": (9, frozenset({29, 30}))}
+mp6only_rdr	{"c5_primed_gather_levels": (6,), "mem_prime_region_hazards": True, "mem_prime_dead_reg_staging": True}
+mp56_rdr_e1_293031	{"l4_gmin": (8, frozenset({29, 30, 31})), "c5_primed_gather_levels": (5, 6), "mem_prime_region_hazards": True, "mem_prime_dead_reg_staging": True}
