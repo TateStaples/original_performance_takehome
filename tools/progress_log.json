@@ -154,5 +154,11 @@
     "label": "emission_plan",
     "cycles": 1023,
     "note": "H-049 512-entry emission-order plan; spelling pin reverted; F-12 port"
+  },
+  {
+    "step": "1022",
+    "label": "mem_prime_L6",
+    "cycles": 1022,
+    "note": "H-047 prime L5+L6 + gmin(7,30) + re-searched order; F-15 port"
   }
 ]
