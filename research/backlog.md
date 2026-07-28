@@ -1292,4 +1292,16 @@ correct, measured worse at every configuration tried]
   vbroadcast RAW on setup loads — earlier constant materialization or
   alu-side broadcast alternatives; (3) drain (4 cyc): final-round
   chains — deeper b3l-style folds or store-side restructure.
+  DRAIN MECHANISM (user proposal 2026-07-27, G-18 re-scoped): pair-preload
+  via a DEINTERLEAVED left/right layout so both candidates are indexed by
+  the walker's CURRENT position and hoist a full round ahead of the parity,
+  resolving with ONE vselect (flow) and zero alu/valu. G-18 closed the
+  GENERAL form on throughput (+3,472 loads -> +1,648 cyc; vload variant
+  transposes, +16 alu moves/group-round). But the drain is now CP-bound
+  (cpLB >= engLB from c=996 at 1023), where the mechanism's real property
+  is LATENCY, and the tail has load slack. BUDGET: (valu 1010 - load 946)
+  x 2 = 128 extra loads ~= 16 group-rounds before load becomes the binder.
+  Apply ONLY to the drain's critical staircase groups; measure the chain,
+  not the slot count. Store engine (19/2046) can pre-transform values in
+  mem (mem_prime pattern) so the preload returns post-C5 values.
 - predicted_gain: bounded by 13; realistic 3-6. cost: M-L.
