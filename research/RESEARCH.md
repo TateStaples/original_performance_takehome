@@ -784,3 +784,50 @@ enumeration, measurement, or algebra.
 closure is weakest -- G-10 was exhaustive PER ADJACENT SEGMENT of the 11-op
 chain, explicitly "inexhaustive at global scale". corsix published a hash
 identical to ours and scores 971/994; the 940 holder has published nothing.
+
+### P3-F (2026-07-28): no 10-op hash found; the question is narrowed, not closed
+
+**VERDICT: STILL OPEN.** No 10-op form of the round body exists in the
+regions searched, but the search is not exhaustive at global scale.
+
+**What the prior closure actually covered** (now stated precisely): G-10 was
+exhaustive *per adjacent segment* at depth current-1 (~400B candidates) --
+every chain cut, fold-in head 5->4, cross-round tail 5->4, parity <=4. H-016
+added a MITM over all 10 boundaries (2.36T). H-025 added a full-hash MITM
+with no waypoint at **depth <=7 forward / 10 total** (2.9T). The gap P3-F
+attacked: forward-prefix depth >=3 globally, plus the `//`/`%`/`cdiv`
+vocabulary, which `rust_harness/src/bin/fusion_search.rs:97` omits from
+`BIN_OPS` entirely.
+
+**New negatives.**
+- The `//`/`%`/`cdiv` vocabulary gap is **closed negative**: 16,200 questions
+  over the 2-round trace DAG with constants solved, exhaustive over that
+  vocabulary. 4 hits, all definitional (`a // 524288 == a >> 19`).
+- Depth-2 per 3-op block: 6,280 / 11,494 / 21,624 op1 candidates, **0 hits**
+  (exhaustive where op1 has no free constant outside a 31-entry structured
+  pool; sampled over the full 2^32 op1-constant space).
+- **Exact lemma: `exists c such that y^K == y+c (mod 2^32) for all y` iff
+  `K in {0, 2^31}`** (y=0 gives c=K; y=K gives 2K=0). Since a madd's addend
+  is the only additive slot, **no xor can cross a madd.** This proves the
+  fold-in `^nv` and the stage-2 `^C1` are irremovable within the entire
+  conjugation / basis-transform / node-table-transform family -- which is the
+  family `c5_prexor` belongs to, so the one known-non-empty class of
+  cross-round identities is now bounded.
+- Obstructions recorded: O1 removing the fold-in needs
+  `node_val in {0xB55A4F09, 0x355ACF09}` while node values are uniform in
+  [0, 2^30); O2 `g19^-1(C1) = 0xC761DAD0`; O3 `C1 = 0xC761C23C`.
+
+**Hygiene:** the shipped 11-op form was re-validated bit-exact on 1,021,609
+cases (21,609 edge pairs covering 0, 1, 2^31, 2^32-1 and every shift
+boundary, plus 10^6 random). Zero mismatches.
+
+**Confirmed leverage:** a 10-op body removes 528 vec-ops ~ **70 cycles**,
+taking the floor from 944-952 to **~874-882**. The prize is real; the form
+is not found.
+
+**Only structurally uncovered region: the kf>=3 global MITM (~1000x
+compute).** Rather than fund that, P3-F has been redirected to the cheaper
+and more decisive question it raised itself: **is there a LOWER BOUND
+argument?** If >=4 madds are provably necessary, then combined with the two
+irremovable xors the 10-op question closes outright -- a proof, not another
+exhausted region. That is now the phase's open item.
