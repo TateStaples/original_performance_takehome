@@ -1,6 +1,6 @@
 # Kernel Research Loop — Dashboard
 
-**Goal:** grader-verified `CYCLES: < 1000` (`python tests/submission_tests.py`, all 9 tests green).
+**Goal (PHASE 2, user-directed 2026-07-28): a fundamentally different kernel DESIGN targeting the 940-class frontier.** Phase 1 converged at 1006 with every axis closed (see graveyard G-16..G-32); tuning the current design is done. Phase 2 asks what a sub-940 kernel must look like STRUCTURALLY, then builds it. Phase-1 goal kept for reference: grader-verified `CYCLES: < 1000` (`python tests/submission_tests.py`, all 9 tests green).
 **Loop:** autonomous, indefinite (no auto-stop). Driver checklist: `research/LOOP.md`.
 
 ## Current best (mainline)
@@ -107,3 +107,31 @@ Global: 6 dry iterations -> one cross-pollination iteration. Status report to us
 - iter 14 | H-044 CLOSED ANSWERED: ideal-floor LP (tools/ideal_floor.py, validated) — best serving mix under infinite scratch = 931.6 (serve L1-L3 + 31/64 L4, prime L4/L5/L6, 918 flow selects, conds retained from parity vectors); 940 NEEDS ZERO NEW ALGEBRA, but is UNREACHABLE with the as-built mix by any compute removal (load floor 951 binds). Gap: 1038 -24-> 1014 -63-> 951 -20-> 932. Marginal rate at optimum ~97 lane-ops/cyc; loads live again (G-22 verdict was mix-relative). H-045 re-scoped to the full flow-saturation build and spawned | best 1038
 - iter 14 | H-043 CLOSED ANSWERED: frontier hash IS our 11-op form (corsix SVGs decoded — all onset closures CONFIRMED); the gap mechanism is valu->flow select EXPORT (exits the 60-lane-op budget, ideal ~988) + select-tree/load rebalance via joint selection x scheduling. G-22/G-18 flagged with scope holes under algo-first (friction-based rejections, op removal real). Queued: H-045 flow-maximization (ideal -50), H-046 idealized priming reopen, H-047 L5+ select trees (940 provably requires a level off the load engine: 2x940=1,880 < 1,900 loads). H-044 (ideal model) + H-038 still running | best 1038
 - iter 13 | H-039 REJECTED -> G-22 (mem_prime crossover already behind L5: lane-ops drop -144 but off slack engines, waves displace the critical path; corrects H-026 mechanism note; -116-loads supply side has NO mechanism — load-count leg fully closed inside current organization; byproduct: front 0-60 load window reachable via dead-reg staging). H-041 spawned (select-tree gather conversion, the frontier's named lever). H-038 still running | best 1038
+
+## Phase 2 charter (2026-07-28): design, not tuning
+
+Phase 1 ended at 1006 with all axes closed by enumeration/relaxation.
+The frontier (940 under our exact rules) provably runs OUR hash form
+(H-043 decoded corsix's diagrams), so its advantage is STRUCTURAL.
+
+**The binding arithmetic for any sub-940 design.** Hash is fixed at
+46,656 alu+valu lane-ops (closed by four tool classes). At 940 cycles
+the alu+valu capacity is 940*60 = 56,400 lane-ops, leaving **9,744 for
+everything else**. Our current non-hash spend is ~13,651 lane-ops
+(Idx ~7,552 + Routing alu/valu ~5,513 + Setup ~586). **So a 940 design
+must do the index+routing work in ~29% fewer lane-ops than ours, or
+move that work onto engines with slack.**
+
+Slack inventory at 1006: load floor 946 vs valu floor 995 -> **load has
+~49 cycles of headroom while valu binds**; flow 797/1006; store 46/2012
+(idle, but stores cannot compute and reads cost load slots). Note this
+inverts the Phase-1 intuition: at this balance the profitable direction
+is MORE gathers and FEWER selects, not the reverse.
+
+**The scratch/parallelism trade is the untested structural axis.** Our
+design keeps 32 groups live simultaneously and spends 1,533/1,536 scratch
+words doing it, which is why select-tree serving died three ways (H-041:
+L5 needs 256 lane-broadcast words). But valu runs at 5.93/6 — we have
+ILP to spare. A design holding FEWER groups live would free hundreds of
+words at no obvious throughput cost, changing which serving strategies
+are affordable. Never tested.
