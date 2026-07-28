@@ -787,3 +787,44 @@ Seeded 2026-07-23 from the 2148->1140 campaign's measured rejections.
   the cycle curve is unchanged (K=16: 1025/1053/1104 vs race
   1028/1053/1103). H-059's cost was never the floor — it is RAW/chain
   structure.
+
+### G-37 The setup ramp as a shortenable chain (H-064) — LAST LEVER, ZERO
+- **The premise was a CONTAMINATED MEASUREMENT.** H-063's "-13 for
+  freeing the whole setup phase" came from tools/h063_oracle.py, which
+  frees ops by rerouting them to the `debug` engine INSIDE A LIVE DEV
+  BUILD. dev's adaptive engine races (alu_offload, idx/flow races) read
+  scheduler occupancy, so the freed build emits a DIFFERENT PROGRAM:
+  alu 11,600 vs the 11,696 a pure relaxation gives (96 fewer alu ops),
+  flow 782 vs 775. Of its 13 cycles, 5 are bundles that became
+  debug-only (cycles 0-3 and 997, which do not count) and ~8 are floor
+  relief (valu 995->982) — exactly what G-36 retired.
+- **CLEAN relaxation (program held fixed; tools/h064_oracle.py, offline
+  greedy asserted place == real place every run): the ceiling is 2
+  cycles**, and it is physically unreachable —
+  const(c0) -> load ptr(c1) -> vload(c2) -> readable(c3).
+  all 268 setup ops slot-free = 1004; + pinned to cycle 0 = 1004;
+  + every setup->consumer edge lag 0 = 1004.
+- the chain, named: every setup op has **slack >= 494** (cp 512). Three
+  chains: est-critical prefix (#0 const(4) -> #9 dc_eight -> #15/#16
+  dc_k0 -> #25 vbroadcast k0 -> #269 first hash madd); the 48-op `va`
+  chain (four +32 chains, depth 8); the `lv` chain (one lv_addr
+  register, WAR-serialized on the 1-wide flow engine).
+- **the ramp's 4 cycles are the 24 free valu slots in cycles 0-7 — a
+  DATA-ARRIVAL property, not chain depth.** No steady op can run before
+  c3, and >=10 of the 24 are unfillable by any program on this ISA.
+  Load is 2/2 across cycles 0-30 carrying all 60 setup loads.
+- restructurings (realized, ring-free base 1026): va chain depth 8->2
+  = exactly 0; parallel lv addresses on alu = +4; direct k0 const
+  (est-chain 5->2) = +2; flow_residual_consts +3; flow_consts +5;
+  derive_consts=False +6; vals_first +5; emit_order 0. Head capacity
+  relaxations are ALL POSITIVE (+8..+14). **1006 is a razor-thin greedy
+  optimum, same shape as G-32.**
+- **H-062 DEAD**: only 29 L1-L3 group-rounds have min-est < 65, so the
+  conversion costs 232 loads against 68 free head load slots (+82 cycles
+  in the 893-cycle 2/2-saturated region), while freeing EVERY op in
+  [31,65) measures only -3.
+- **METHODOLOGY (the transferable lesson): a relaxation oracle must hold
+  the PROGRAM fixed.** Freeing ops inside a build whose scheduler makes
+  adaptive engine choices changes the program, and the resulting number
+  measures the new program, not the relaxation. Always assert
+  `offline place == real place` after freeing (h064_oracle does).
