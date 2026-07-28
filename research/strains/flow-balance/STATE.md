@@ -1406,3 +1406,271 @@ binder, in which case gathers, not selects, are the thing to trade.
   hypothesis in one run. Three separate closures (H-041's L5 tables,
   H-045/H-048's ring starvation, H-053's pool purchase) were all stated in
   scratch terms and are all actually valu-slot statements.
+
+---
+
+## H-063 (Phase 2, 2026-07-28): the three "measured-free" resources — ALL THREE REJECTED
+
+**Question.** H-061/G-34 measured three idle resources on the 1006 stream:
+70 free load slots in the head (cycles 29-64), 48 in the drain (958-1005),
+and 209 idle flow slots — all while valu binds at 995. Direction A: replace
+shallow-level table CONSTRUCTION (compute, emitted where compute is 100%
+saturated) with bulk vloads of the contiguous level words (load, idle
+there). Direction B: sweep for more H-029-style "X ± b between two live
+constants" sites — the one pattern that lets flow absorb ARITHMETIC rather
+than merely relocate a select, which is why it evades G-27. Direction C:
+audit the drain.
+
+**Answer: every direction is worth <= 0, and A's premise was already
+implemented.** No kernel change. `dev.py` and `perf_takehome.py` are
+untouched by this hypothesis; only `tools/h063_*.py` were added.
+
+### Direction A — REJECTED, premise already true, and the class prices at ZERO
+
+**A1. The level tables are ALREADY bulk-vloaded.** `dev.py:2146-2152`: the
+level-1..4 tree words are 30 CONTIGUOUS heap words and are fetched by 4
+`vload`s (one flow `add_imm` each, no address arithmetic), landing at cycles
+6..9. The charter's proposal is the shipped code.
+
+**A2. What remains of "table construction" is lane REPLICATION, which
+memory provably cannot do.** `tools/h063_head.py` classifies the whole setup
+phase (268 ops, `scheduler.tag is None`):
+
+| class | ops | engine | cycles placed |
+|---|---|---|---|
+| lv-vload (the bulk fetch) | 4 | load | 6..9 |
+| lv-prime (`^ C5`) | 4 | valu | 7..10 |
+| tbl-diff (scalar pair subtracts) | 15 | alu | 8..11 |
+| tbl-bcast (lane splats) | 36 | valu | 8..14 |
+| const-bcast | 23 | valu | 1..24 |
+| val-vload (per-group initial values) | 44 | load | 6..30 |
+| other setup (derive_consts alu, addr flow, consts, memprime) | 142 | mixed | 0..1005 |
+
+Table construction is **59 ops (78 counting the const broadcasts), ALL
+retired by cycle 14** — entirely UPSTREAM of the load bubble, which does not
+open until cycle 31. There is no table-construction compute inside the
+bubble to remove. The 36 splats are the only irreducible part, and
+`tools/h063_primitives.py` prices the memory alternative on the frozen
+simulator: replicating one word into 8 lanes costs **8 WAW-serialised
+vstores + 1 vload = 9 cycles of latency**, versus 1 valu slot for
+`vbroadcast`. Memory has no stride-0 read (confirmed against `isa.md` §6).
+
+**A3. The oracle: the class is worth EXACTLY 0** (`tools/h063_oracle.py`,
+same debug-engine reroute as `free_slot_oracle`, but PHASE-keyed):
+
+| freed class | ops | cycles | delta |
+|---|---|---|---|
+| all table construction (vloads + prime + diffs + splats) | 78 | 1006 | **0** |
+| table vbroadcasts only | 59 | 1006 | 0 |
+| table scalar diffs only | 15 | 1006 | 0 |
+| the 4 level-table vloads | 4 | 1006 | 0 |
+| ALL setup valu | 59 | 1006 | 0 |
+| ALL setup alu | 65 | 1006 | 0 |
+| ALL setup load | 60 | 1006 | 0 |
+| ALL setup flow | 22 | 1006 | 0 |
+| setup val-vloads only | 44 | 1011 | **+5** |
+| setup consts only | 9 | 1004 | -2 |
+| **the ENTIRE setup phase** | 252 | 993 | **-13** |
+
+Every individual setup class is worth zero; only the whole phase together is
+worth 13. **The setup ramp is a CHAIN, not slot pressure** — consistent with
+G-26's retirement of engine floors, and it generalises H-053's
+"all 59 broadcasts free = +1" beyond broadcasts to the entire setup census.
+
+**A4. The head bubble itself prices at zero.** New `win_*` oracle classes
+free the ops the greedy would place inside a window (calling `ready`/
+`find_free` reproduces the placement decision exactly, so nothing else
+moves):
+
+| window | freed | cycles | delta |
+|---|---|---|---|
+| valu in [29,65) | 113 | 1006 | **0** |
+| valu+load+flow+store in [29,65) | 155 | 1003 | -3 |
+| valu in [958,1006) | 114 | 1005 | -1 |
+| valu+load+flow+store in [958,1006) | 200 | 999 | -7 |
+
+Emptying the valu engine across the ENTIRE head bubble buys nothing. The
+compute saturation there is not causal.
+
+**A5. The bubble's load slots are provably unusable, so nothing can be moved
+INTO them either.** `tools/h061_bound.py` at mainline: only **108 of 1,892
+loads have est < 65** while the head offers 130 slots — 42 head slots are
+unusable by ANY scheduler. The one shipped mechanism that defers setup loads
+past the bubble (`lazy_val_loads`) was measured ring-free (F-25/H-059 rule:
+the ring plan's borrow windows are liveness-timed to the 1006 stream and the
+build asserts under a val-load reorder): ring-free base **1026**, `lazy +
+alu_val_addrs off` **1043 (+17)**, its required companion `alu_val_addrs
+off` alone **1045 (+19)**. The deferral is worth -2 inside a +19 package.
+**Mechanism: every load needs an ADDRESS, and address computation is exactly
+the compute already saturating the window** — the setup-side restatement of
+H-061's "the load engine is a strict slave of valu".
+
+### Direction B — the census is COMPLETE, and every unconverted site loses
+
+`tools/h063_bsites.py` enumerates every parity-consuming arithmetic site in
+the emitted stream. 0/1-ness is decided by REACHING DEFINITION, not by
+address: scratch is recycled hard (`st`/`nv` are the position accumulator
+AND, on L==0 rounds, the raw parity), and an address-keyed pass reports ~3x
+false positives. 506 exact-0/1 definitions, 541 loop-invariant registers.
+
+| shape | sites | convertible? |
+|---|---|---|
+| `X + b*K`, K and X both loop-invariant (tournament folds, L4 W-combines) | 568 valu madds | yes, needs an `odd = X+K` splat kept live |
+| `vselect(b, ·, ·)` with invariant arms — the already-converted ones | 320 | done |
+| `X ± b`, X runtime (epoch-exit / boundary reconstruction) | ~90 vector-equivalents (216+24 alu-split lanes + 60 valu) | only by REORDERING (H-035) |
+| `vselect(b, ·, ·)` runtime arms (fold relocation) | 401 | G-27: worth 0 |
+| `a*b + b01`, `X + b*K` with runtime K | 145 | no |
+
+Structurally there are exactly **three** `X ± par` code sites
+(`dev.py:3012/3031/3034/3043/3070/3073`), of which four branches are dead
+under `c5_prexored_value_domain`:
+
+1. **steady gather-mode** `2·gaddr + omf ± par` — ALREADY converted, this is
+   H-029/P-14 `idx_select_before_madd`, ON in mainline. 166 sites, arms
+   `omf_vec`/`two_minus_fp_vec` differ by exactly 1 and are both already
+   live. This is the whole population of the pattern as originally stated.
+2. **epoch-exit / boundary** `rec ∓ par` — `idx_boundary_select` (H-035),
+   OFF. Needs `rec±1` arm vectors MATERIALISED (they ride `lv[0..15]`), so
+   the arms are not free.
+3. non-c5_prexor branches — unreachable at this config.
+
+`tools/h063_bshadow.py` re-prices every conversion **with
+`dev.SCRATCH_SIZE` relaxed to 10^6** (G-33: never state this in scratch
+terms), at the exact 1006 frontier:
+
+| probe | bundles | delta | over budget |
+|---|---|---|---|
+| base | 1006 | 0 | — |
+| `idx_boundary_select` | 1015 | **+9** | 0 |
+| `idx_boundary_select`, `idx_recurrence_race` off | 1015 | +9 | 0 |
+| `auto_raced_first_fold_levels=(1,)` | 1024 | +18 | 0 |
+| `auto_raced_first_fold_levels=(1,2,3)` | 1029 | +23 | 29 |
+| `auto_raced_first_fold_levels=(1,2,3,4)` | 1029 | +23 | 29 |
+| `auto_raced_first_fold_levels=()` | 1034 | +28 | 5 |
+| `pair_tournament_first_fold_race=4` | 1009 | +3 | 5 |
+| `=6` | 1027 | +21 | 21 |
+| `=8` (all pairs) | 1037 | +31 | 37 |
+| `=0` | 1016 | +10 | 0 |
+| both maxed | 1035 | +29 | 69 |
+| both maxed + reverse race | 1036 | +30 | 69 |
+| `shallow_tournament_reverse_select_race` | 1016 | +10 | 0 |
+| `flow_first_fold_levels=(1,2,3)` (hard flip control) | 1118 | +112 | 0 |
+
+**The shipped `(1,2)` levels x 3 L4 pairs is a strict interior optimum in
+BOTH directions, and the loss is not a scratch cost** — scratch was
+unbounded in every probe, and H-019's "funding more than 3 pairs via a
+cond-pool trade is DEAD" is hereby re-derived without the scratch framing
+(G-33 discharge #4). Converting more sites loses because `emit_any` is a
+retire-time greedy: an extra flow encoding gets taken where it locally wins
+and globally displaces the fold that was gating a hash chain — G-27's
+mechanism, now measured on the arithmetic-absorbing variant too.
+
+### Direction C — the drain is LATENCY, at every cycle, by ~2.5x
+
+`tools/h063_drain.py` computes, per cycle, the remaining critical path
+(longest dependency chain over the unplaced suffix) against the remaining
+engine floor:
+
+| cycle | valu/alu/ld/st/fl | remaining ops | engLB | cpLB | bound |
+|---|---|---|---|---|---|
+| 975 | 6/12/2/0/1 | 491 | 27 | 33 | cp |
+| 985 | 6/12/2/1/1 | 282 | 17 | 27 | cp |
+| 995 | 6/4/0/0/0 | 104 | 8 | 20 | cp |
+| 1000 | 6/8/0/2/0 | 37 | 6 | 12 | cp |
+| 1005 | 0/0/0/2/1 | 3 | 1 | 3 | cp |
+
+**cpLB > engLB at every cycle from 975 to the end**, and by 2.5x in the last
+eleven. The window splits cleanly:
+
+- **958-994 (34 of the 48 idle load slots).** Compute still 6/6 and 12/12;
+  the load engine idles in bursts for the same reason as the head (RAW-gated
+  behind the valu idx madd, H-061). Nothing load-shaped can be added — the
+  suffix is already cp-bound.
+- **995-1005 (the true tail, 14 idle load slots).** Nothing left to load:
+  the last gather has issued. Occupancy is the round-15 hash chains of the
+  last groups plus 15 result `vstore`s. The last two vstores are gated
+  `raw valu:^@1004` (group 30/31's final value, zero slack); the rest form a
+  `mem-ww` chain at the 2-slot store limit with 0-1 cycles of slack each.
+
+**Nothing is deferrable into the drain**, because deferral requires TERMINAL
+work and the only terminal work in this kernel is the 32 result vstores,
+which are already there and already at their ready cycles.
+
+### Primitive catalogue (recorded per mandate; validated, not asserted)
+
+All three validated by execution on `tests/frozen_problem.Machine`
+(`tools/h063_primitives.py`). The ISA has no shuffle, no gather, no stride-0
+read and no cross-lane op besides `vbroadcast`; memory is the ONLY route
+from lane i to lane j.
+
+| primitive | spelling | price | notes |
+|---|---|---|---|
+| **P1 arbitrary 8-element permute** | 8x `("store", addr_k, src_k)` + 1x `("vload", dst, base)` | 8 store slots (4 cycles at the 2-slot limit, ~free where store idles — store runs 46/2,012 = **2.3% occupied**) + 1 load slot + 8 address regs, >= 2 cycles latency | the ISA's ONLY shuffle. Duplication and any permutation validated. `store` (scalar, computed address) is **entirely unused** by this kernel today |
+| **P2 lane rotation by k** | 1x `("vstore", A, src)` + 1x `("vload", dst, A+k)` | 1 store + 1 load slot, 2 cycles latency. A WRAPPING rotation needs a second `vstore` at A+8 — both fit one bundle (disjoint, 2 store slots) | validated for k=1,3,5,7 |
+| **P3 8x8 memory transpose** | 8x `vstore` + 8x `vload` | 8 store slots + **8 load slots**, zero compute | the cheapest known 8x8 cross-lane movement, far below G-16's +16 alu moves/group-round |
+| **(anti-primitive) broadcast via memory** | 8x ascending `vstore` + 1 `vload` | 8 vstores **WAW-serialised at 1/cycle** + 1 vload = 9 cycles for ONE vector | vs 1 valu slot for `vbroadcast`. Replication cannot be amortised; this is why A2 fails |
+
+Staging area: the 256-word `inp_indices` region (this kernel never reads it,
+the grader compares `inp_values`, and `Machine` copies `mem_dump`) — verified
+by H-053, reusable with `store_disjoint_region`'s region-exact hazard model.
+
+**P3 does NOT rescue the sibling-pair vload.** That lands at 16 load slots vs
+today's 8 (+384 loads overall) and is dead by G-34's saturation result
+(cycles 65-957 are 2/2 saturated for 893 consecutive cycles; 940 needs
+<=1,758 steady loads and we issue 1,831).
+
+### Verification of the config carried forward (unchanged 1006 mainline)
+
+`tools/h063_verify.py`: correct at seeds {unseeded, 1, 2, 3, 7, 42, 99} and
+under `debug_compares=True`, all at 1006. Ring audit CLEAN
+(`tools/audit_ring_windows.py`: "OK over 20 rings", 384 words ring-funded,
+distance 0 to full retention). Full grader **9/9 green, CYCLES 1006**,
+speedup 146.85x. Slot census: load 1,892 / flow 797 / alu 11,761 /
+valu 5,966 / store 46. Bound stack: **load 946 (energetic 977, G-34) / alu
+981 / flow 797 / valu 995 BINDS / realized 1006, regret 11**; cp lower bound
+512 (`backtrack_sched`'s lag model; 679 under a unit-lag longest-chain).
+`dev.py`/`perf_takehome.py`/`tests/` unmodified — no flag was added, so
+bit-identity is trivial rather than argued.
+
+### Verdict
+
+**REJECT all three.** A's proposal is the shipped code and its residue
+prices at exactly 0 even when made free; B's census is complete and every
+unconverted site is >= +3 with scratch unbounded; C's window is
+critical-path-bound at every cycle. The unifying finding:
+
+> **Three separately-measured "free" resources — 70 head load slots, 48
+> drain load slots, 209 flow slots — are all UNSPENDABLE for the same
+> reason: this kernel's op stream is a dependency chain with almost no
+> movement in it.** 99.6% of ops compute new values (H-053's audit); the
+> free slots are on engines that can only MOVE data, and there is nothing to
+> move. Idle capacity on a movement engine is not a lever for a
+> computation-shaped kernel.
+
+reopen-if: (a) a mechanism appears that genuinely NEEDS cross-lane
+permutation or replication — P1/P2/P3 are now priced and validated, and P1
+in particular is a real capability nothing has used; or (b) the setup ramp's
+13-cycle chain (A3) is attacked as a CHAIN — it is the only setup-side
+number above zero, and no per-class relaxation touches it; or (c) `emit_any`
+is replaced by a non-greedy joint selection, which is the mechanism that
+makes every extra flow encoding in B lose.
+
+### Follow-ups (proposed backlog entries)
+
+- **H-064: the setup ramp as a chain, not a census.** Freeing all 252 setup
+  ops = -13 while freeing ANY single class = 0. The 13 cycles are the
+  header-load -> `fp` -> `lv_addr` add_imm -> `lv` vload -> `^C5` -> diff ->
+  `vbroadcast` -> first fold chain, ~7 links deep, plus the val-vload stream
+  behind it. Shortening it is the only setup-side number that is not zero.
+  Note `backtrack_sched` already attributes only 4 of the 11 regret to the
+  ramp, so the other ~9 of the 13 are chain, not friction.
+- **Promote `tools/h063_oracle.py`'s `win_*` classes into the standing
+  pre-screens.** "Free every op the greedy would place in cycles [lo,hi)"
+  answers "is this WINDOW's saturation causal?" in one run, and would have
+  closed direction A before any code was read. Complements
+  `free_slot_oracle`'s op-shaped classes with a phase-shaped one.
+- **Retire "idle slots on engine X" as a hypothesis generator for this
+  kernel.** flow (G-27, 0), store (H-053, 0), head load (H-063 A5, 42 slots
+  provably unusable), drain load (H-063 C, cp-bound). Four independent
+  closures of the same shape. A resource is only a lever if the op stream
+  contains work of that resource's KIND.
