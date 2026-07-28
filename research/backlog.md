@@ -1530,3 +1530,21 @@ correct, measured worse at every configuration tried]
   crossed with the re-mine loop (the live axis); F-35 make the walk
   audit-aware so it can keep the currently-discarded fast-but-dirty
   points (re-mine in-loop instead of rejecting).
+
+### F-37 [strain: algo] [status: open] — THE ONLY LIVE ORDER AXIS
+- statement: simultaneous k-entry displacements confined to ROUNDS 12-15
+  (the only rounds that pay, per G-30's productivity map), k in 2..4,
+  seeded at the 1006 plan. The 7,487-move exact-1006 plateau enumerated
+  by f18_exhaust1 is the raw material to compose across: single moves
+  are provably empty, so any remaining order win must be a strictly
+  paired/tripled escape, and it must live in rounds 12-15.
+- predicted_gain: unknown; this is the last untried order structure.
+  cost: M-L. Use the audit-aware loop (tools/f35_loop.py) with the
+  GROW-then-PRUNE fixpoint, branch-and-return around the best clean point.
+
+### F-38 [strain: algo] [status: open] — basin-width probe
+- statement: 0 of 12 perturbed restarts re-found 1006 (best 1008), weak
+  evidence of a narrow basin. Characterize it: how much perturbation is
+  recoverable, and does a wider/multi-start portfolio find a DIFFERENT
+  1006-or-better basin? Cheap; informs whether further order search on
+  this mix is worth any budget at all.

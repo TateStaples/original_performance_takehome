@@ -533,3 +533,34 @@ Seeded 2026-07-23 from the 2148->1140 campaign's measured rejections.
 - reopen-if: the MIX changes (orders are mix-specific per F-13's
   cross-application table — a new mix invalidates this artifact and the
   search must be re-run from scratch).
+
+### G-30 Single-move order search + fine round windows at 1006 (F-34/F-35)
+- CLOSED BY ENUMERATION, same status G-29 gave 1020: f18_exhaust1 at
+  the 1006 plan = **25,550 single-entry moves, ZERO below 1006**
+  (plateau 7,487 = 29%; 3,673 = 14% build an INCORRECT kernel). No round
+  window, however fine, can pay at 1006 — the whole 1-move neighbourhood
+  is enumerated and empty. Further order search must be MULTI-move.
+- **Round-window productivity map** (from a common perturbed start,
+  1006+18 random moves = 1015, ~1,200 evals/window). Only rounds 12-15
+  pay: drain -6, all -6, r:12-13 / r:13-15 / r:14-15 / r:15-15 each -5,
+  both -4, r:11-15 -4, r:8-15 -4, r:0-7 -3, r:5-10 -3, r:11-11 -3, and
+  **r:0-4 / r:0-0 / mid / ramp = 0**. Round 15 ALONE beats H-057's
+  coarser r:11-15. Fine round windows are a REAL axis with nothing to
+  bite on at 1006 (63 chains / ~78k evals at the accept points: all flat).
+- **F-35 audit-aware loop: two mechanism fixes, 56% recovery, 0 cycles.**
+  (1) the mine fixpoint must be GROW-then-PRUNE — grow-only returns a
+  plan that is NOT sound at a perturbed order (32 violations/40 rings at
+  every dirty order tried; in-loop recovery 0/24 with grow-only).
+  (2) only PLAN rings are prunable — a live-across on one of the ~20
+  natively derived parity_ring_map rings is a property of the ORDER and
+  unrepairable, so those points must be dropped. Fleet: 92 descents,
+  34 dirty (37%), 19 recovered in-loop, 15 unrecoverable = ~56% of what
+  H-057's discard-and-checkpoint threw away, converted to live walk
+  state, for ZERO cycles. Dirtiness is SELECTION not noise: random moves
+  off 1006/1007 audit dirty 2.0%/0.4% of the time vs 37% among descents.
+  The naive non-basin-anchored loop drifts (1006->1007->1008->1015 in
+  120 s) — must branch-and-return around the best clean point.
+- 1006 bound stack: LB 995 / energetic 996 / fungible 992 / cp 512 /
+  all-lags-zero 1004; regret 11 = ramp 4 + mid 3 + drain 4.
+- basin evidence: 0 of 12 perturbed restarts re-found 1006 (best 1008).
+- reopen-if: multi-move (see F-37), or any mix/organization change.
