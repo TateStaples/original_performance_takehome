@@ -15,8 +15,14 @@ lane-ops and we spend 7,184 -- the axis has 576 lane-ops of slack, not zero,
 and the "any design of this shape floors at 911 cycles" line should read
 884.5 (or 872.5 under a b=0 L4 policy).**
 
+**Cross-axis addendum (section 9): P3-A's C9 -- "eliminate the `omf`
+constant-select, floor 939 -> 920" -- is REFUTED. The op is fungible
+flow-or-valu; the only representations that remove it (`idx+1`, `idx+3`)
+replace it with a valu-ONLY address-recovery op. Exact tie at P3-A's
+optimum, strictly worse everywhere else. The floor stays 939.**
+
 Tools (all read-only, new, mine): `tools/p3b_attrib.py`,
-`tools/p3b_onestep.py`, `tools/p3b_model.py`.
+`tools/p3b_onestep.py`, `tools/p3b_model.py`, `tools/p3b_omf.py`.
 
 ## 0. What G-21 held fixed (the frame I was asked to test one level coarser)
 
@@ -273,7 +279,107 @@ not 911. That is 26-38 cycles of headroom the charter had written off.
 * memory-table advance and any "second load per lane" scheme: the load
   engine is the one engine already over the 940 budget (1,892 vs 1,880).
 
-## 8. What I did not do
+## 9. CROSS-AXIS: can the `omf` constant-select be eliminated? (answers P3-A C9)
+
+**VERDICT: IMPOSSIBLE to eliminate for free; every alternative representation
+is WEAKLY DOMINATED by the shipped spelling, with an EXACT TIE at P3-A's
+saturated optimum. The achievable floor stays 939. C9 (920) is not a valid
+design.** Tool: `python3 tools/p3b_omf.py` (imports `tools/p3a_model.py`
+unmodified).
+
+### Lemma 1, strengthened to all 2^32 constants (was: 502 sampled)
+
+For each opcode the "output depends on val only through bit0" condition is
+decidable in closed form, so the sampled search of section 2 is exhaustive:
+
+| op | parity-only iff | output as a function of p |
+|---|---|---|
+| `val & k` | `k & ~1 == 0`, i.e. k in {0,1} | `p` |
+| `val \| k` | `~k & ~1 == 0`, i.e. k in {0xFFFFFFFE, 0xFFFFFFFF} | `p - 2` |
+| `val * k` | `2k = 0 mod 2^32`, i.e. k in {0, 2^31} | `p * 2^31` |
+| `val << k` | `k >= 31` | `p * 2^31` (k=31), else 0 |
+| `val % k` | `k == 2` | `p` |
+| `^ + - // >> < ==`, and any form with val as the *right* operand of a shift/div/mod | never (bit1 of val survives, or the result is magnitude-driven) | -- |
+
+**Theorem (one-op addend set).** The complete set of values a single ISA op
+can produce from `val` while depending on it only through parity is
+`{p + c : c in {0, -2}}` union `{p * 2^31}`. **The parity always enters with
+coefficient +1** -- no op yields `-p`, so complement/negated representations
+are closed too.
+
+### Consequence for the addend
+
+Carrying `S = idx + b` gives `S' = 2S + (1 - b + p)`, so the addend is
+`p + (1-b)`. It is a one-op parity form only for `b = 1` (addend `p`) or
+`b = 3` (addend `p - 2`, the `val | 0xFFFFFFFE` form). The load needs
+`mem[scratch[addr]]` with **no displacement** (problem.py:294-303), so the
+scratch word read must equal `idx + 7` exactly: `b = 7`, whose addend is
+`p - 6`, and `-6 not in {0, -2}`. **The three constraints -- one-op addend,
+exact loadability, and `forest_values_p == 7` -- are jointly unsatisfiable.**
+
+### Per-level re-bias (P3-A's explicit question)
+
+Let `b_d` vary by level (`level(r) = r mod 11` is compile-time). Then
+`addend = p + (1 - 2*b_d + b_{d+1})`, free iff `b_{d+1} = 2*b_d - 1` or
+`2*b_d - 3`. But every gathered level pins `b_d = 7`, forcing
+`b_{d+1} = 13 or 11`, neither of which is 7. Levels 5..10 gather
+consecutively, so all five 5->6..9->10 transitions are pinned.
+**Per-level re-bias buys nothing.** The one boundary where `b` IS free --
+entering a gathered level from a served one -- is already exploited: that is
+the Horner exit, and it needs no `omf` select of its own... except that the
+residual constant there is +38 (= 7 + 31), and the free per-stage injections
+are only 0 or -2 (contributions -32,-16,-8,-4,-2, all non-positive), so the
+Horner exit **also** pays exactly one "parity + constant" fungible op.
+**P3-A's count of `idx_selects = g = 227` is therefore correct, not an
+over-count** -- I tried to shave it and failed.
+
+### The corrected trade (this is where P3-A's model goes wrong)
+
+The `omf` op is not special: it is a two-way choice between two live
+vectors, so by P3-A's own T1 it is **fungible** -- 1 flow slot, or 1 valu
+`madd(par, one_vec, omf_vec)` = 8 lane-ops. "Eliminating" it via `S = idx+3`
+does not delete an op; it **replaces one FLOW-ELIGIBLE op with one
+VALU-ONLY op** (`A = S + 4`; flow cannot add -- `vselect` only chooses
+between live vectors and `add_imm` is scalar, problem.py:328-333).
+
+Dominance, for any design and any C. With `rem` = flow slots left after the
+interior selects and `L` = leaf selects:
+
+```
+shipped   valu cost from the save-1 pool = max(0, L + g - rem)
+S = idx+3 valu cost                      = g + max(0, L - rem)
+L >= rem : both = L + g - rem                      EXACT TIE
+L <  rem : shipped = max(0, L+g-rem) <= g          shipped STRICTLY WINS
+```
+
+At P3-A's optimum (`s=221`, `g=227`, `L=680`, `inter=459`, `SETUP_FLOW=2`,
+C=940): `rem = 479 < L`, so it is the tie case, and the two censuses are
+**bit-identical**:
+
+| design | alu+valu | load | flow | floors |
+|---|---|---|---|---|
+| C1* (omf on flow) | 56,272 | 1,880 | 940 | 937.9 / 940.0 / 940.0 |
+| C9' (omf "eliminated", true cost) | **56,272** | **1,880** | **940** | **937.9 / 940.0 / 940.0** |
+
+and at C=920 both give 56,432 lane-ops (needs 55,200) and 1,880 loads
+(needs 1,840) -- **920 fails on two engines**, and buying the load slack
+requires serving 5 more L4 group-rounds = +75 folds, which loses.
+
+**So the coordinator's break-even intuition is right in arithmetic and wrong
+in sign of conclusion: it is break-even, therefore not a win.** The 1,816
+lane-ops freed on the fold side are exactly the 1,816 lane-ops spent on
+address recovery. The reason it feels like a win is that the same 1,816
+lane-ops can be spent WITHOUT changing the representation at all -- just
+spell 227 `omf` selects as valu madds -- so the representation change is
+doing no work.
+
+### Practical consequence
+
+The floor is **939**, realizing ~950-960 by P3-A's own regret caveat. There
+is no 920 design on this axis. If more margin is needed it must come from
+somewhere that removes COMPUTE, not from re-spelling the index recurrence.
+
+## 10. What I did not do
 
 * did not model the tournament/serving work that C7 would have to add
   (P3-A / P3-C boundary);

@@ -463,3 +463,74 @@ between two live constants. With flow now SATURATED, that slot is no longer
 free -- each one displaces a fold onto valu. Whether the elimination is free,
 costs +N, or is impossible decides 939 vs 920. Full detail:
 research/strains/p3a/STATE.md.
+
+### P3-C RESULT (2026-07-28): independent enumeration; the served-level shape is closed
+
+`tools/p3c_design_cost.py`, validated against the shipped kernel at **+0.08%**
+on alu+valu lane-ops (59,537 vs 59,489), 0.00% on load and store and scratch,
++1.57% on flow (13 slots of `race_sel`/`race_copy` engine drift -- a
+scheduling race, not a design property). Enumerated ~405k designs: every
+subset of {L1..L10} fully served x every partial count at one further level x
+the optimal fold split.
+
+**Minimum max-floor as built = 964.8** (L1-L3 full + 23 of 64 L4;
+57,887 lane-ops / 1,924 load / 965 flow; floors 964.8 / 962.0 / 964.8 -- a
+genuine three-way tie, which is why no local move helps). Shipped
+(L1L2L3+L4x27) models at 970.8, i.e. we sit 6 cycles off the best design of
+our own shape.
+
+**Every optimum has the SHIPPED SHAPE: L1-L3 fully served, L4 partial,
+L5-L10 gathered. The served-level axis is closed by exhaustion.** Best
+L5-serving design is 994.0 (best case 981.2) -- it loses by 30-47 cycles
+BEFORE scratch is consulted, independently re-confirming G-33 from a new
+direction.
+
+Relaxed-coefficient optima (same enumeration):
+
+| coefficients | min max-floor | 940? |
+|---|---|---|
+| as-built index + as-built support | 964.8 | no |
+| index at P3-B floor (6,608), support as built | 959.7 | no |
+| index as measured, ALL support free | 950.6 | no |
+| index at floor AND all support free | 946.0 | no |
+| **index at 5,888 (b=0) AND all support free** | **937.4** | **yes** |
+
+**K (live groups) is CENSUS-NEUTRAL.** K in {32,24,16,11,8} gives identical
+58,246 / 1,892 / 971 and moves only scratch (1,533 / 1,341 / 1,149 / 1,029 /
+957). It cannot participate in the 940 arithmetic -- a census restatement of
+G-33. This is good news for P3-A's C1*, whose retained-parity ring overruns
+scratch at K=32: **K=16 costs nothing on the census and needs only 1,149
+words**, and H-058 measured K>=11 sufficient for ILP at 940. Charter frame #4
+is thereby answered on the census axis (though not yet on latency).
+
+**Dead end recorded (do not repeat):** `tournament_levels=(1,2,3,4)` in dev.py
+measures ~7 ops/group-round for "level 4", appearing to falsify `2^d-1`. It is
+an INVALID BUILD -- dev's fold emitter has explicit branches only for L==1/2/3
+and its final `else` is labelled `# L == 3`, so a 4th level silently re-runs
+the 8-way fold over 16 candidates.
+
+### THE OPEN QUESTION: is the ~937.5 cell self-consistent? (P3-D dispatched)
+
+P3-A (937.9) and P3-C (937.4) are almost certainly describing the SAME cell:
+P3-A's index composition is 3,584 + 2,376 = 5,960 ~ P3-B's b=0 optimum of
+5,888, and P3-A's T2 is exactly "all support arithmetic free". Two independent
+models converging on ~937.5 would be strong evidence -- **except that the cell
+may be self-contradictory.**
+
+P3-B's 5,888 index floor is reached only "if the epoch-2 L4 gathers go to
+zero", i.e. by SERVING more level-4 group-rounds. P3-C's enumeration prices
+exactly that trade and finds it LOSES monotonically: L4x27 970.8 -> L4x28
+972.3 -> L4x29 973.8, because each additional served L4 group-round costs ~15
+folds against -8 load slots. **If the index saving can only be bought by
+paying the fold cost, the 937 cell does not exist and both numbers are wrong
+in the same way** -- both models appear to have swept index cost and the
+served-level profile as INDEPENDENT parameters when they are the same decision
+variable (the coupling flagged in the P3-B correction above).
+
+P3-D is adjudicating with a single joint model in which index cost is DERIVED
+from the design rather than swept. Until it reports, the honest status is:
+
+> **We have a design whose modelled floors clear 940 on all three engines, in
+> a cell whose self-consistency is unverified.** The defensible claim today is
+> the range 946-965: 946.0 if all serving support arithmetic can be removed at
+> 100% ring coverage, 964.8 if it cannot. Both are above 940.
