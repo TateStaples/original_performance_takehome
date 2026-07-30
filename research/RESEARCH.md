@@ -928,3 +928,74 @@ one adjudication and died to a measurement (G-38). **Convergence between
 models is not evidence when the models share a frame; only measurement
 broke it.** That is the sixth rule this project has bought with a wrong
 answer.
+
+---
+
+## Phase 4 charter (2026-07-29): assume corsix is RIGHT and find our error
+
+**User directive:** autoresearch the contradiction, **assuming the published
+source is correct.** This inverts the usual frame: the question is not "does
+corsix's claim survive our census" (we already answered that three ways in
+G-23 and again in P3-C) but **"what must be true about their design, or wrong
+about our rejection, for their claim to hold?"**
+
+### The contradiction, stated exactly
+
+**Their claim** (corsix.org/content/anthropics-compiler-challenge, scores
+971 and 994): >280 gathers can be replaced by **selection trees over
+preloaded node values**, after which valu:load:flow is balanced to 7.5:2:1
+in every individual cycle, with instruction selection and scheduling done as
+ONE joint search.
+
+**Our rejection** (G-23 at the 1038 census, three independent ways; then
+P3-C's ~405k-design enumeration at 1006): every optimum has the SHIPPED
+shape — L1-L3 served, L4 partial, L5-L10 gathered. Every unserved L4
+group-round measures negative (l4_gmin sweep monotone around (9,30); 14
+set-form alternatives tie or lose). L5 serving loses by 30-47 cycles BEFORE
+scratch is consulted.
+
+**What we already verified about them, and it checks out:** H-043 decoded
+their diagram SVGs and their hash is bit-for-bit our 11-op fused form. Our
+own census independently re-derived their 7.5:2:1 balance. So they are not
+working from a different hash or a different machine model.
+
+### The lead that makes this worth funding
+
+**P3-C's predicted max-floor for the best L5-serving design is 994.0. corsix
+scores exactly 994.** Either a coincidence, or our model prices their design
+correctly and they realize it at ZERO regret where we measure 11-15 cycles of
+regret — which would itself be the finding, since it would mean the gap is
+scheduling after all, contradicting Phase 3's census-gap conclusion.
+
+### What "assume they are right" licenses
+
+Under this charter, a Phase-4 result may conclude that one of our own closed
+entries is WRONG. G-23 and P3-C's shape enumeration are explicitly IN SCOPE
+for refutation. Phase 3 found the same class of defect twice (per-level
+rather than per-site calibration; two models agreeing while sharing an
+unexamined frame), so the prior is NOT that our closures are safe.
+
+Specifically open for challenge:
+1. **Is the routing theorem's `2^d - 1` cost law actually right?** It is the
+   load-bearing assumption behind every serve/gather decision. "Selection
+   trees over PRELOADED node values" may mean a tree over fewer than 2^d
+   candidates, which the law does not model.
+2. **Is our L4 sweep's negativity a census fact or a friction artifact?**
+   G-23 rejected on measured cycles at a fixed emission order and spelling;
+   corsix's claim is explicitly about doing selection and scheduling JOINTLY.
+   A move that loses under our greedy could win under joint search.
+3. **Does the 7.5:2:1 balance mean what we assumed?** We read it as a
+   steady-state average we already achieve. They state it per INDIVIDUAL
+   cycle. Those are different claims, and 666/1038 of our cycles having all
+   four engines full is not the same as the ratio holding cycle-by-cycle.
+
+### Rules
+
+- Phases 1-3 rules still bind, with ONE exception: "engine X is idle is not a
+  hypothesis generator" and "a lower floor is not a win" are heuristics
+  earned on OUR design; do not use them to dismiss a mechanism that the
+  source claims works. Cost it instead.
+- Any refutation of G-23 or P3-C must be by MEASUREMENT or exhaustive
+  enumeration, not by re-argument.
+- Reading the primary source is preferred over inferring from it. We have
+  decoded their diagrams once; do it again for the census.
