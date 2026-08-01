@@ -54,12 +54,51 @@ fwd shards (x all link shards if link-sharded).
 
 ## Slice ledger (append CHECKPOINT lines as they complete)
 
-(none yet — slices start now)
+CHECKPOINT target=full_hash_core ext=kf3full maxchain=6 fwd_shard=0/4 link_shard=0/1 tabs=[kf0:1,kf1:365,kf2:123401,kf3:14850325] chain_nodes=2118524244 finds=0 secs=408.0
+CHECKPOINT target=full_hash_core ext=kf3full maxchain=6 fwd_shard=1/4 link_shard=0/1 tabs=[kf0:1,kf1:365,kf2:123401,kf3:14847537] chain_nodes=2118524244 finds=0 secs=405.3
+CHECKPOINT target=full_hash_core ext=kf3full maxchain=6 fwd_shard=2/4 link_shard=0/1 tabs=[kf0:1,kf1:365,kf2:123401,kf3:14835166] chain_nodes=2118524244 finds=0 secs=403.1
+CHECKPOINT target=full_hash_core ext=kf3full maxchain=6 fwd_shard=3/4 link_shard=0/1 tabs=[kf0:1,kf1:365,kf2:123401,kf3:14824788] chain_nodes=2118524244 finds=0 secs=403.4
 
-## Planned slice queue
-1. full_hash_core --ext kf3full --max-chain 6 --fwd-shard {0..3}/4
-   (reaches k<=10: THE 11->10 question for fwd3-general+meet+chain<=6 shapes)
-2. round12 --ext kf3full --max-chain 6 --fwd-shard {0..7}/8 (2-input body)
-3. f2ap, e2xw (engine A k<=3 + engine C, single slices each)
-4. full_hash_core --ext kf4chained --fwd-shard 0/64 (timing probe for the
-   kf4 resume protocol; full closure = 64 shards)
+**REGION CLOSED (2026-08-01): full_hash 11->10 AND ->9, kf3-FULL x chain<=6.**
+No <=10-op form of myhash (k=9 included via the wanted mask) decomposing as
+[any 0..3-op forward DAG prefix over the 12-const core pool, ALL shapes incl
+parallel] + [optional solved xor/affine meet, even K to 2^12] + [invertible
+suffix chain <=6 ops from the 1284-link pool]. 59.36M kf3-full entries,
+4 x 2.118B chain nodes, ~27 min total.
+
+CHECKPOINT target=f2ap ext=none maxchain=3 fwd_shard=0/1 link_shard=0/1 tabs=[kf0:2,kf1:646,kf2:190453] chain_nodes=1826439144 finds=0 secs=36.0
+CHECKPOINT target=e2xw ext=none maxchain=3 fwd_shard=0/1 link_shard=0/1 tabs=[kf0:2,kf1:417,kf2:83640] chain_nodes=813153413 finds=0 secs=15.9
+**P3-F next-step 2 CLOSED: both 4-op cross-round spans (f->a' and e->x',
+primed basis) have NO 3-op form** — engine A full forward k<=3 (2.08B /
+0.8B candidates, solved final constants) + engine C kf<=2+meet+chain<=3.
+
+CHECKPOINT target=round12 ext=kf3full maxchain=6 fwd_shard=0/8 link_shard=0/1 tabs=[kf0:2,kf1:780,kf2:294685,kf3:23091539] chain_nodes=2118524244 finds=0 secs=418.5
+CHECKPOINT target=round12 ext=kf3full maxchain=6 fwd_shard=1/8 link_shard=0/1 tabs=[kf0:2,kf1:780,kf2:294685,kf3:23035034] chain_nodes=2118524244 finds=0 secs=417.2
+CHECKPOINT target=round12 ext=kf3full maxchain=6 fwd_shard=2/8 link_shard=0/1 tabs=[kf0:2,kf1:780,kf2:294685,kf3:23071478] chain_nodes=2118524244 finds=0 secs=417.3
+CHECKPOINT target=round12 ext=kf3full maxchain=6 fwd_shard=3/8 link_shard=0/1 tabs=[kf0:2,kf1:780,kf2:294685,kf3:23048164] chain_nodes=2118524244 finds=0 secs=420.1
+(round12 shard 0 also ran engine A k<=3 full forward: 2.0B candidates, 0 hits)
+
+CHECKPOINT target=round12 ext=kf3full maxchain=6 fwd_shard=4/8 link_shard=0/1 tabs=[kf0:2,kf1:780,kf2:294685,kf3:23084986] chain_nodes=2118524244 finds=0 secs=428.7
+CHECKPOINT target=round12 ext=kf3full maxchain=6 fwd_shard=5/8 link_shard=0/1 tabs=[kf0:2,kf1:780,kf2:294685,kf3:23038823] chain_nodes=2118524244 finds=0 secs=430.5
+CHECKPOINT target=round12 ext=kf3full maxchain=6 fwd_shard=6/8 link_shard=0/1 tabs=[kf0:2,kf1:780,kf2:294685,kf3:23090255] chain_nodes=2118524244 finds=0 secs=429.9
+CHECKPOINT target=round12 ext=kf3full maxchain=6 fwd_shard=7/8 link_shard=0/1 tabs=[kf0:2,kf1:780,kf2:294685,kf3:23050737] chain_nodes=2118524244 finds=0 secs=560.0
+
+**REGION CLOSED (2026-08-01): round12 (2-input 12-op body myhash(x^y)),
+kf3-FULL x chain<=6, all 8 shards NEGATIVE.** No form at <=10 total ops
+(engine reach; wanted included 11 but max decomposable depth = 3+1+6 = 10)
+in [any 0..3-op fwd DAG prefix over {x,y}+core pool] + [solved meet] +
+[<=6-op suffix chain]. 184.5M kf3-full entries, 8 x 2.118B chain nodes.
+Engine A also closed pure-forward k<=3 (2.0B candidates).
+
+## kf4chained probe + resume protocol
+- shard 0/512: ABORT tab_cap (>30M entries) -> chained-kf4 space is huge.
+- shard 0/4096 COMPLETED NEGATIVE:
+  CHECKPOINT target=full_hash_core ext=kf4chained maxchain=5 fwd_shard=0/4096 link_shard=0/1 tabs=[kf0:1,kf1:365,kf2:123401,kf4:7113097] chain_nodes=2118285916 finds=0 secs=1354.7
+  7.11M entries, 6.3s build; engine C ran 22.6 min (~3x a kf3 slice —
+  CPU sat ~370% not 690%, probe against the kf4 affine map is costlier;
+  worth profiling before mass fan-out). Extrapolated total ~29B chained-4
+  prefixes; full closure = 4096 slices x ~22 min ~ 64 box-days serial —
+  driver parallel fan-out required. Slice command:
+  `global_mitm full_hash_core --ext kf4chained --max-chain 5 --fwd-shard I/4096 --engine-a 0`
+  (each slice independent; append its CHECKPOINT line here; closure =
+  all I in 0..4096 present with finds=0). kf4+meet+chain5 = 10 ops reach.

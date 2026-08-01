@@ -1240,3 +1240,37 @@ realized margin.
 > exist?" is the whole game for both boards.** Fallback if only k=10 exists:
 > the ~170-vec support-trim hunt becomes decisive (queued as contingent,
 > not spawned).
+
+### P5-B RESULT (2026-08-01): funded regions ALL NEGATIVE; one structural gap named
+
+`rust_harness/src/bin/global_mitm.rs` (validated by planted positive AND
+negative controls; a planted 8-op parallel-prefix form was found and
+10M-verified by the kf3-FULL family and proven invisible to the chained-kf3
+family — confirming all PRIOR kf>=3 coverage was chained-only):
+
+- **full_hash 11 -> 10 or 9: CLOSED in region.** 59.36M full-shape 3-op
+  prefixes (12-const core pool) x meet x suffix chains <=6; 4 x 2.118B
+  chain nodes; 0 finds. Prior art stopped at kf<=2 + chain<=5.
+- **round12 (fold-in + 11, first search NOT assuming fold-in-first): CLOSED
+  <=10.** 184.5M full-shape prefixes over {x,y}+pool; 8 x 2.118B nodes;
+  plus pure-forward k<=3 (2.0B). 0 finds.
+- **Both 4-op cross-round spans: CLOSED at depth 3.**
+- Runtime-multiplicand madd: NOT a coverage gap (forward enumeration covers
+  it; structurally impossible in suffixes).
+- kf4-chained: shard 0/4096 negative (22.6 min; ~3x kf3 cost, CPU 370%/690%
+  -- profile before mass fan-out). Full closure ~64 box-days serial.
+  **Driver is grinding slices 1-12 in background (2-concurrent batch).**
+- Correction accepted: the driver's per-c1 served-level specialization idea
+  is DEAD -- the op stream cannot depend on node values (kernel built from
+  shape only, tests/submission_tests.py:24-26).
+
+**THE NAMED GAP: every suffix family searched to date -- across G-10, H-016,
+H-025, P3-F, and P5-B -- is a CHAIN (no fan-out). But the real 11-op form
+itself has fan-out in its back half (a, d, f each read twice, per P3-F).
+A 9/10-op sibling with fan-out in its suffix would have been invisible to
+ALL coverage to date.** This is now the highest-probability hiding region,
+and P5-D is on it. The <=19-op 2-round composite is beyond enumeration
+entirely (needs CEGIS/algebraic synthesis -- also P5-D).
+
+Not-covered list (explicit): kf4 grind 4095/4096 slices, full-shape kf4,
+richer-than-12-const pools, fan-out suffixes, 2-round composite.
