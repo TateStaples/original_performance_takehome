@@ -68,10 +68,80 @@ Optional --gen-shift-links: adds v+(v>>s), v-(v>>s), (v>>s)-v as invertible
 2-op chain links (generalized xorshift; fan-out of the chain value beyond
 xor) with iterative inverses, roundtrip-asserted at startup.
 
+## 2b. Validation + two lemmas (2026-08-01)
+
+SELFTEST ALL PASS (`fanout_mitm --selftest`):
+- sp1 (6-op plant, XOR-join at op 4, r=t1): FOUND+verified by joined-kf3;
+  NOT found by the no-join P5-B family (base+kf3full+chain) — the join is a
+  real coverage extension. Shard union (4 shards): exactly the shards with
+  the plant's orderings find it.
+- sp2 (r = x input fan-out, joined-kf2): FOUND. sp3 (DAG leaves t1 dangling,
+  join adopts it): FOUND — the unused-temp-as-r rule works.
+- LEMMA A (additive-shift): v+(v>>s), v-(v>>s), (v>>s)-v are NEVER bijective
+  mod 2^w (exhaustive w=12, witnesses at w=32; e.g. f(0)=f(0xFFFFFFFF) for
+  s=31 add). Every unary link of a chain suffix of a bijection must be
+  bijective, so additive xorshift-analogues are PROVABLY absent from all
+  chain suffixes — excluding them is a theorem, not a coverage gap.
+- LEMMA B (join absorption, found BY the selftest negative control): an
+  ADD-join whose r lands next to a madd folds into the madd's runtime addend
+  slot (9*t2+C4+t1 = madd(9,t2,t1) then solved affine meet absorbs C4), so
+  g=add joins adjacent to madds are already inside P5-B's closure; XOR-joins
+  are not (P3-F XOR<->ADD lemma). g=xor is therefore the highest-value join
+  family, g=add second (only non-madd-adjacent placements are new).
+
 ## 3. Slice ledger (append CHECKPOINT lines)
 
-(pending)
+Calibration (2026-08-01): full_hash_core --kf 3 --join-g xor --join-r all
+--fwd-shard 0/16: joined tab = 24,209,166 entries in 748s (single-threaded
+build; the relaxed unused-temp rule + r=x inflate ~6.5x over a plain kf3full
+shard), RSS ~3.5GB — /16 sharding is RAM-safe alongside the driver's kf4
+grind. Engine C phase timed below. Full closure of one g over 16 shards is
+a DRIVER-FLEET job (~30 min/slice contended), not in-session — same
+precedent as P5-B's kf4chained handoff.
+
+(CHECKPOINT lines appended as slices complete:)
 
 ## 4. CEGIS/Z3 (mission 3)
 
-(pending)
+Machinery: tools/p5d_cegis.py. Soundness: UNSAT on a sample-constraint set
+=> template impossible for the whole function (samples are necessary
+conditions); SAT => constants extracted and verified OUTSIDE z3 on 2^20
+sweep + 10M randoms; TIMEOUT reported as OPEN never closed.
+
+Controls: full 7-op span template (1 madd) = FOUND+VERIFIED (z3 even found
+an alternate constant family with multiplier -4097 — sign symmetry).
+Full 11-op hash template with 4 free multipliers = TIMEOUT at 150s even
+with concrete shifts — z3 QF_BV cannot handle >=3 chained free 32-bit
+multipliers at this budget; madd-heavy 9-op templates will report TIMEOUT
+(=OPEN), madd-light ones (deletions that remove madds) can resolve.
+Width-reduction ladder is UNSOUND here (right shifts break the truncation
+homomorphism mod 2^w) — noted and not used.
+
+Runs:
+- span7->5 (PRIORITY 1 entry to the <=19 two-round composite): ALL 10 valid
+  2-deletion templates of the primed boundary span M(e,y') =
+  stage1(stage0(sigma16(e)^y')) at 5 ops: **UNSAT — closed at full constant
+  freedom** (log: scratchpad cegis_span.log; 10 further variants cascade to
+  !=5 ops, skipped as out-of-question). Combined with P5-B's round12<=10 and
+  span-depth-3 closures, the <=19 composite now has NO known local entry
+  point: savings would have to come from >=5-op nonlocal restructuring
+  spanning >=3 stage groups — outside every tool's reach.
+- hash11->9 2-deletion family: (pending)
+
+## 5. Resume protocol (driver fleet)
+
+Slice command (one CHECKPOINT line each; append here):
+  ./rust_harness/target/release/fanout_mitm full_hash_core \
+    --kf 3 --join-g G --join-r all --max-chain 6 --fwd-shard I/16
+Closure of (target, g) = all I in 0..16 present with finds=0.
+Priority order (Lemma B + real-form structure):
+  1. full_hash_core g=xor      (16 slices; the real form's join type)
+  2. full_hash_core g=add,sub,rsub (48 slices; add partially P5-B-redundant)
+  3. round12 --join-r y g=xor  (the nv-fanout hole; needs I/48 sharding —
+     calibrate slice 0 first; r=x,t1,t2 tiers after)
+  4. g=ext (and/or/mul/shifts), g=maddk (28 non-pool odd-K joins; needs
+     finer sharding, ~I/128, or per-K runs)
+~30 min/slice under kf4 contention, ~3.5GB RSS at /16. RECOMMENDATION: the
+joined-kf3 fleet should PREEMPT the kf4chained grind (32 box-hours for tier
+1-2 vs 64 box-days; covers the census's entire join-at-4 class vs the
+spine-only slice of it).

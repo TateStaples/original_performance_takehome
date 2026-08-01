@@ -1,2 +1,6 @@
 CHECKPOINT target=full_hash_core ext=kf4chained maxchain=5 fwd_shard=1/4096 link_shard=0/1 tabs=[kf0:1,kf1:365,kf2:123401,kf4:6895514] chain_nodes=2118285916 finds=0 secs=1265.0
 CHECKPOINT target=full_hash_core ext=kf4chained maxchain=5 fwd_shard=2/4096 link_shard=0/1 tabs=[kf0:1,kf1:365,kf2:123401,kf4:6900699] chain_nodes=2118285916 finds=0 secs=1265.0
+CHECKPOINT target=full_hash_core ext=kf4chained maxchain=5 fwd_shard=4/4096 link_shard=0/1 tabs=[kf0:1,kf1:365,kf2:123401,kf4:6903009] chain_nodes=2118285916 finds=0 secs=915.1
+CHECKPOINT target=full_hash_core ext=kf4chained maxchain=5 fwd_shard=3/4096 link_shard=0/1 tabs=[kf0:1,kf1:365,kf2:123401,kf4:7243170] chain_nodes=2118285916 finds=0 secs=917.0
+CHECKPOINT target=full_hash_core ext=kf4chained maxchain=5 fwd_shard=5/4096 link_shard=0/1 tabs=[kf0:1,kf1:365,kf2:123401,kf4:6689708] chain_nodes=2118285916 finds=0 secs=1449.1
+CHECKPOINT target=full_hash_core ext=kf4chained maxchain=5 fwd_shard=6/4096 link_shard=0/1 tabs=[kf0:1,kf1:365,kf2:123401,kf4:6501323] chain_nodes=2118285916 finds=0 secs=1450.6

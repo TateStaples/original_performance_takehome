@@ -1369,3 +1369,48 @@ cycles (was +4.0/+5.5).
 **Net: k=9 (P5-D's search) is the only live route, and it remains
 sufficient — adjusted floors ~863 (no-idx) / ~879 (with-idx) vs targets
 889/904.**
+
+### P5-G RESULT (2026-08-01): zero public mechanisms — but the frontier's METHOD
+### is documented, and it reframes the search
+
+25 sources mined (full table strains/p5g/STATE.md). NEW-technique count: 0.
+Frontier players deliberately withhold (Nareg: "Anthropic has asked for
+solutions to remain private"). But three strategic findings:
+
+**1. The 889-940 frontier is AGENT-SEARCH operations, not secret human
+insight.** josusanmartin (923/940) runs a public problem-agnostic
+optimization harness (github: problem-agnostic-optimization-skill,
+scorebench); his own words on Discord: "I don't even know what the kernel
+does, and here I am." stool233 (926) = Codex harness + scheduler-aware
+profiler. saifalharthi (904/889): 71 submissions to 889, then 3 to 904
+(delta 15 ~ our modeled writeback 16 — corroborates our tail model).
+**Implication: whatever the frontier found, it was found MECHANICALLY. If
+k<=9.5 is right, a shorter hash form is discoverable by automated search —
+which points at stochastic superoptimization (STOKE-style), not derivation.**
+
+**2. This names OUR sharpest coverage gap: ARBITRARY CONSTANTS.** Every
+MITM we have run uses a 12-const structured core pool. A 9/10-op form
+using a magic constant outside that pool is invisible to ALL coverage to
+date — and constant-mutation is exactly what stochastic search does
+natively. The gap is now: (fan-out suffixes) x (arbitrary constants),
+jointly reachable by MCMC and by nothing we have run.
+
+**3. Nareg Amirian Megan: 966 no-idx, mechanisms withheld, pillars "op
+reduction + ALU/vector co-use + DAG scheduler." 966 sits EXACTLY at our
+predicted realized ceiling (floor 944-952 -> realized ~965-970).** This
+independently validates the Phase-3 model: 966-class results need NO
+k<11 — our own design space reaches them. The unexplained band is only
+889-958.
+
+Also: dougall = Dougall Johnson confirmed (nothing published);
+josusanmartin's VLIW module quotes "contract-aware omission only when
+output semantics prove state is unobserved" (we already bank this: no-idx
+relief, mem_prime tree-trashing, scratch unobserved) and lists "fuse
+stages... change representation/primitive" as escapes — consistent with
+our k-reduction theory, no new mechanism named. Unmined channels:
+Paradigm optimization-arena (JS-walled), kerneloptimization.fun API
+(server broken).
+
+**ACTION: P5-H dispatched — STOKE-style stochastic superoptimizer
+(MCMC over 9-11-op programs, arbitrary-constant moves, correctness
+cascade), the search class the frontier's own method points at.**

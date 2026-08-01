@@ -49,3 +49,7 @@ path = "src/bin/fusion_search.rs"
 [[bin]]
 name = "global_mitm"
 path = "src/bin/global_mitm.rs"
+
+[[bin]]
+name = "fanout_mitm"
+path = "src/bin/fanout_mitm.rs"
