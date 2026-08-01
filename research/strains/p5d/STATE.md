@@ -1,6 +1,6 @@
 # Strain P5-D — fan-out suffix MITM + shape census + CEGIS (Phase-5)
 
-status: IN PROGRESS
+status: HANDED TO DRIVER (infra validated; slice fleet + 12 OPEN z3 templates remain)
 
 ## 0. Coordinator update folded in (2026-07-28, mid-task)
 
@@ -64,9 +64,8 @@ regions are: (a) joined-kf3 = 4-op forward reach for join-final shapes,
 (c) r = y (node value read twice) for round12 — the "late binary op over
 two live runtime values" hole named in P5-B's not-covered list.
 
-Optional --gen-shift-links: adds v+(v>>s), v-(v>>s), (v>>s)-v as invertible
-2-op chain links (generalized xorshift; fan-out of the chain value beyond
-xor) with iterative inverses, roundtrip-asserted at startup.
+(A --gen-shift-links family v+(v>>s) etc. was designed, then REMOVED after
+Lemma A below proved those maps are never bijective — see 2b.)
 
 ## 2b. Validation + two lemmas (2026-08-01)
 
@@ -99,7 +98,18 @@ grind. Engine C phase timed below. Full closure of one g over 16 shards is
 a DRIVER-FLEET job (~30 min/slice contended), not in-session — same
 precedent as P5-B's kf4chained handoff.
 
+round12 r=y calibration (build-only, maxchain=1 => engine C trivial):
+CHECKPOINT bin=fanout target=round12 mode=kf3join join_g=xor join_r=y maxchain=1 fwd_shard=0/48 link_shard=0/1 tabs=[p4:4151580] chain_nodes=1222 finds=0 secs=91.8
+=> r=y tier tab is small (4.15M/48-shard, 92s build): /24 sharding fine
+(8.3M entries); full r=y g=xor closure = 24 slices + engine C cost.
+
 (CHECKPOINT lines appended as slices complete:)
+
+CHECKPOINT bin=fanout target=full_hash_core mode=kf3join join_g=xor join_r=all maxchain=6 fwd_shard=0/16 link_shard=0/1 tabs=[p4:24209166] chain_nodes=2118524244 finds=0 secs=2207.5
+  (engine C 1459.5s; slice wall ~37 min under kf4-grind contention)
+SLICE 1/16 LAUNCHED by P5-D at 18:23:22 pid=52883, log:
+research/strains/p5d/slice1.log — expected completion ~19:00; DRIVER:
+append its CHECKPOINT line here and continue I=2..15, then g=add tier.
 
 ## 4. CEGIS/Z3 (mission 3)
 
@@ -126,7 +136,49 @@ Runs:
   span-depth-3 closures, the <=19 composite now has NO known local entry
   point: savings would have to come from >=5-op nonlocal restructuring
   spanning >=3 stage groups — outside every tool's reach.
-- hash11->9 2-deletion family: (pending)
+- hash11->9 2-deletion family (each = the real form's shape minus 2 ops,
+  ALL constants/multipliers/masks/shifts free; UNSAT = that 9-op shape
+  cannot compute myhash for ANY constants — sound closure; TIMEOUT = OPEN):
+  FINAL: UNSAT x16, TIMEOUT x12, FOUND 0, SKIP x32 (cascades to !=9 ops).
+  UNSAT: [0,1],[0,2],[0,4],[0,5],[0,8],[0,9],[1,3],[1,4],[1,5],[1,7],
+         [1,8],[1,9],[2,8],[4,8],[5,8],[7,8].
+  TIMEOUT (OPEN, z3 120s): [0,7],[2,3],[2,4],[2,5],[2,7],[2,9],[4,6],
+         [4,7],[4,9],[5,7],[5,9],[7,9].
+  PATTERN: every deletion touching op8 (shr16) or op1 (shr19) is UNSAT
+  fast — killing a sigma's shift makes the tail affine and z3 refutes;
+  TIMEOUTs cluster exactly where 4 free multipliers survive (the [2,x]
+  ^C1-deletion row and madd-preserving pairs). Resume: 600-1200s budgets
+  or concrete-shift grids on the 12 OPEN templates.
+  (op indices: 0=madd0,1=shr19,2=xorC1,3=join,4=maddP,5=maddQ,6=join,
+   7=madd4,8=shr16,9=xorC5,10=out-join — output op never deleted)
+- sandwich9 (madd/sigmaC/madd/sigmaC/madd = THE natural 3-madd 9-op shape,
+  NOT a deletion of the real form; all 5 consts + 2 shifts + 3 multipliers
+  free): **TIMEOUT at 424s — OPEN.** The single most plausible 9-op shape
+  is undecided; highest-value z3 target for a longer-budget rerun (also a
+  prime P5-H STOKE target).
+
+## 4b. PROVEN-EMPTY REGISTRY (for P5-H STOKE cross-check)
+
+Any P5-H stochastic find inside these families indicates a BUG in one of
+the two searchers — check immediately:
+1. [P5-B] myhash at <=10 ops decomposing as [<=3-op full-shape DAG over the
+   12-const core pool][solved xor/affine meet, even-K lifts to 2^12]
+   [invertible pooled-const chain <=6] — 59.36M prefixes, closed.
+2. [P5-B] round12 myhash(x^y) <=10 same family over {x,y}+pool; and pure
+   forward k<=3 (all shapes, 2.0B candidates).
+3. [P5-B] both 4-op cross-round spans (f2ap, e2xw) at 3 ops (full forward).
+4. [P5-D slice 0/16 + pending fleet] myhash <=10 as [<=3-op DAG][XOR-join
+   g(m,r), r any runtime slot][solved meet][chain<=6] for (l1,l2) pairs in
+   shard 0 of 16 (1/16 of join-at-4 xor tier so far — fleet completes).
+5. [P5-D CEGIS, full constant freedom] the 10 span7->5 shapes (2-round
+   boundary) and the 14 UNSAT hash11->9 deletion shapes listed above.
+6. [P5-D lemma] ANY suffix chain containing v+(v>>s), v-(v>>s), (v>>s)-v
+   as a link (never bijective).
+7. [P3-F] 1-op and depth-2 //,%,cdiv forms; conjugation-family removals of
+   the fold-in xor or stage-2 ^C1.
+Constants caveat: 1-4 are closed over their stated pools only; a STOKE find
+using constants far outside the pools would NOT contradict 1-4 (but would
+contradict 5's shapes, which have free constants).
 
 ## 5. Resume protocol (driver fleet)
 

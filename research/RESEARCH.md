@@ -1414,3 +1414,36 @@ Paradigm optimization-arena (JS-walled), kerneloptimization.fun API
 **ACTION: P5-H dispatched — STOKE-style stochastic superoptimizer
 (MCMC over 9-11-op programs, arbitrary-constant moves, correctness
 cascade), the search class the frontier's own method points at.**
+
+### P5-D RESULT (2026-08-01): fan-out gap quantified and partially closed;
+### "sandwich9" is the headline open shape
+
+**Shape census (exact DP, brute-validated to n=6):** n=10 fan-out wiring
+shapes = **1.145 x 10^12** — global enumeration is impossible, permanently.
+The enumerable increment is the join-at-4 family (494 shapes): searcher
+built (`fanout_mitm.rs`), selftest ALL PASS including a negative control
+proving P5-B's family was blind to the planted fan-out form.
+
+**New lemmas:** (A) `v +/- (v>>s)` is never bijective mod 2^w, so
+additive-shift links are provably absent from chain suffixes; (B) add-joins
+absorb into madd addend slots while xor-joins do not => **g=xor is the
+priority tier** (the real form's own join type).
+
+**CEGIS closures (z3, sample-UNSAT = sound):**
+- **span7->5: ALL 10 templates UNSAT** — the <=19-op 2-round composite has
+  no local entry point left at the round boundary.
+- hash11->9 deletion shapes: 16 UNSAT / 12 TIMEOUT / 0 found.
+- **sandwich9 (madd/sigma/madd/sigma/madd — THE natural 3-madd 9-op shape,
+  all constants+shifts+multipliers free): TIMEOUT at 424s = OPEN.** The
+  single most plausible 9-op shape is undecided.
+
+**MITM:** joined-kf3 g=xor slice 0/16 NEGATIVE (24.2M joined prefixes x
+2.118B chain nodes). PROVEN-EMPTY registry written for cross-checking any
+P5-H stochastic find (a find inside a closed family = a bug in one searcher).
+
+**Driver fleet actions (this iteration):** slice 1 running (P5-D handoff);
+fleet launcher armed — g=xor slices 2-15 then g=add 0-15, sequential,
+preempting further kf4 batches per P5-D's economics (32 box-hours covers
+the whole join-at-4 class vs 64 box-days for kf4). **sandwich9 relaunched
+by the driver at 3h solver budget** (`tools/p5d_sandwich9.py`, background).
+kf4 batch: 6 more slices complete, all negative (7/4096 total).
