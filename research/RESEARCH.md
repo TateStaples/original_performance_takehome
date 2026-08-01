@@ -1274,3 +1274,24 @@ entirely (needs CEGIS/algebraic synthesis -- also P5-D).
 
 Not-covered list (explicit): kf4 grind 4095/4096 slices, full-shape kf4,
 richer-than-12-const pools, fan-out suffixes, 2-round composite.
+
+### Phase-5 addendum (2026-08-01): user directive — explore outside the hash
+
+P5-F dispatched on the three non-hash routes that remain genuinely
+unexplored:
+(a) **exotic compute suppliers** — load-as-LUT (a load computes an arbitrary
+unary function over the 2,566-word image; never framed as compute),
+flow-vselect-as-mux-compute beyond serving, store tricks (same-cycle
+write-conflict select, mem-as-spill for ring state);
+(b) **machine-semantics affordance audit** — a lawyer's read of problem.py
+for every unframed semantic (load_offset, write-commit ordering, dict
+last-wins writes, unaligned vload bases, const-on-load, immediates,
+branching, aliasing under buffered writes);
+(c) **audit of P5-A's inversion assumptions** — including whether the
+46,464 hash figure double-counts fold-ins already elided by c5_prexor.
+
+Driver pre-check recorded: wholesale hash-on-LUT dies by 2 orders of
+magnitude on load capacity; k=11 remains dead even with exotic suppliers
+UNLESS the audit finds an assumption hole — the scout's job is the margins
+(free ramp/drain load slots ~170, narrow-domain subcomputations) and the
+audit. In-flight: P5-D (fan-out hash), P5-E (k=10 trim), kf4 batch 1-12.
