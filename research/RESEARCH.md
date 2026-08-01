@@ -1333,3 +1333,39 @@ already NETS the c5_prexor elisions, no double-count.
 > the frontier's mechanism remains unidentified after exhausting every
 > region we can name — and the next step would be funding the full kf4/
 > richer-pool/CEGIS program at much larger compute.
+
+### P5-F RESULT (2026-08-01): the non-hash space is CLOSED — no route to >=13
+### cycles exists outside the hash; the inversion HARDENS
+
+All three exotic suppliers dead (`tools/p5f_audit.py`, strains/p5f/STATE.md):
+- **load-as-LUT: DEAD.** No qualifying narrow domain exists (the hash is
+  nonlinear in val^node, killing node-only tables; idx->node_val IS the
+  gather; parity and the tail are already 1-op). Capacity cap ~21 vec-ops
+  (~3.5 cyc) even if a domain existed. Only scrap: const-for-vbroadcast
+  ~1.5-2 cyc, ramp-locked.
+- **vselect-as-mux: CLOSED.** Mux-expressible = 2-valued output with a
+  pre-existing condition register = exactly the folds + omf selects already
+  in the F-model; flow is oversubscribed at every feasible shape.
+- **store tricks: DEAD x3.** Collision-select loses >=8x; N1 round-trips
+  have no consumer; **ring-spill-to-mem is infeasible** because the ring
+  shortage is LIVE-WINDOW concurrency (accumulators touched every served
+  round): ~100-360 mid-schedule vloads needed vs 4 free steady load slots
+  (62-64 at k=9 designs). **Ring coverage >62.5% is now closed in BOTH
+  directions** (scratch: P3-E; memory: here).
+
+**Affordance audit: 23 rows, UNFRAMED count ZERO.** Every semantic in
+problem.py is either already exploited or dead with a stated reason. The
+ISA inventory behind the idx-floor and routing arguments is complete.
+
+**Inversion audit: all six assumptions HOLD, and the bound HARDENS.**
+New airtight leg for the flow question: any load-feasible shape has
+g<=214 => served>=298 => min folds 1,334 > flow capacity at both targets —
+**flow never has an idle slot** (kills scalar add_imm offload and every
+idx-on-flow hybrid at the root). The elision question is settled exactly:
+**hash(k) = 512k + 176 vec-ops** (elisions = 336; two independent census
+decompositions agree). k=11 free-serving overruns re-derived at +4.3/+5.8
+cycles (was +4.0/+5.5).
+
+**Net: k=9 (P5-D's search) is the only live route, and it remains
+sufficient — adjusted floors ~863 (no-idx) / ~879 (with-idx) vs targets
+889/904.**
