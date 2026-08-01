@@ -1295,3 +1295,41 @@ magnitude on load capacity; k=11 remains dead even with exotic suppliers
 UNLESS the audit finds an assumption hole — the scout's job is the margins
 (free ramp/drain load slots ~170, narrow-domain subcomputations) and the
 audit. In-flight: P5-D (fan-out hash), P5-E (k=10 trim), kf4 batch 1-12.
+
+### P5-E RESULT (2026-08-01): k=10 FAILS both boards — the trim does not exist
+
+Total legitimate trim: **60-71 vec-ops** (482-568 lane-ops) against the
+1,218-1,374 required — and honest costs P5-C's floors omitted (+776 ring
+residual, +56 r15 penalty, +128/op slider correction, +16-104 setup) exceed
+the trim entirely. Best-case k=10 floors: **902 no-idx / 919 with-idx**,
+short 13/15 before regret, realized miss 24-37. The verdict holds even with
+every SPECULATIVE trim granted.
+
+Trim ledger (sourced): T-omf -112/-88 (derived; double-count risk flagged),
+T-c5-on-round-4-serves -88/-64, T-idx15 -72 (measured rate), T-dual
+-210..-296 (speculative). **Everything else is 0**: T1/T3/C1-respell/setup
+are already inside the baseline pool (double-count audit); round-0/11
+specialization is 0 (stage 1 is already one madd; priming VALUES is
+strictly negative; round-10 ^C5 already elided via the primed root); k=10
+frees only ~32 scratch words = 1.3 rings (coverage 62.5% -> 64.5%,
+negligible).
+
+Audit finds of independent value: (1) **the hash slider overcredits** —
+census 46,464 = 12 ops x 512 gr x 8 minus ~336 C5-elision vec-ops, so the
+per-op removal unit is 4,096 lane-ops, not 4,224 (+128/op adverse to every
+prior k-feasibility number — applied); (2) P5-A's 808-lane with-idx tail is
+wrong for T2-style designs (packed accumulator deleted) — P5-C's 192-vec
+form stands; (3) partial answer to P5-F's fold-in question: the 46,464
+already NETS the c5_prexor elisions, no double-count.
+
+**k=9 survives honest repricing, margins roughly halved**: floors 857-868
+(no-idx) / 874-885 (with-idx); realized 868-883 / 885-900; clears 889 by
++6..+21 and 904 by +4..+19.
+
+> **Phase-5 status after P5-E: k=9 or bust, within the alu/valu frame.**
+> P5-D hunts k=9 in the fan-out-suffix + CEGIS space; P5-F audits the frame
+> itself (exotic suppliers, affordances, inversion assumptions); kf4 batch
+> grinds. If all three return negative, the honest position will be that
+> the frontier's mechanism remains unidentified after exhausting every
+> region we can name — and the next step would be funding the full kf4/
+> richer-pool/CEGIS program at much larger compute.
