@@ -1157,3 +1157,35 @@ minimum -- the frames CANNOT all survive.
 - No-idx board is a first-class target: round-15 val-only tail, no final
   idx anywhere, and any relaxation the missing writeback enables must be
   re-derived from zero rather than assumed small.
+
+### P5-A RESULT (2026-08-01): 904/889 CANNOT exist at k=11 — the hash frame must break
+
+Budget inversion (`tools/p5a_budget.py`, full k x g grid in strains/p5a):
+
+**k=11 is infeasible at both targets even if serving costs ZERO compute.**
+hash 46,464 + idx floor 6,608 + setup ~600 (+808 with-idx tail) exceeds the
+lane budget at 904 and 889 outright; and load fails independently. At 889,
+free serving still leaves 53,672 > 53,340.
+
+| k (hash ops/round) | 904 | 889 |
+|---|---|---|
+| 11 | infeasible (>=3 simultaneous frame-breaks, two being proved floors) | infeasible even with free serving |
+| 10 | infeasible pure (+10.5cyc, load-binding); FEASIBLE with vload contiguity phi>=0.039 (~9 group-rounds vload-able) | needs phi>=0.066 |
+| **9** | **FEASIBLE inside our regime, g in [191,218], 55.5cyc slack** | **FEASIBLE, g in [192,214], 44.5cyc slack** |
+
+Slack at k=9 covers P3-E's ~13cyc support residual plus 11-15cyc regret, so
+**k=9 plausibly REALIZES both targets, not merely floors them.**
+
+**Serving innovation alone can never rescue k=11** (min k under free-serving
+fantasy = 10). The frontier's gap MUST come from the hash — either a
+shorter per-round form or cross-round fusion (which enters the arithmetic
+as effective k < 11). This concentrates the entire phase on P5-B (find
+k<=10) and P5-C's contiguity question (phi ~ 0.04-0.07 makes k=10
+sufficient).
+
+**No-idx relief for us: exactly 0** (round-15 idx cost already 0; nothing
+in the census targets 2054..2309). The public 15-cycle with/without delta
+is purely the tail OTHERS pay. **With-idx tail for us: +808 lane-ops,
+realized +16** by injection into the captured schedule (tools/p5a_tail.py)
+— our eligible with-idx entry today would be ~1022. Implementation deferred
+per theory-first rule.

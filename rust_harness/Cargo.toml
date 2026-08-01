@@ -45,3 +45,7 @@ path = "src/bin/hybrid.rs"
 [[bin]]
 name = "fusion_search"
 path = "src/bin/fusion_search.rs"
+
+[[bin]]
+name = "global_mitm"
+path = "src/bin/global_mitm.rs"
