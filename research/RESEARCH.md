@@ -1071,3 +1071,89 @@ upper bound in principle, not reachable capacity.
 **Still not done: nobody has read the primary source.** P4-A failed three
 times before fetching anything usable. That remains the phase's open item
 and the only route from inference to observation.
+
+### Phase 4 RESOLVED (2026-08-01): the contradiction was our own paraphrase
+
+The driver fetched the primary source directly (three targeted fetches; the
+scouts' fetch attempts had failed on infra errors). Verbatim findings:
+
+**corsix's actual cost table** (quoted in full in the fetch log):
+level d select-style = `2^(d-1) x ("flow" or "valu") + (2^(d-1)-1) x
+("flow" or 2x "valu")` -- i.e. **exactly our 2^d - 1 law**, split into
+2^(d-1) leaf selects (1 op) and 2^(d-1)-1 interior selects costed at
+"flow or 2x valu". Our T1 theorem (precomputed difference tables) makes
+interiors 1 valu op, i.e. **our cost model is slightly CHEAPER than the
+source's own**.
+
+**">280 gathers can be gainfully replaced"** counts from the PURE-GATHER
+baseline (512 gathered group-rounds). We serve 283. **We already implement
+the source's recommendation, 3 group-rounds past their threshold.** G-23's
+reading of ">280" as "280 beyond ours" was the whole contradiction.
+
+**"7.5:2:1" in the article is the MACHINE's capacity ratio** ("the 7-1/2
+'valu' cells, 2 'load' cells, 2 'store' cells, and finally 1 'flow' cell")
+-- hardware description, not an achieved per-cycle census claim. P4-C's 64%
+measurement audited a claim the source never made (our H-040 summary had
+hardened corsix's framing into a stronger claim than the text supports).
+
+**The article contains NO final cycle count, NO census, NO hash-op
+reduction, NO index-handling details.** Its only performance statement is
+"it was possible to make everything fit into a grid less than 1000 cells
+tall". The 971/994 figures were always leaderboard data, not writeup data.
+
+**VERDICT: contradiction dissolved. G-23 stands. The public frontier's
+methods remain unpublished below ~1,100 cycles.** Phase-4's real yield is
+hygiene: our ledger paraphrases had drifted stronger than the source; the
+routing law survived an adversarial audit and gained a sharper proof
+(lane-uniformity, not permute-absence).
+
+## Phase 5 charter (2026-08-01): MAX EFFORT, both boards, theory-first
+
+**User directive (verbatim goal):** top the leaderboard for BOTH the index
+and no-index benchmarks; autoresearch theoretical/algorithmic optimizations
+and do NOT transition to implementation/layout until there is a theoretical
+basis for matching/beating the best known feasible result; be creative and
+do not assume results found on different regimes still apply; iterate until
+matching the best scores.
+
+**LEADERBOARD REFRESH (fetched 2026-08-01, both boards moved):**
+
+| board | #1 | #2 | #3 | our position |
+|---|---|---|---|---|
+| With Indices (full contract) | **saifalharthi 904** (3 subs) | josusanmartin 940 (41) | jamespayor 958 | 1038 stale entry; current kernel NOT eligible (see below) |
+| Without Indices | **saifalharthi 889** (71 subs) | wouterkool 892 | ogotaiking 908 | 1006 eligible |
+
+New facts: the same person now tops both boards, 904/889, delta 15. They
+ground the no-idx board first (71 submissions) then ported to with-idx in
+only 3 submissions. adrianleb 922 and others new since 7-27. The frontier
+moved 940 -> 904 (with-idx) and 892 -> 889 (no-idx).
+
+**BOOKKEEPING DISCOVERY: our shipped kernel never writes inp.indices back**
+(`inp_indices_p` appears only in a debug map; tests check values only). So
+our 1006 is a WITHOUT-INDICES artifact. The with-indices contract costs us:
+round-15 index computation (currently 0 ops by design) + 32 vstores; public
+paired deltas run 9-23 cycles. **Targets: 889 no-idx (gap -117) and 904
+with-idx (gap ~ -111 after adding writeback).**
+
+**THE STRUCTURAL IMPLICATION.** Phase 3 proved our design space floors at
+944-952. A 904 with-indices entry exists. **Therefore the frontier is
+outside our enumerated design space -- not better-scheduled inside it.**
+Per the user's directive, prior closures are hereby treated as
+REGIME-SCOPED: each was proved under frames (11-op hash, per-walker-
+per-round evaluation, static lane binding, served-levels serving, 32x8
+grouping, level-aligned rounds) that must now be individually escaped, not
+respected. The Phase-3 arithmetic says any sub-911 design must break the
+hash term or the per-round evaluation structure itself; at 904 the budget
+is 54,240 lane-ops and our hash alone is 46,464 + idx floor 6,608 + serving
+minimum -- the frames CANNOT all survive.
+
+**Phase-5 rules:**
+- Theory-first: no mainline implementation until a design's full census
+  clears the target on all engines simultaneously (both boards separately).
+- Every prior graveyard entry is citable but NOT binding if the candidate
+  design breaks the frame the entry was proved under. State the frame.
+- The kf>=3 global hash MITM is now FUNDED (max effort): it is the largest
+  open region and 82.4% of the budget sits on the hash.
+- No-idx board is a first-class target: round-15 val-only tail, no final
+  idx anywhere, and any relaxation the missing writeback enables must be
+  re-derived from zero rather than assumed small.
