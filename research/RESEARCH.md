@@ -1189,3 +1189,54 @@ is purely the tail OTHERS pay. **With-idx tail for us: +808 lane-ops,
 realized +16** by injection into the captured schedule (tools/p5a_tail.py)
 — our eligible with-idx entry today would be ~1022. Implementation deferred
 per theory-first rule.
+
+### P5-C RESULT (2026-08-01): phi is a red herring; serve-more supplies the load
+### relief; k=10 is NOT enough — P5-B needs k=9
+
+**The phi question dissolves.** Natural vload contiguity measures **0.003**
+(vs the 0.039-0.066 needed), and every sort/regroup route is strictly
+dominated: the **rank lemma** (new, N4) shows any dynamic walker regrouping
+needs per-walker ranks = prefix sums ~ 160 vec-eq + 512 stores per bit-pass;
+the sorted-children merge property IS real (0/1400 violations,
+tools/p5c_sort.py) but a 2-run merge still costs a full pass per round.
+Sort-route floor at k=10: 969 vs serve-more's 902. **The load relief a k=10
+design needs (82-112 slots) is available INSIDE the existing space: serve
+11-14 more L4 group-rounds (-8 ld +15 folds each; 29 available; the b3l
+assert capping round-15 serves is relaxable via frame-6 spill).**
+
+**But k=10 still misses.** With serve-more load relief and support priced
+honestly (P3-C coefficients, folds spilling to valu):
+
+| k | no-idx floor (target 889) | with-idx floor (target 904) |
+|---|---|---|
+| 10 | 902 (miss by 13) | 918 (miss by 14) |
+| **9** | **859 (clears by 30)** | **875 (clears by 29)** |
+
+**Reconciliation with P5-A's k=10 row** (which said phi>=0.039 suffices):
+P5-A idealized serving support to zero; P5-C priced it. The models differ
+exactly at the frame boundary — per the Phase-3 convergence rule, the
+conservative merged statement stands: **k=10 is feasible only with ~170
+vec-ops of support trim that no one has identified (ring is load-blocked;
+respelling ~30-60; setup ~13). k=9 clears both targets robustly under BOTH
+models, with margin that covers regret.** Corroboration: the model's
+with-idx writeback delta at k=10 is 16; the frontier's observed 904-889
+delta is 15.
+
+Frames closed: sorting (rank lemma), speculation (select-count identity:
+2^(d+1)-1, second hash +11 vec/gr), grouping/epoch/packing (i.i.d. +
+symmetric walk + parity-set wash). New primitives recorded: **N1 uniform
+cross-lane shift = 1 vstore + 1 vload** (the ledger's 8st+1vld price is for
+ARBITRARY permutes; uniform shifts are 4x cheaper — filed for future use),
+N2 alu as compile-time lane-crossing engine, N3 data-dependent branching is
+legal on this ISA (cond_jump) but costed dead.
+
+**TOP-2 target designs (if k=9 exists):** D1 with-idx = k=9 + serve-more x18
++ lean writeback: floor 875 at C=904 (52,230/54,240 lanes, 1,746/1,808 ld).
+D2 no-idx = k=9 + serve-more x22: floor 859 at C=889. Both pass with
+realized margin.
+
+> **Phase-5 status: everything now hangs on P5-B. The question "does a 9-op
+> round body (or equivalent cross-round fusion, effective k<=9.5 per round)
+> exist?" is the whole game for both boards.** Fallback if only k=10 exists:
+> the ~170-vec support-trim hunt becomes decisive (queued as contingent,
+> not spawned).
