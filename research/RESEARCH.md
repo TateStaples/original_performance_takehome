@@ -999,3 +999,75 @@ Specifically open for challenge:
   enumeration, not by re-argument.
 - Reading the primary source is preferred over inferring from it. We have
   decoded their diagrams once; do it again for the census.
+
+### Phase 4 interim (2026-07-30): three results, harvested from tools after all
+### three scouts died to repeated API/connection errors
+
+All three P4 scouts failed mid-turn (P4-A three times, P4-B and P4-C once
+each) with `Connection closed mid-response`. None wrote a STATE file, but
+P4-B and P4-C had already written their TOOLS to disk, so the driver ran
+them directly. The results below are the driver's own runs of those tools.
+
+**1. The 994 coincidence DISSOLVES (`tools/p4b_994.py`).** The max-floor
+distribution is dense near every published score, so a numeric match is
+worthless as evidence:
+
+| score | designs within +/-0.5 | within +/-2 |
+|---|---|---|
+| 958 | 0 | 0 |
+| 971 | 1 | 4 |
+| 981 | 1 | 4 |
+| 994 | **3** | 7 |
+| 1002 | **6** | 13 |
+
+Three different designs land within half a cycle of 994 (`L1L2L3+L4x15`,
+`L1L2L3+L5x17`, `L1L2L4+L3x15`). And the tell: **our own shipped shape
+models at 970.8, which matches corsix's 971 just as well.** Both matches are
+noise. Note also the L5x17 design needs 1,789 scratch words and **no
+L5-serving design fits at K=32 at all**.
+
+**2. The `2^d - 1` cost law SURVIVES -- for a sharper reason than we had
+(`tools/p4b_width.py`).** The per-lane reachable set really is far narrower
+than `2^d`: using the group's position one level up, the candidate width is
+**at most 16 at EVERY level** (at d=10 that is 16 against 2^10 = 1024;
+mean 15.89). And descendant sets are contiguous in memory -- the depth-k
+descendants of node v are exactly `[2^k*v + 2^k - 1, 2^k*v + 2^(k+1) - 2]`,
+so k=3 descendants are one vload each.
+
+**But the narrowing is never LANE-UNIFORM.** Measured "all 8 lanes share an
+ancestor": **0 of 256 group-rounds** at every level >= 3 for every k in
+{1,2,3}. A tournament reads broadcast table vectors, so it needs a candidate
+set common to ALL EIGHT LANES -- and the only lane-common set at level d is
+the whole level. That is why `2^d` is forced. **This is a better statement
+of the routing theorem than "no permute": the width is set by lane-
+uniformity, not by the absence of a shuffle.** (Also recorded: walkers are
+i.i.d. so any static lane->walker assignment gives the same distribution,
+and the data is unseeded, so the instruction stream cannot depend on it.)
+
+**3. G-23 AUDIT: one leg sound, one leg overstated.**
+
+*Sound -- the L4 sweep is NOT a spelling artifact* (`tools/p4c_retune.py`).
+The worry was P3-D's dual_fold defect: a plan tuned at one `l4_gmin` and
+reused across the sweep. Re-tuning at each point measures friction of only
+**1-2 cycles, flat across points**: (9,30) 1038->1037, (6,31) 1049->1047,
+(6,39) 1053->1051. Inter-point gaps are 14+ cycles, so the ordering is
+preserved and G-23's negativity is a census fact. **Audit clean.**
+
+*Overstated -- "we already run his balance" is 64%, not "already"*
+(`tools/p4c_ratio.py`). corsix states 7.5:2:1 per INDIVIDUAL cycle; we read
+it as a steady-state average. Measured per-cycle:
+- exactly 7.5:2:1: **666 cycles (64.2%)**
+- compute full: 939 (90.5%)
+- **compute-full but NOT at the ratio: 273 cycles (26.3%)**
+- **idle-flow AND compute-full: 205 cycles** -- each one vec-op of binder
+  relief available in principle (~27 cycles total)
+Flow sits at 76.8% utilization with 197 idle slots inside the steady window.
+So G-23's first leg is weaker than recorded. **Caveat that keeps it from
+being a lever: F-17 already measured this exact class -- a flow-maximized
+stream with floor 990 whose realized schedule is 1104, the 33-cycle gap
+being select-readiness x flow-bubble anti-correlation.** The 205 is an
+upper bound in principle, not reachable capacity.
+
+**Still not done: nobody has read the primary source.** P4-A failed three
+times before fetching anything usable. That remains the phase's open item
+and the only route from inference to observation.
