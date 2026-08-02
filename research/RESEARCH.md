@@ -1931,3 +1931,20 @@ NEGATIVE — do not touch l4_gmin's epoch split), the b3l assert must stay.
 Prediction on record: if the models hold, realized lands 960-975. If it
 does not, the miss itself is data — the models were twice corrected only
 by measurement.
+
+### Harvest (2026-08-02 midday): the 11-op round-body probe returns a strong
+### negative; t1 "finds" resolved as the real form; grinds continue
+
+- **Wave-3 (t2 at find-threshold 11): 16 of 20 restart seeds independently
+  climbed to the REAL 12-op round-body form (err=0), and NONE produced an
+  11-op battery-perfect candidate.** With from-scratch reach at par now
+  demonstrated 16 times over, this is the strongest stochastic evidence
+  yet that no 11-op round body exists in reachable space (still not
+  proof).
+- The wave-2 t1 `finds=1` anomaly is RESOLVED from source: `finds` counts
+  any validated battery-perfect program under the running size bar;
+  max-ops only gates slice-stop. The six finds are the real 11-op hash
+  rediscovering itself (best_cost 4.4). Deterministic rerun confirms.
+- Grinds: sandwich9 228 refuted / 68 open (survivor grind continuing);
+  templates 9,282 distinct combos UNSAT, 0 SAT (escalation continuing);
+  fleet tier 3 at 37/48 slices, all negative.
