@@ -1110,3 +1110,7 @@ CHECKPOINT pair=(18,26) verdict=REFUTED rung=k8 iter=0 solve=13.8s total=13.8s r
 CHECKPOINT pair=(19,25) verdict=OPEN rung=k8 iter=0 timeout=600s reason=timeout rt=600s
 CHECKPOINT pair=(20,24) verdict=OPEN rung=k8 iter=0 timeout=600s reason=timeout rt=600s
 CHECKPOINT pair=(21,23) verdict=OPEN rung=k8 iter=0 timeout=600s reason=timeout rt=600s
+CHECKPOINT pair=(22,22) verdict=OPEN rung=k8 iter=0 timeout=600s reason=timeout rt=600s
+CHECKPOINT pair=(23,11) verdict=OPEN rung=k8 iter=0 timeout=600s reason=timeout rt=600s
+CHECKPOINT pair=(23,21) verdict=OPEN rung=k8 iter=0 timeout=600s reason=timeout rt=600s
+CHECKPOINT pair=(24,12) verdict=OPEN rung=k8 iter=0 timeout=600s reason=timeout rt=600s

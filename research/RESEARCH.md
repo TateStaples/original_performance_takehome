@@ -1901,3 +1901,33 @@ a strategic fork that belongs to the user (decision requested):
     buckets, grinds);
 (c) massive-compute push (63 CPU-days decidable residual + scaled STOKE);
 (d) community outreach (operator/frontier — needs consent).
+
+## Phase 7 charter (2026-08-02): IMPLEMENTATION — user decision
+
+**User decision (AskUserQuestion): implement the best sound design; the
+theory-first gate is lifted. Background theory continues (STOKE waves,
+grinds, remaining theorem buckets).**
+
+Target design (the C1*-class stack, floor 944-952, predicted realized
+~965-970; every component individually measured or proved in P3/P5):
+1. **T2-partial** (P3-A/P3-E): retained-parity serving at the measured
+   62.5% ring-coverage cap (40/64 group-epochs; packed-accumulator
+   fallback for the rest). The single largest lever (-2,072 lane-ops at
+   full coverage; ~-1,300 at 62.5%).
+2. **T1** (P3-A): precomputed difference tables — no runtime subtracts in
+   tournament interiors (removes race_sel sub+madds, ~-160 lane-ops).
+3. **T3**: setup add_imm -> alu via the +32-chain trick (+20 flow slots,
+   priced 24 lane-ops).
+4. **Serve-profile re-optimization** at the new op-mix via
+   tools/p3c_design_cost.py (the optimum shifts once T2 lands).
+5. **Plan re-mining**: emission order, fold spelling, and ring plans are
+   order- and gmin-specific (F-29/H-049 lessons) — re-mine from empty at
+   each accepted step.
+6. **With-idx tail variant** (lean 192-vec form) for board eligibility.
+
+Known risks (from our own graveyard): G-36 (planned partitions lose to
+the retire race — keep the adaptive races), G-38 (round-15 serving is
+NEGATIVE — do not touch l4_gmin's epoch split), the b3l assert must stay.
+Prediction on record: if the models hold, realized lands 960-975. If it
+does not, the miss itself is data — the models were twice corrected only
+by measurement.
