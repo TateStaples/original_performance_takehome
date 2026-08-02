@@ -2006,3 +2006,16 @@ builder wrongly claimed its first ledger append had not landed; the
 builder verified the disk state, declined the restart (avoiding a
 double-append), and recorded the discrepancy. Correct behavior on its
 side; driver error on timing inference from a kill notification.
+
+### Iteration (2026-08-02 evening): t3 campaign — the least-searched region
+
+Status: fleet tier 3 at 42/48 (all negative); sandwich9 at 230 refuted;
+template escalation continuing; wave-3 complete (16/20 seeds reached the
+real round-body form, none at 11).
+
+**New front: the 2-round composite (t3) received exactly ONE token STOKE
+slice (529M proposals) in all of Phase 5 — the least-searched reachable
+region, with the LARGEST non-decomposable space** (P5-L2's refutation
+covered decomposable mechanisms only). A 16-seed transformation campaign
+at find-threshold 23 is now grinding (any compression of the ~24-op
+composite = ~17-34 cycles of floor).
