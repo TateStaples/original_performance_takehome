@@ -1639,3 +1639,26 @@ accounting argument.
 prefixes x 2.118B chain nodes). The entire enumerable increment of the
 fan-out space is closed. Tier 3 launched: round12 --join-r y g=xor (the
 nv-fanout hole, 48 slices, 1-concurrent behind the template grind).
+
+### P5-I2 RESULT (2026-08-02): sandwich9 754/961 refuted exactly, 0 found,
+### 207 survivors — and a theorem that may mass-filter the whole queue
+
+- **New top-bit differential-count theorem (proved + sharp numeric guard,
+  0 violations in 528 trials):** for s1+s2 >= 32, the count
+  N = #{x : out_0(x ^ 2^31) != out_0(x)} is ≡ 0 mod 2^(33-s2) for EVERY
+  constant choice. Computed N_myhash = 2^18 * 8289 (full-domain sweep) =>
+  **all s2 <= 14 pairs refuted at once** (68 kills, no solver).
+- **Mirror theorem** (on the inverse): valid but vacuous for this shape —
+  recorded so nobody re-derives it.
+- **v2 width-truncated encoder** (sound, selftested both directions):
+  2.8-8.6x faster; 35 more pairs closed.
+- **The z3 wall is real**: survivors sit at 560s+/pair; battery size,
+  rung choice, and specialized batteries all fail to move it. 207 open
+  pairs, one contiguous block, all s2 >= 15.
+- Driver launched the 600s/pair escalation grind over the survivors
+  (~11.5h). **P5-I3 dispatched (opus)** on the two highest-leverage
+  follow-ups: the unpushed n_1-realizability arithmetic (may kill pairs
+  solver-free) and the tier-wide mass-filter application of the theorem
+  to the entire p5k queue (every queue shape has >=2 shrs, so the
+  divisibility argument may transfer — with the transfer conditions to be
+  proved, not assumed).

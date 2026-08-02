@@ -956,3 +956,40 @@ COMBO t5 s1=30 s2=23 verdict=UNSAT [iter=0 solve=2.3s] time=2.3s
 COMBO t5 s1=30 s2=24 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
 COMBO t5 s1=30 s2=25 verdict=UNSAT [iter=0 solve=1.4s] time=1.4s
 COMBO t5 s1=30 s2=26 verdict=UNSAT [iter=0 solve=3.1s] time=3.1s
+COMBO t5 s1=30 s2=27 verdict=UNSAT [iter=0 solve=2.9s] time=2.9s
+COMBO t5 s1=30 s2=28 verdict=UNSAT [iter=0 solve=2.9s] time=2.9s
+COMBO t5 s1=30 s2=29 verdict=UNSAT [iter=0 solve=1.7s] time=1.7s
+COMBO t5 s1=30 s2=30 verdict=UNSAT [iter=0 solve=1.7s] time=1.7s
+COMBO t5 s1=30 s2=31 verdict=UNSAT [iter=0 solve=2.0s] time=2.0s
+COMBO t5 s1=31 s2=1 verdict=UNSAT [iter=0 solve=2.9s] time=2.9s
+COMBO t5 s1=31 s2=2 verdict=UNSAT [iter=0 solve=5.7s] time=5.7s
+COMBO t5 s1=31 s2=3 verdict=UNSAT [iter=0 solve=5.8s] time=5.9s
+COMBO t5 s1=31 s2=4 verdict=UNSAT [iter=0 solve=7.5s] time=7.5s
+COMBO t5 s1=31 s2=5 verdict=TIMEOUT [iter=0 solve=12.2s reason=timeout] time=12.2s
+COMBO t5 s1=31 s2=6 verdict=UNSAT [iter=0 solve=8.1s] time=8.1s
+COMBO t5 s1=31 s2=7 verdict=UNSAT [iter=0 solve=6.9s] time=7.0s
+COMBO t5 s1=31 s2=8 verdict=UNSAT [iter=0 solve=7.3s] time=7.3s
+COMBO t5 s1=31 s2=9 verdict=UNSAT [iter=0 solve=8.7s] time=8.7s
+COMBO t5 s1=31 s2=10 verdict=UNSAT [iter=0 solve=8.4s] time=8.4s
+COMBO t5 s1=31 s2=11 verdict=UNSAT [iter=0 solve=5.2s] time=5.2s
+COMBO t5 s1=31 s2=12 verdict=UNSAT [iter=0 solve=6.1s] time=6.2s
+COMBO t5 s1=31 s2=13 verdict=UNSAT [iter=0 solve=5.4s] time=5.4s
+COMBO t5 s1=31 s2=14 verdict=UNSAT [iter=0 solve=7.4s] time=7.4s
+COMBO t5 s1=31 s2=15 verdict=UNSAT [iter=0 solve=4.8s] time=4.8s
+COMBO t5 s1=31 s2=16 verdict=UNSAT [iter=0 solve=2.7s] time=2.7s
+COMBO t5 s1=31 s2=17 verdict=UNSAT [iter=0 solve=4.6s] time=4.6s
+COMBO t5 s1=31 s2=18 verdict=UNSAT [iter=0 solve=4.8s] time=4.8s
+COMBO t5 s1=31 s2=19 verdict=UNSAT [iter=0 solve=5.7s] time=5.7s
+COMBO t5 s1=31 s2=20 verdict=UNSAT [iter=0 solve=5.0s] time=5.1s
+COMBO t5 s1=31 s2=21 verdict=UNSAT [iter=0 solve=4.6s] time=4.6s
+COMBO t5 s1=31 s2=22 verdict=UNSAT [iter=0 solve=8.2s] time=8.2s
+COMBO t5 s1=31 s2=23 verdict=UNSAT [iter=0 solve=4.8s] time=4.8s
+COMBO t5 s1=31 s2=24 verdict=UNSAT [iter=0 solve=5.5s] time=5.6s
+COMBO t5 s1=31 s2=25 verdict=UNSAT [iter=0 solve=4.6s] time=4.6s
+COMBO t5 s1=31 s2=26 verdict=UNSAT [iter=0 solve=7.9s] time=7.9s
+COMBO t5 s1=31 s2=27 verdict=UNSAT [iter=0 solve=8.7s] time=8.7s
+COMBO t5 s1=31 s2=28 verdict=UNSAT [iter=0 solve=6.0s] time=6.0s
+COMBO t5 s1=31 s2=29 verdict=TIMEOUT [iter=0 solve=12.2s reason=timeout] time=12.2s
+COMBO t5 s1=31 s2=30 verdict=UNSAT [iter=0 solve=4.1s] time=4.1s
+COMBO t5 s1=31 s2=31 verdict=UNSAT [iter=0 solve=2.7s] time=2.7s
+SPLIT-SUMMARY t5 pair=[2, 9] s1=[21,32) s2=[1,32) oddK=[0, 6] status=OPEN(29) wall=1495s

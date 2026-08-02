@@ -624,3 +624,266 @@ CHECKPOINT2 pair=(24,23) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=tim
 CHECKPOINT2 pair=(25,22) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
 CHECKPOINT2 pair=(26,21) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
 CHECKPOINT2 pair=(27,20) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(28,19) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(29,18) verdict=REFUTED rung=k8 iter=0 n=34 solve=7.4s total=7.5s rt=15s
+CHECKPOINT2 pair=(30,15) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(30,17) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(9,23) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(10,24) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(11,25) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(12,26) verdict=REFUTED rung=k8 iter=0 n=34 solve=3.4s total=3.4s rt=15s
+CHECKPOINT2 pair=(21,25) verdict=REFUTED rung=k8 iter=0 n=34 solve=6.5s total=6.5s rt=15s
+CHECKPOINT2 pair=(22,24) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(23,23) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(24,22) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(25,21) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(26,20) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(27,19) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(28,18) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(29,15) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(29,17) verdict=REFUTED rung=k8 iter=0 n=34 solve=7.7s total=7.8s rt=15s
+CHECKPOINT2 pair=(30,16) verdict=REFUTED rung=k8 iter=0 n=34 solve=11.6s total=11.7s rt=15s
+CHECKPOINT2 pair=(10,23) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(11,24) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(12,25) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(13,26) verdict=REFUTED rung=k8 iter=0 n=34 solve=3.8s total=3.8s rt=15s
+CHECKPOINT2 pair=(14,27) verdict=REFUTED rung=k8 iter=0 n=34 solve=3.0s total=3.0s rt=15s
+CHECKPOINT2 pair=(15,28) verdict=REFUTED rung=k8 iter=0 n=34 solve=1.8s total=1.8s rt=15s
+CHECKPOINT2 pair=(16,29) verdict=REFUTED rung=k8 iter=0 n=34 solve=1.6s total=1.6s rt=15s
+CHECKPOINT2 pair=(17,28) verdict=REFUTED rung=k8 iter=0 n=34 solve=2.8s total=2.8s rt=15s
+CHECKPOINT2 pair=(18,27) verdict=REFUTED rung=k8 iter=0 n=34 solve=3.0s total=3.1s rt=15s
+CHECKPOINT2 pair=(19,26) verdict=REFUTED rung=k8 iter=0 n=34 solve=3.7s total=3.7s rt=15s
+CHECKPOINT2 pair=(20,25) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(21,24) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(22,23) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(23,22) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(24,21) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(25,20) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(26,19) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(27,18) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(28,15) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(28,17) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(29,16) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(10,22) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(11,23) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(12,24) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(13,25) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(14,26) verdict=REFUTED rung=k8 iter=0 n=34 solve=3.7s total=3.7s rt=15s
+CHECKPOINT2 pair=(15,27) verdict=REFUTED rung=k8 iter=0 n=34 solve=3.1s total=3.1s rt=15s
+CHECKPOINT2 pair=(16,28) verdict=REFUTED rung=k8 iter=0 n=34 solve=1.6s total=1.7s rt=15s
+CHECKPOINT2 pair=(17,27) verdict=REFUTED rung=k8 iter=0 n=34 solve=3.0s total=3.0s rt=15s
+CHECKPOINT2 pair=(18,26) verdict=REFUTED rung=k8 iter=0 n=34 solve=3.9s total=3.9s rt=15s
+CHECKPOINT2 pair=(19,25) verdict=REFUTED rung=k8 iter=0 n=34 solve=7.4s total=7.4s rt=15s
+CHECKPOINT2 pair=(20,24) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(21,23) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(22,22) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(23,21) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(24,20) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(25,19) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(26,18) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(27,15) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(27,17) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(28,16) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(11,22) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(12,23) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(13,24) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(14,25) verdict=REFUTED rung=k8 iter=0 n=34 solve=6.2s total=6.2s rt=15s
+CHECKPOINT2 pair=(15,26) verdict=REFUTED rung=k8 iter=0 n=34 solve=3.7s total=3.7s rt=15s
+CHECKPOINT2 pair=(16,27) verdict=REFUTED rung=k8 iter=0 n=34 solve=3.0s total=3.0s rt=15s
+CHECKPOINT2 pair=(17,26) verdict=REFUTED rung=k8 iter=0 n=34 solve=3.6s total=3.6s rt=15s
+CHECKPOINT2 pair=(18,25) verdict=REFUTED rung=k8 iter=0 n=34 solve=6.9s total=6.9s rt=15s
+CHECKPOINT2 pair=(19,24) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(20,23) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(21,22) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(22,21) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(23,20) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(24,19) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(25,18) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(26,15) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(26,17) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(27,16) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(11,21) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(12,22) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(13,23) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(14,24) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(15,25) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(16,26) verdict=REFUTED rung=k8 iter=0 n=34 solve=3.6s total=3.6s rt=15s
+CHECKPOINT2 pair=(17,25) verdict=REFUTED rung=k8 iter=0 n=34 solve=6.2s total=6.3s rt=15s
+CHECKPOINT2 pair=(18,24) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(19,23) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(20,22) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(21,21) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(22,20) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(23,19) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(24,18) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(25,15) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(25,17) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(26,16) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(12,21) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(13,22) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(14,23) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(15,24) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(16,25) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(17,24) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(18,23) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(19,22) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(20,21) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(21,20) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(22,19) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(23,18) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(24,15) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(24,17) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(25,16) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(12,20) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(13,21) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(14,22) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(15,23) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(16,24) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(17,23) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(18,22) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(19,21) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(20,20) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(21,19) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(22,18) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(23,15) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(23,17) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(24,16) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(13,20) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(14,21) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(15,22) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(16,23) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(17,22) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(18,21) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(19,20) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(20,19) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(21,18) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(22,15) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(22,17) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(23,16) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(13,19) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(14,20) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(15,21) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(16,22) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(17,21) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(18,20) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(19,19) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(20,18) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(21,15) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(21,17) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(22,16) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(14,19) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(15,20) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(16,21) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(17,20) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(18,19) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(19,18) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(20,15) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(20,17) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(21,16) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(14,18) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(15,19) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(16,20) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(17,19) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(18,18) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(19,15) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(19,17) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(20,16) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(15,18) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(16,19) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(17,18) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(18,15) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(18,17) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(19,16) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(15,17) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(16,18) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(17,15) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(17,17) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(18,16) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(16,17) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(17,16) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(16,16) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(30,29) verdict=REFUTED rung=k8 iter=0 n=34 solve=53.0s total=53.0s rt=150s
+CHECKPOINT2 pair=(29,29) verdict=REFUTED rung=k8 iter=0 n=34 solve=69.9s total=70.0s rt=150s
+CHECKPOINT2 pair=(30,28) verdict=OPEN rung=k8 iter=0 n=34 timeout=150s reason=timeout rt=150s
+CHECKPOINT2 pair=(29,28) verdict=OPEN rung=k8 iter=0 n=34 timeout=150s reason=timeout rt=150s
+CHECKPOINT2 pair=(30,27) verdict=OPEN rung=k8 iter=0 n=34 timeout=150s reason=timeout rt=150s
+CHECKPOINT2 pair=(30,28) verdict=OPEN rung=k8 iter=0 n=34 timeout=150s reason=timeout rt=150s
+CHECKPOINT2 pair=(29,28) verdict=OPEN rung=k8 iter=0 n=34 timeout=150s reason=timeout rt=150s
+CHECKPOINT2 pair=(30,27) verdict=OPEN rung=k8 iter=0 n=34 timeout=150s reason=timeout rt=150s
+CHECKPOINT2 pair=(28,28) verdict=OPEN rung=k8 iter=0 n=34 timeout=150s reason=timeout rt=150s
+CHECKPOINT2 pair=(29,27) verdict=OPEN rung=k8 iter=0 n=34 timeout=150s reason=timeout rt=150s
+CHECKPOINT2 pair=(27,28) verdict=OPEN rung=k8 iter=0 n=34 timeout=150s reason=timeout rt=150s
+CHECKPOINT2 pair=(28,27) verdict=OPEN rung=k8 iter=0 n=34 timeout=90s reason=timeout rt=90s
+CHECKPOINT2 pair=(29,26) verdict=OPEN rung=k8 iter=0 n=34 timeout=90s reason=timeout rt=90s
+CHECKPOINT2 pair=(27,27) verdict=OPEN rung=k8 iter=0 n=34 timeout=90s reason=timeout rt=90s
+CHECKPOINT2 pair=(28,26) verdict=OPEN rung=k8 iter=0 n=34 timeout=90s reason=timeout rt=90s
+CHECKPOINT2 pair=(26,27) verdict=OPEN rung=k8 iter=0 n=34 timeout=90s reason=timeout rt=90s
+CHECKPOINT2 pair=(27,26) verdict=OPEN rung=k8 iter=0 n=34 timeout=90s reason=timeout rt=90s
+CHECKPOINT2 pair=(28,25) verdict=REFUTED rung=k8 iter=0 n=34 solve=63.5s total=63.5s rt=90s
+CHECKPOINT2 pair=(30,23) verdict=OPEN rung=k8 iter=0 n=34 timeout=90s reason=timeout rt=90s
+CHECKPOINT2 pair=(26,26) verdict=OPEN rung=k8 iter=0 n=34 timeout=90s reason=timeout rt=90s
+CHECKPOINT2 pair=(27,25) verdict=OPEN rung=k8 iter=0 n=34 timeout=90s reason=timeout rt=90s
+CHECKPOINT2 pair=(28,24) verdict=OPEN rung=k8 iter=0 n=34 timeout=90s reason=timeout rt=90s
+CHECKPOINT2 pair=(29,23) verdict=OPEN rung=k8 iter=0 n=34 timeout=90s reason=timeout rt=90s
+CHECKPOINT2 pair=(30,22) verdict=OPEN rung=k8 iter=0 n=34 timeout=90s reason=timeout rt=90s
+CHECKPOINT2 pair=(24,24) verdict=OPEN rung=k8 iter=0 n=34 timeout=560s reason=timeout rt=560s
+CHECKPOINT2 pair=(28,26) verdict=OPEN rung=k8 iter=0 n=34 timeout=560s reason=timeout rt=560s
+
+## 11. P5-I2 CLOSING LEDGER — 754/961 refuted, 207 open, 0 found
+
+    theory secs. 1-3 (window / row-31 / row-32 / (31,1) / (18,14))   479
+    z3 per-pair UNSAT (v1 encoder 172 + v2 encoder 35)               207
+    sec. 9 differential-count theorem, s2 <= 14 (new-only)             68
+    STILL OPEN                                                       207
+                                                                    ----
+                                                                     961
+NOT A SINGLE `FOUND` ANYWHERE. Every pair that has been decided at all
+was decided REFUTED. The whole s1=31 row and the whole s2=31 column are
+closed. The 207 survivors form one contiguous block:
+
+  s1= 8: 24,25              s1=17..19: 15..24
+  s1= 9: 23..25             s1=20: 15..25      s1=21,22: 15..24
+  s1=10: 22..25             s1=23,24: 15..25   s1=25: 15..26
+  s1=11: 21..25             s1=26: 15..27      s1=27: 15..28
+  s1=12: 20..25             s1=28: 15..24,26,27,28
+  s1=13: 19..25             s1=29: 15,16,19..23,26,27,28
+  s1=14: 18..24             s1=30: 15,17,19..23,27,28
+  s1=15: 17..25             s1=16: 16..25
+EVERY survivor has s2 >= 15 -- i.e. the open set is exactly what the
+sec. 9 theorem could not reach (it needs 33-s2 > v2(N_myhash) = 18).
+
+Z3 WALL, MEASURED (v2 encoder, k=8 rung, 34-sample battery):
+    rt=15s  over 226 pairs -> 32 closed (14%)
+    rt=90s  over  13 pairs ->  1 closed ( 8%)
+    rt=150s over  11 pairs ->  2 closed (18%, at 53.0s and 69.9s)
+    rt=560s on (24,24) and (28,26) -> both still OPEN
+So the tail is real but thin: escalation converts a few percent per decade
+of budget and does NOT collapse the block. Things that were tried and did
+NOT move the wall: 82- and 178-sample batteries; rungs k=1,2,4 with
+200-1200 samples; a battery made purely of top-bit differential pairs
+(x, x^2^31) x 24 -- all still `unknown` at 60-100s on (16,16)/(20,20)/
+(24,24)/(25,25)/(28,26).
+
+RESUME PROTOCOL
+  python3 tools/p5i_sweep2.py --rung-timeout T --wall-budget W \
+                              [--redo-v2-open]
+  Re-reads this file. Skips (a) anything REFUTED/FOUND in either ledger,
+  (b) anything killed by sec. 9 (tools/p5i_sweep2.py:theorem_killed), and
+  (c) any pair that already survived a rung timeout >= T. Order is
+  `shell` = min(s1,32-s1)+min(s2,32-s2) ascending (easiest first).
+  One CHECKPOINT2 line appended per attempt; crash-safe.
+
+WHAT WOULD ACTUALLY CLOSE THE BLOCK (in order of expected value)
+  1. A second differential-count statistic whose modulus is keyed to
+     something other than the observed output bit's shift. Everything
+     derived here keys on the LAST sigma's shift (forward: s2; inverse:
+     s1), and both are exhausted: forward reaches s2 <= 14, inverse would
+     reach s1 <= 15 but is only VALID for s1 >= 16 (sec. 10).
+  2. Note the reachable-value refinement of sec. 9 that was NOT pushed:
+     N determines (q, n_1) almost uniquely (n_1 = N/2^(33-s2) mod 2^u,
+     q-1 = (Ntilde-n_1)/2^(u-1)), and n_1 must be realizable as
+     #{c_lo<2^u : bit_u(K2*c_lo+C2)=1} by a K2 with K2 mod 2^t = q. Spot
+     checks at (16,16) found it realizable (K2=1, C2=16578), but the
+     realizability question was not settled in general -- if some pair's
+     required n_1 is unreachable, that pair dies with no solver at all.
+  3. Brute compute: ~207 pairs x >=10 min each with the v2 encoder.

@@ -32,6 +32,13 @@ def scope():
     return out
 
 
+def theorem_killed(p):
+    """sec. 9 top-bit differential-count theorem: v2(N_myhash) = 18, so any
+    pair with 1<=s1<=30, 1<=s2<=30, s1+s2>=32 and 33-s2 > 18 is REFUTED."""
+    s1, s2 = p
+    return 1 <= s1 <= 30 and 1 <= s2 <= 30 and s1 + s2 >= 32 and s2 <= 14
+
+
 def ledger():
     """(closed, v2_attempted) -- closed = REFUTED/FOUND by either encoder."""
     closed, v2 = set(), {}
@@ -42,7 +49,9 @@ def ledger():
             if m.group(3) in ("REFUTED", "FOUND"):
                 closed.add(p)
             if line.startswith("CHECKPOINT2"):
-                v2[p] = m.group(3)
+                r = re.search(r"rt=(\d+)s", line)
+                # remember the LARGEST rung timeout this pair has survived
+                v2[p] = max(v2.get(p, 0), int(r.group(1)) if r else 0)
     return closed, v2
 
 
@@ -56,8 +65,11 @@ def main():
     a = ap.parse_args()
 
     closed, v2 = ledger()
-    todo = [p for p in scope() if p not in closed
-            and (a.redo_v2_open or p not in v2)]
+    # skip a pair that already survived a rung timeout >= the one we are
+    # about to spend (re-running it would reproduce the same OPEN line)
+    todo = [p for p in scope() if p not in closed and not theorem_killed(p)
+            and (a.redo_v2_open or p not in v2)
+            and v2.get(p, 0) < a.rung_timeout]
     key = lambda p: (min(p[0], 32 - p[0]) + min(p[1], 32 - p[1]), p)  # noqa: E731
     todo.sort(key=key, reverse=(a.order == "revshell"))
 

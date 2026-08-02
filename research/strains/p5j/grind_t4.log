@@ -996,3 +996,24 @@ COMBO t4 s1=31 s2=8 verdict=TIMEOUT [iter=0 solve=12.2s reason=timeout] time=12.
 COMBO t4 s1=31 s2=9 verdict=TIMEOUT [iter=0 solve=13.0s reason=timeout] time=13.0s
 COMBO t4 s1=31 s2=10 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
 COMBO t4 s1=31 s2=11 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=31 s2=12 verdict=TIMEOUT [iter=0 solve=12.7s reason=timeout] time=12.7s
+COMBO t4 s1=31 s2=13 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=31 s2=14 verdict=UNSAT [iter=0 solve=7.8s] time=7.8s
+COMBO t4 s1=31 s2=15 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=31 s2=16 verdict=UNSAT [iter=0 solve=3.1s] time=3.1s
+COMBO t4 s1=31 s2=17 verdict=UNSAT [iter=0 solve=2.9s] time=2.9s
+COMBO t4 s1=31 s2=18 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=31 s2=19 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=31 s2=20 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=31 s2=21 verdict=TIMEOUT [iter=0 solve=12.9s reason=timeout] time=12.9s
+COMBO t4 s1=31 s2=22 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=31 s2=23 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=31 s2=24 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=31 s2=25 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=31 s2=26 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=31 s2=27 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=31 s2=28 verdict=UNSAT [iter=0 solve=1.4s] time=1.5s
+COMBO t4 s1=31 s2=29 verdict=UNSAT [iter=0 solve=2.9s] time=2.9s
+COMBO t4 s1=31 s2=30 verdict=UNSAT [iter=0 solve=2.6s] time=2.6s
+COMBO t4 s1=31 s2=31 verdict=UNSAT [iter=0 solve=1.4s] time=1.4s
+SPLIT-SUMMARY t4 pair=[2, 7] s1=[21,32) s2=[1,32) oddK=[0] status=OPEN(139) wall=2095s
