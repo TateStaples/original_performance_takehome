@@ -3,6 +3,10 @@
 status: FINAL (2026-08-02) — **<=19 composite REFUTED by arithmetic within
 the complete named-mechanism space; the 2-round route reduces exactly to
 the single-round <=9 question (no independent composite magic exists).**
+UPDATE (P5-L2, 2026-08-02): the last OPEN item, the dir1 commutation z3
+query, is now CLOSED **UNSAT** analytically (sec 3.6, tools/p5l_dir1.py).
+Mechanism (c) drops from "<=1 speculative" to **0 proven**. The refutation
+no longer has any quantitative slack to spend.
 brief: decide by THEORY whether myhash(myhash(x^y1)^y2) has a <=19-op form
 (24 naive = 2 fold-ins + 2x11). P5-D closed the LOCAL boundary route
 (span7->5 all 10 deletion templates UNSAT); this strain does the GLOBAL
@@ -24,15 +28,21 @@ Target <=19 => must save >=5.
 |---|---|---|---|---|
 | a | mask absorption into fold-ins (c5_prexor) | 2 (amortized) | node-table transform free; ALREADY BANKED in census (hash(k)=512k+176 nets 336 elisions) | CLOSED (banked, not new) |
 | b | sigma-sigma layer merge | 0 | no adjacent sigma pair exists (every pair madd-separated); even if adjacency were forced: L19*L16 = I^S16^S19 costs exactly 4 ops = 2+2 separate (support lemma + z3 merge3 1509/1 UNSAT/analytic); mask-merge 1 op is the SAME op banked in (a) | CLOSED (sec 3.1, 3.4) |
-| c | madd<->sigma commutation (enabler for b,f) | 0 direct; <=1 speculative via dir1 | z3 quadruple-criterion queries over ALL affine B, all odd K'', all consts: dir2 (4097,19) UNSAT 2.6s; dir2 (9,16) UNSAT 4.5s; dir1 (4097,16) and dir1 (33,19) TIMEOUT=OPEN. Even granting dir1 SAT: only enables madd4*madd'' fusion worth 1 op, and the runtime y2 fold-in then blocks it (mech e) plus affine byproduct B must be implemented (cost >= saving) | dir2 CLOSED, dir1 OPEN worth <=1 |
+| c | madd<->sigma commutation (enabler for b,f) | **0** | z3 quadruple-criterion queries over ALL affine B, all odd K'', all consts: dir2 (4097,19) UNSAT 2.6s; dir2 (9,16) UNSAT 4.5s. dir1 (4097,16) and dir1 (33,19) z3-TIMEOUTed and are now closed **UNSAT by the top-bit lemma** (sec 3.6): dir1 needs K == +-1 (mod 2^s); 4097 mod 2^16 = 4097 and 33 mod 2^19 = 33, neither +-1. Even had dir1 been SAT: only enables madd4*madd'' fusion worth 1 op, and the runtime y2 fold-in then blocks it (mech e) plus affine byproduct B must be implemented (cost >= saving) | **CLOSED both directions** |
 | d | shorter sigma / mask transport past madds | 0 | sigma_s floor = 2 ops (1-op refuted: madd needs C=0,K=1 => sigma=id false; shr/xorc/xor2 trivially fail); masks cannot cross madds (P3-F XOR<->ADD lemma); no two masks adjacent | CLOSED |
 | e | fold-in absorption into madd addend | 0 | runtime lemma: v^y == v + f(y) for all v iff y in {0,2^31}; y uniform [0,2^30) (2^31 unreachable, 0 measure 2^-30) | CLOSED (sec 3.5) |
 | f | cross-boundary madd fusion (madd4*madd0') | 0 | separated by sigma16 AND runtime fold-in xor; needs (c)-dir2 (UNSAT) or (c)-dir1 AND xor-past-madd (refuted by e) | CLOSED |
 
-**Sum of savings beyond banked (a): 0 proven; <=1 in the worst case where
-dir1 were SAT. Needed: 3 (24 - 2 banked - 19). 0 (or 1) < 3 => the <=19
-composite is REFUTED across the entire mechanism space, with margin
-covering the one OPEN z3 query.**
+**Sum of savings beyond banked (a): 0 proven, and after P5-L2 the "<=1 if
+dir1 were SAT" branch is gone too -- 0 exactly. Needed: 3 (24 - 2 banked -
+19) under the generous reading that (a)'s 2 ops are still on the table;
+needed 5 (24 - 19) under the strict reading that the 24-op census already
+banks (a), which is what the census actually is. 0 < 3 <= 5 => the <=19
+composite is REFUTED across the entire mechanism space under EITHER
+bookkeeping convention, and with no remaining OPEN query.**
+
+Baseline audit (P5-L2): tools/p5d_cegis.py REAL_11 is exactly 11 ops
+(4 madd, 2 shr, 2 xorc, 3 xor2); 2*11 + 2 fold-ins = 24 confirms sec 0.
 
 ## 2. Reduction statement (FINAL)
 
@@ -46,7 +56,7 @@ here). Therefore:
 **The 2-round composite question REDUCES EXACTLY to the single-round 9-op
 question (P5-I sandwich9 lift-and-prune, P5-J/K).** There is no independent
 2-round route to effective k<=9.5. Caveats (the only formal gaps):
-(i) dir1 commutation OPEN — worth <=1 op, insufficient alone (needs 3);
+(i) ~~dir1 commutation OPEN~~ — **RESOLVED UNSAT by P5-L2, sec 3.6**;
 (ii) non-decomposable global 19-op restructurings — the same (S)-hypothesis
 gap as P3-F's N>=11; bounded here by the span deletion-family closures and
 by every P5-B/D/H search negative. A full-shape z3 sweep of 4-op and 5-op
@@ -134,3 +144,52 @@ v=y forces 2y == 0 mod 2^32. Node values are uniform in [0, 2^30), so
 y = 2^31 never occurs and y = 0 has measure 2^-30. => the fold-in xor can
 NEVER become a madd runtime-addend, and no xor can cross any madd
 (P3-F lemma, runtime-value form, verified numerically).
+
+### 3.6 dir1 commutation CLOSED — the top-bit lemma (P5-L2, tools/p5l_dir1.py)
+
+The predecessor's dir1 z3 runs timed out and their output was lost (no log
+on disk, no surviving process). Re-running the same encoding was pointless,
+so dir1 was closed by theory instead. dir1 asks: E? odd K'', C'', C and
+GF(2)-AFFINE B with  K*sigma_s(v) + C == B(K''*v + C'')  for all v.
+
+**TOP-BIT LEMMA.** Flip the top bit of v. Since K'' is odd,
+K''*(v^2^31)+C'' = u ^ 2^31 with u = K''v+C''; since B is affine,
+B(u^2^31) = B(u) ^ D for a CONSTANT D; since sigma_s is linear and
+bijective, substituting w = sigma_s(v) (which then ranges over ALL of
+Z_2^32) eliminates K'', C'' and B entirely and leaves
+
+    (L)  K*(w ^ e) + C == (K*w + C) ^ D  for all w,   e := 2^31 ^ 2^(31-s).
+
+Restrict to the 2^31 values of w with bit (31-s) clear: there w^e = w+e, so
+with E := K*e mod 2^32 = (K*2^(31-s)) ^ 2^31 and X := K*w+C (which sweeps a
+set of size 2^31, as w |-> Kw+C is a bijection), (L) becomes X + E == X ^ D.
+Carry analysis: D_i = E_i ^ c_i so the carry word is c = D ^ E with c_0 = 0,
+and c_{i+1} = maj(X_i, E_i, c_i) leaves X_i free exactly when D_i = 0. Hence
+the solution set of X+E == X^D is empty or a coset of dimension
+32 - popcount(D & 0x7fffffff); containing 2^31 values of X forces
+popcount(D & 0x7fffffff) <= 1. K odd makes j := 31-s the lowest set bit of
+E, so c_j = 0 and D_j = 1: thus D in {2^j, 2^j+2^31}, and the carry chain is
+then consistent only if E's bits j+1..30 are all equal.
+
+  **=> dir1 is possible only if K == +1 or K == -1 (mod 2^s).**
+
+  - dir1 (K=4097, s=16): 4097 mod 2^16 = 4097, not +-1 => **UNSAT**.
+  - dir1 (K=33,   s=19): 33 mod 2^19 = 33,   not +-1 => **UNSAT**.
+
+Validation (the lemma is necessary, not sufficient, and it is not vacuous):
+- **Exhaustive small-width dir1** (`run_exhaust`): for widths n=6 (s=2,3)
+  and n=7 (s=3,4), over ALL odd K, ALL odd K'', ALL C'', ALL C, with B
+  tested for exact GF(2)-affinity: **0 mismatches** — every solution found
+  satisfies the lemma. Solutions exist exactly at K in {1, 2^(n-1)-1,
+  2^(n-1)+1, 2^n-1}, i.e. K == +-1 mod 2^(n-1): the same degenerate
+  +-1-multiplier family that produced sec 3.3's dir2 K=1 positive control
+  at 0x7fffffff. (An earlier draft of the closed form omitted the -1 branch
+  and this sweep caught it — the carry-chain test itself was already right.)
+- **Width-32 brute force** (`scan32`): (L) at w=0 forces D = C ^ (C+E), so
+  all 2^32 values of C can be scanned directly against 20 probe values of w:
+  K=4097 s=16 -> **0 surviving C**; K=33 s=19 -> **0 surviving C**;
+  controls K=1 s=19 -> 2^19 survivors, K=1/65537 s=16 -> 715849728
+  survivors (machinery does find solutions when they exist).
+
+Two independent methods, both with passing positive controls, agree.
+**Mechanism (c) = 0 proven, no OPEN queries remain in the table.**

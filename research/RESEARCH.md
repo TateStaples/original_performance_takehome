@@ -1601,3 +1601,34 @@ Recovery actions:
   off exactly as designed).
 - Stratum (3,2,1,3) completion run finished (uncapped enumeration output
   in scratchpad; to be merged into the queue on next harvest).
+
+### P5-L2 RESULT (2026-08-02): THE <=19-OP 2-ROUND COMPOSITE IS REFUTED —
+### cross-round fusion is dead; everything reduces to the single-round 9-op question
+
+Complete mechanism accounting over the decomposable space: **total savable
+ops = 0** against a required >=5 (>=3 under the most conservative
+double-count reading — refuted either way):
+
+| mechanism | max savable | argument |
+|---|---|---|
+| mask absorption into fold-ins | 2, ALREADY BANKED in the 24-op census | node-table transform |
+| sigma-sigma layer merge | 0 | merged layer costs 4 = 2+2 separate (GF(2) exact) |
+| madd<->sigma commutation | 0 | z3-UNSAT one direction; NEW TOP-BIT LEMMA the other |
+| shorter sigma / mask transport | 0 | sigma floor 2; masks cannot cross madds |
+| fold-in into madd addend | 0 | v^y == v+f(y) only for y in {0, 2^31} |
+| cross-boundary madd fusion | 0 | needs one of the above |
+
+**New top-bit lemma** (two independent validations: exhaustive width-6/7
+with positive controls, and a full 2^32 scan at width 32): a madd commutes
+through sigma_s only when **K == +/-1 (mod 2^s)** — and the real form's
+(4097, 16) and (33, 19) pairs both fail it. GF(2) side: L19*L16 =
+I ^ S16 ^ S19 has rank 32 and minimum implementation cost 4 ops (the
+elegant `t = v^(v>>3); out = v^(t>>16)` factorization via S16+S19 =
+S16(I+S3)) = exactly the cost of the two layers separately.
+
+**Consequence: effective k<=9.5 via cross-round fusion is DEAD. The
+composite question reduces EXACTLY to the single-round m<=9 question,
+which P5-I2 (bit-serial exact solver) + the P5-K queue now decide alone.**
+Residual scope gap (pre-existing, shared with P3-F): non-decomposable
+global restructurings — the (S)-hypothesis gap — not covered by any
+accounting argument.

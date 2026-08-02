@@ -459,3 +459,62 @@ CHECKPOINT pair=(26,20) verdict=OPEN rung=k8 iter=0 timeout=25s reason=timeout r
 CHECKPOINT pair=(27,13) verdict=OPEN rung=k8 iter=0 timeout=25s reason=timeout rt=25s
 CHECKPOINT pair=(27,19) verdict=OPEN rung=k8 iter=0 timeout=25s reason=timeout rt=25s
 CHECKPOINT pair=(28,14) verdict=OPEN rung=k8 iter=0 timeout=25s reason=timeout rt=25s
+
+## 8. P5-I2 continuation — width-TRUNCATED encoder (tools/p5i_z3pair2.py)
+
+Inherited state at handoff: 482 pairs in z3 scope; 172 REFUTED, 126 OPEN
+(rt=25s), 184 never attempted (all in the hard middle shells 18..30).
+
+NEW ENCODER. Rung k is encoded at the exact minimal widths implied by the
+cone of `out mod 2^k`, instead of 32 bits everywhere:
+    Wb = min(32, s1+s2+k)  for b, K1, C1
+    We = min(32, s2+k)     for c, e, M1, K2, C2
+    Ww = k                 for w, out, M2, K3, C3
+Exactness: when Wb < 32, Wb - s1 == We exactly, so LShR at the truncated
+width zero-fills only positions >= We, which are discarded. The encoded
+formula is satisfiable iff the 32-bit formula restricted to `out mod 2^k`
+on those samples is => UNSAT is still an EXACT refutation.
+Unknown bits drop from 256 to 2*Wb + 3*We + 3*k (e.g. 130 at (30,6) k=8).
+
+GUARDS (both passed, tools/p5i_z3pair2.py --selftest):
+  SELFTEST-TRUNC   planted constants must be SAT at every rung k=8,16,32
+                   (a truncation bug that lost information would show up
+                   as UNSAT here, i.e. as a fabricated refutation).
+  SELFTEST-PLANTED a random planted sandwich9 target must never come back
+                   REFUTED. Verified at (16,16) and (30,6): both OPEN.
+
+SPEEDUP (myhash target, same 34-sample battery, same rungs):
+  (30,6)   v1 19.0s  -> v2  2.2s   (8.6x)
+  (23,26)  v1 16.4s  -> v2  5.8s   (2.8x)
+  (28,14)  v1 OPEN@25s -> v2 REFUTED 11.9s   (new kill)
+  (16,16)  v1 OPEN@25s -> v2 OPEN@60s
+  (25,25)  v1 OPEN@25s -> v2 OPEN@60s
+MORE SAMPLES DO NOT HELP the stubborn band: (16,16) and (25,25) stay OPEN
+at n=82 and n=178 with a 90s budget. "Cheap-or-never" survives the
+re-encoding; the encoder just moves the cheap/never boundary outward.
+
+Sweep driver: tools/p5i_sweep2.py (todo = scope minus every REFUTED/FOUND
+in EITHER ledger; v1-OPEN pairs are retried). Lines below are CHECKPOINT2.
+CHECKPOINT2 pair=(30,29) verdict=OPEN rung=k8 iter=0 n=34 timeout=25s reason=timeout rt=25s
+CHECKPOINT2 pair=(29,29) verdict=OPEN rung=k8 iter=0 n=34 timeout=25s reason=timeout rt=25s
+CHECKPOINT2 pair=(30,28) verdict=OPEN rung=k8 iter=0 n=34 timeout=25s reason=timeout rt=25s
+CHECKPOINT2 pair=(29,28) verdict=OPEN rung=k8 iter=0 n=34 timeout=25s reason=timeout rt=25s
+CHECKPOINT2 pair=(30,5) verdict=REFUTED rung=k8 iter=0 n=34 solve=3.7s total=3.7s rt=25s
+CHECKPOINT2 pair=(30,27) verdict=OPEN rung=k8 iter=0 n=34 timeout=25s reason=timeout rt=25s
+CHECKPOINT2 pair=(28,28) verdict=OPEN rung=k8 iter=0 n=34 timeout=25s reason=timeout rt=25s
+CHECKPOINT2 pair=(29,5) verdict=OPEN rung=k8 iter=0 n=34 timeout=25s reason=timeout rt=25s
+CHECKPOINT2 pair=(29,27) verdict=OPEN rung=k8 iter=0 n=34 timeout=25s reason=timeout rt=25s
+CHECKPOINT2 pair=(30,26) verdict=REFUTED rung=k8 iter=0 n=34 solve=9.7s total=9.8s rt=25s
+CHECKPOINT2 pair=(27,28) verdict=OPEN rung=k8 iter=0 n=34 timeout=25s reason=timeout rt=25s
+CHECKPOINT2 pair=(28,27) verdict=OPEN rung=k8 iter=0 n=34 timeout=25s reason=timeout rt=25s
+CHECKPOINT2 pair=(29,6) verdict=OPEN rung=k8 iter=0 n=34 timeout=25s reason=timeout rt=25s
+CHECKPOINT2 pair=(29,26) verdict=OPEN rung=k8 iter=0 n=34 timeout=25s reason=timeout rt=25s
+CHECKPOINT2 pair=(30,7) verdict=OPEN rung=k8 iter=0 n=34 timeout=25s reason=timeout rt=25s
+CHECKPOINT2 pair=(30,25) verdict=REFUTED rung=k8 iter=0 n=34 solve=23.1s total=23.1s rt=25s
+CHECKPOINT2 pair=(27,27) verdict=OPEN rung=k8 iter=0 n=34 timeout=25s reason=timeout rt=25s
+CHECKPOINT2 pair=(28,6) verdict=OPEN rung=k8 iter=0 n=34 timeout=25s reason=timeout rt=25s
+CHECKPOINT2 pair=(28,26) verdict=OPEN rung=k8 iter=0 n=34 timeout=25s reason=timeout rt=25s
+CHECKPOINT2 pair=(29,7) verdict=OPEN rung=k8 iter=0 n=34 timeout=25s reason=timeout rt=25s
+CHECKPOINT2 pair=(30,8) verdict=OPEN rung=k8 iter=0 n=34 timeout=25s reason=timeout rt=25s
+CHECKPOINT2 pair=(26,27) verdict=OPEN rung=k8 iter=0 n=34 timeout=25s reason=timeout rt=25s
+CHECKPOINT2 pair=(27,6) verdict=OPEN rung=k8 iter=0 n=34 timeout=25s reason=timeout rt=25s
