@@ -1074,3 +1074,12 @@ q == +-1"; the correct split is 37 + 2.)  The DEAD/ALIVE lists themselves
 were re-verified against the code: both match exactly, 136 + 71 = 207.
 CHECKPOINT pair=(10,23) verdict=OPEN rung=k8 iter=0 timeout=600s reason=timeout rt=600s
 CHECKPOINT pair=(11,24) verdict=OPEN rung=k8 iter=0 timeout=600s reason=timeout rt=600s
+CHECKPOINT pair=(12,25) verdict=OPEN rung=k8 iter=0 timeout=600s reason=timeout rt=600s
+CHECKPOINT pair=(13,26) verdict=REFUTED rung=k8 iter=0 solve=4.2s total=4.2s rt=600s
+CHECKPOINT pair=(14,27) verdict=REFUTED rung=k8 iter=0 solve=3.2s total=3.2s rt=600s
+CHECKPOINT pair=(15,28) verdict=REFUTED rung=k8 iter=0 solve=3.3s total=3.3s rt=600s
+CHECKPOINT pair=(16,29) verdict=REFUTED rung=k8 iter=0 solve=1.9s total=1.9s rt=600s
+CHECKPOINT pair=(17,28) verdict=REFUTED rung=k8 iter=0 solve=3.2s total=3.2s rt=600s
+CHECKPOINT pair=(18,27) verdict=REFUTED rung=k8 iter=0 solve=3.4s total=3.4s rt=600s
+CHECKPOINT pair=(19,26) verdict=REFUTED rung=k8 iter=0 solve=8.6s total=8.6s rt=600s
+CHECKPOINT pair=(20,25) verdict=OPEN rung=k8 iter=0 timeout=600s reason=timeout rt=600s

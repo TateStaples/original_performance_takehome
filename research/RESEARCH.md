@@ -1734,3 +1734,34 @@ the validation policy (NEEDS USER CONSENT).
 > scope. SUBMITTING one is a different act — a kernel that is wrong on a
 > known fraction of inputs, passing a sampling validator — and will not
 > be done without explicit user instruction.**
+
+### P6-B RESULT (2026-08-02): the ε-window is EMPTY — P8 demoted; the
+### contradiction re-narrows to P1's (S)-gap
+
+- **The decisive reframe: STOKE's battery (116-232 vectors, not the 32 the
+  charter assumed) is ε-BLIND for ε <= 1e-3 — an ε-form would score ZERO
+  cost with p = 0.79-0.89 and the chains would have locked onto it. Zero
+  hits in 2.95e10 proposals therefore means P5-H's negatives were ALREADY
+  ε-tolerant reachability negatives.** No ε <= 3.3e-3 form exists in any
+  searched family.
+- Deletion forms: all 11 single-op deletions, constants hill-climbed for
+  minimum disagreement: **min ε̂ = 0.99951** (4,094 of 4,096 probes wrong).
+  Not near; catastrophically far.
+- The exact-count kills mostly SURVIVE ε: **887/871/790 of 961 sandwich9
+  pairs stay refuted at ε = 1e-6/1e-5/1e-4** (re-opens 3/19/100, not
+  P6-A's 204 ceiling — its battery-size figure corrected).
+- Relaxed-z3 CEGIS priced and correctly NOT run (~530 CPU-h for a
+  question the above answers).
+- **Recommendation adopted: P8 is demoted from "second live premise" to a
+  re-labelling of P1's (S)-gap.** The ε-question and the standing user
+  decision flag are moot in reachable space (the flag stays on record for
+  the counterfactual).
+
+**The contradiction now rests on a single premise: P1 via the
+non-decomposable-restructuring gap — or on something outside every frame
+eight phases have named.** Live exact questions: the 71 never-refuted
+sandwich9 pairs (grinding at 600s), 423 template stragglers (escalating),
+the 2,956-shape queue. Sound unfunded finds from P6-A now funded: R2
+(round-0 30-bit-domain short hash — a DOMAIN-RESTRICTED search, sound for
+32 group-rounds, ~8.5 cyc) and R3 (served-level-local conjugation MITM
+family, ~2 cyc overhead).
