@@ -21,3 +21,11 @@ BEST cost=198.000 err=194 nonnop=10
 CHECKPOINT campaign=t1 slots=12 threads=4 temp=3 opw=0.4 seed=205 secs=420.2 proposals=728801280 best_cost=193.600 best_err=190 best_nonnop=9 zero_hits=1 finds=1
 CHECKPOINT campaign=t2 slots=12 threads=4 temp=4 opw=0.4 seed=305 secs=420.2 proposals=724369408 best_cost=4.800 best_err=0 best_nonnop=12 zero_hits=0 finds=0
 BEST cost=4.800 err=0 nonnop=12
+CHECKPOINT campaign=t1 slots=12 threads=4 temp=4 opw=0.4 seed=206 secs=420.1 proposals=700620800 best_cost=4.400 best_err=0 best_nonnop=11 zero_hits=1 finds=1
+BIG STOKE DONE
+CHECKPOINT campaign=t2 slots=12 threads=4 temp=2 opw=0.4 seed=306 secs=420.1 proposals=758972416 best_cost=4.800 best_err=0 best_nonnop=12 zero_hits=0 finds=0
+BEST cost=4.800 err=0 nonnop=12
+CHECKPOINT campaign=t2 slots=12 threads=4 temp=3 opw=0.4 seed=307 secs=420.1 proposals=962183168 best_cost=4.800 best_err=0 best_nonnop=12 zero_hits=0 finds=0
+BEST cost=4.800 err=0 nonnop=12
+CHECKPOINT campaign=t2 slots=12 threads=4 temp=4 opw=0.4 seed=308 secs=420.1 proposals=952729600 best_cost=4.800 best_err=0 best_nonnop=12 zero_hits=0 finds=0
+BEST cost=4.800 err=0 nonnop=12

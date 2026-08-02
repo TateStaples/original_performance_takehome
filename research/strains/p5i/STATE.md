@@ -1114,3 +1114,6 @@ CHECKPOINT pair=(22,22) verdict=OPEN rung=k8 iter=0 timeout=600s reason=timeout 
 CHECKPOINT pair=(23,11) verdict=OPEN rung=k8 iter=0 timeout=600s reason=timeout rt=600s
 CHECKPOINT pair=(23,21) verdict=OPEN rung=k8 iter=0 timeout=600s reason=timeout rt=600s
 CHECKPOINT pair=(24,12) verdict=OPEN rung=k8 iter=0 timeout=600s reason=timeout rt=600s
+CHECKPOINT pair=(24,20) verdict=OPEN rung=k8 iter=0 timeout=600s reason=timeout rt=600s
+CHECKPOINT pair=(25,13) verdict=OPEN rung=k8 iter=0 timeout=600s reason=timeout rt=600s
+CHECKPOINT pair=(25,19) verdict=OPEN rung=k8 iter=0 timeout=600s reason=timeout rt=600s

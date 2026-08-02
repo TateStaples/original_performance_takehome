@@ -825,6 +825,7 @@ class KernelBuilder:
         parity_ring: bool | tuple[tuple[int, int], ...] = False,
         parity_ring_extras: tuple[int, ...] = (),
         parity_ring_plan: tuple[tuple[tuple[int, int], tuple[int, int, int]], ...] = (),
+        lazy_position_exit: bool | str = False,
         flow_spelling_plan: tuple[tuple[int, int], ...] = (),
         vec_partition_plan: tuple[tuple[int, str], ...] = (),
         vec_tie_offload: int = 0,
@@ -1984,6 +1985,23 @@ class KernelBuilder:
             else:
                 madd(state_vec_, state_vec_, two_vec, node_val_)
 
+        def horner_position(state_vec_: int, ring_: tuple[int, int, int],
+                            nbits: int = 3) -> None:
+            # P7 (T2-partial): rebuild the packed position
+            #   p = b0*2^(nbits-1) + ... + b_{nbits-1}
+            # from the retained parity vectors ring_[0..nbits-1] (each an
+            # exact 0/1 vector), by Horner: nbits-1 madds, emitted at the
+            # single point that still reads p. Exactly the ops that the
+            # steady L2-seed + L3-fold upkeep would have spent, relocated.
+            # Spellings match the upkeep path op-for-op so the experiment
+            # isolates the emission POINT: the seed step is a plain madd
+            # (it reads ring_[0], not st, so race_idx_madd's `st <<= 1`
+            # alu form does not apply), the rest reuse fold_position and so
+            # keep their alu-offload race.
+            madd(state_vec_, ring_[0], two_vec, ring_[1])
+            for k in range(2, nbits):
+                fold_position(state_vec_, ring_[k])
+
         def race_leaf(dst: int, cond: int, hi: int, lo: int, dtmp: int | None) -> None:
             # H-023 (b3_last): leaf fold of two BROADCAST tables hi/lo by an
             # exact 0/1 cond -- flow vselect, or (valu, drain-idle) a
@@ -2838,6 +2856,47 @@ class KernelBuilder:
                     f"parity_ring_plan bases out of range for {key}"
                 parity_ring_map[key] = tuple(int(b) for b in p_bases)
 
+        # P7 (T2-partial, `lazy_position_exit`): on a ring-covered
+        # (epoch, group) the tournament CONDITIONS already come straight
+        # from the retained parities, so the packed position accumulator
+        # `st` has exactly one reader left in the epoch -- the gather-exit
+        # conversion. Under this flag its round-by-round upkeep (the L2
+        # seed madd `st = 2*P0 + P1` and the L3 fold `st = 2*st + P2`) is
+        # DROPPED and `st` is instead built by Horner over the retained
+        # bits at the exit boundary only (P3-A's T2).
+        #
+        # Eligibility is deliberately narrow, for soundness not for reach:
+        #   * the (epoch, group) must be ring-covered (else there are no
+        #     retained bits to Horner from, and the mask extractions read
+        #     `st` during the served rounds);
+        #   * the epoch's level-4 round must NOT be a served one that is
+        #     followed by an exit. A served L4 round consumes the newest
+        #     parity b3 out of `nv` (the W-folds overwrite it), so a 4-bit
+        #     exit cannot be reconstructed from the 3-slot ring. Serving
+        #     L4 at the FINAL round is fine -- nothing reads `st` after it
+        #     -- and that is the only case where this flag deletes real
+        #     ops rather than relocating them (see research/strains/p7).
+        #
+        # Modes: True = elide everywhere eligible, Horner at the exit;
+        # "early" = same set, Horner emitted at the top of the exit round;
+        # "dead-only" = restrict to the group-epochs whose accumulator has
+        # NO reader at all (L4 served at the final round), i.e. the strict
+        # subset where the flag can only DELETE ops, never relocate them.
+        def lazy_position_ok(epoch: int, g: int) -> bool:
+            if not lazy_position_exit:
+                return False
+            if (epoch, g) not in parity_ring_map:
+                return False
+            l4_round = epoch * period + L4
+            no_l4_service = l4_round >= rounds or not is_pair_tournament_served(l4_round, g)
+            if lazy_position_exit == "dead-only":
+                # accumulator is never read: L4 served at the last round.
+                return not no_l4_service and l4_round == rounds - 1
+            if no_l4_service:
+                return True
+            # served L4: only safe when it is the last round (no exit).
+            return l4_round == rounds - 1
+
         # --- rounds ---
         # The round body is a GENERATOR yielding at stage boundaries
         # (node_val block, each hash dependency level, state update), so the
@@ -2863,6 +2922,22 @@ class KernelBuilder:
                 # H-045 (parity_ring): retained-parity ring of this
                 # (epoch, group), or None for the legacy packed-st path.
                 ring = parity_ring_map.get((r // period, g))
+                # P7 (T2-partial): this (epoch, group) drops the packed
+                # position accumulator's round-by-round upkeep entirely and
+                # rebuilds it by Horner at the gather-exit boundary.
+                lazy_pos = lazy_position_ok(r // period, g)
+                # ... and this is the round whose tail converts the position
+                # into a gather address, i.e. the one place the packed `st`
+                # is still read. `lazy_position_exit="early"` emits the
+                # Horner rebuild at the TOP of that round instead (same ops,
+                # but off the pre-gather dependency chain).
+                lazy_exit_here = (
+                    lazy_pos and ring is not None and L == tournament_level_count
+                    and r + 1 < rounds and level(r + 1) != 0
+                    and not is_served_without_gather(r + 1, g))
+                if lazy_exit_here and lazy_position_exit == "early":
+                    assert ring is not None
+                    horner_position(st, ring, tournament_level_count)
 
                 # ---- node_val: broadcast root / tournament select / gather ----
                 if L == 0:
@@ -2956,7 +3031,8 @@ class KernelBuilder:
                             first_fold(t, ring[1], diffs[0], evens[0])
                             first_fold(tm[j], ring[1], diffs[1], evens[1])
                             vsel(nv, ring[0], tm[j], t)
-                            madd(st, ring[0], two_vec, ring[1])
+                            if not lazy_pos:  # P7: T2-partial drops the seed
+                                madd(st, ring[0], two_vec, ring[1])
                         elif parity_conds:
                             # nv = b1 (raw parity), st = b0 (single bit).
                             # b0 copy (st folds next); vselect(c,a,a,a) is a
@@ -3003,7 +3079,8 @@ class KernelBuilder:
                         # disappear and nv is a pure fold destination. The
                         # position fold still runs (st = 2*st + P2) so the
                         # epoch-exit gaddr conversions see identical st.
-                        fold_position(st, ring[2])
+                        if not lazy_pos:  # P7: T2-partial drops the upkeep fold
+                            fold_position(st, ring[2])
                         first_fold(t, ring[2], diffs[0], evens[0])   # m0
                         first_fold(tmM[j], ring[2], diffs[1], evens[1])  # m1
                         first_fold(tm[j], ring[2], diffs[2], evens[2])   # m2
@@ -3090,6 +3167,12 @@ class KernelBuilder:
                             # vselect off the broadcast tables and the fold
                             # touches nothing outside this group's own
                             # tournament pool registers.
+                            # P7: the dffold fallback reads `st` for its
+                            # masks, so a lazy group must materialise the
+                            # position here (op-neutral vs the upkeep it
+                            # dropped) rather than in the deleted L2/L3 folds.
+                            if lazy_pos and ring is not None:
+                                horner_position(st, ring, tournament_level_count)
                             if b3l_safe_leaf_fallback:
                                 lvt = (None, None, None, None)
                             else:
@@ -3280,6 +3363,9 @@ class KernelBuilder:
                     parity(par)
                     if is_served_without_gather(r, g):
                         # leave accumulator mode: gaddr = 2p + b + fp + 2^Ln - 1
+                        if lazy_exit_here and lazy_position_exit != "early":
+                            assert ring is not None
+                            horner_position(st, ring, tournament_level_count)
                         if L == 0:
                             # unreachable under c5_prexor (level 1 is served)
                             assert not c5_prexored_value_domain

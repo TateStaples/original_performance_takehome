@@ -865,3 +865,35 @@ Seeded 2026-07-23 from the 2148->1140 campaign's measured rejections.
 - reopen-if: the +110 vec-op residual is attributed to a cause that a
   different emission order or fold spelling removes, AND the resulting floor
   drops below the shipped realized count.
+
+### G-39 T2-partial / lazy-position-exit (Phase-7 milestone 1) — NEGATIVE, and it corrects P3-A
+
+- claim (P3-A T2, load-bearing for the C1* 946-948 floor): deleting the
+  position accumulator for ring-covered group-epochs saves ~2,072 lane-ops
+  (full coverage) by reading conditions from retained parities, paying only
+  +2 vec-ops at each of ~35 gather exits.
+- evidence: IMPLEMENTED (dev.py `lazy_position_exit`, default-OFF bit-exact
+  on 3 configs, value-trace 10/10, grader-correct) and MEASURED NEGATIVE:
+  1006 -> 1008 (best mode) / 1011. Census delta at mainline: valu slots
+  -2. **The model's premise is arithmetically false: Horner-at-exit costs
+  d-1 madds for a d-bit position — exactly the upkeep it replaces. T2
+  deletes ops only where the accumulator is NEVER read, and at the real
+  shape that is 1 group-epoch, not 35.** P3-A's 35-exit figure assumed L4
+  service concentrated at round 15 — the exact premise G-38 refuted — and
+  P3-A was never re-audited after G-38. (The builder's upkeep count
+  reproduces P3-A's own census exactly, which is what makes the correction
+  trustworthy.)
+- collateral corrections: **T1 is ALREADY SHIPPED** (difference tables are
+  built at setup; the 8-op residue needs 64 scratch words vs 3 free);
+  ring re-mine on the real stream returns 0 new rings (closes P3-E §1.4's
+  "st-deletion returns ~11 rings").
+- consequence: **the C1*-class implementable floor was never 946-948; with
+  the accumulator kept it is ~958 (P3-A's own C8 row), and the realized
+  prediction for the implementable stack collapses from ~965-970 to
+  ~995-1004** (remaining live levers: dual_fold/spelling re-tune ~2 cyc,
+  emission re-mine ~3 cyc bounded by census, T3 ~0-1, serve-profile
+  re-opt small). Fourth instance of a model corrected only by
+  measurement; same per-site-vs-per-level defect class as P3-D found.
+- reopen-if: a serving mechanism is found whose conditions are consumed
+  with ZERO reconstruction cost at exits (nothing currently known supplies
+  this).
