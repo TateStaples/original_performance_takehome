@@ -1974,3 +1974,35 @@ by measurement.
   violate (it produced broadcast-constant indices before guarding).
 - Mainline: **1006 unchanged, 9/9 green** (driver re-verified). Board
   standing: no-idx eligible 1006; with-idx eligible 1048.
+
+### P7 tail-aware rings COMPLETE (2026-08-02): ringed with-idx = 1034
+
+The "structurally incompatible" verdict is WITHDRAWN with the mechanism
+identified: the failed prune could only ADD plan entries while 6 of the 10
+dirty rings were NATIVE (unnamed by any entry) — the search space could not
+contain the answer. The fix: re-mine on the realized TAIL-INCLUSIVE trace
+(subsumes hand-exclusion, cannot go stale), with a drop-and-rebuild
+FIXPOINT (violations 10 -> 5 -> 0; one-shot would have shipped a
+miscompile), gated by a donor-liveness assert CALIBRATED against a
+known-good build (the stricter criterion fired 200 false positives on the
+correct 1006 mainline and was rejected; read-after-borrow gives 0/200
+discrimination).
+
+**Result: 31/40 rings coexist with the tail. Ringed with-idx = 1034
+cycles, values 10/10 AND indices 10/10.** 14 of the ring's 20 cycles
+recovered; coverage is converged (second mine adds nothing; all 15
+prune-drops go dirty on re-add). Flag-off bit-exact on 6 digest checks;
+perf_takehome.py untouched at 1006, 9/9.
+
+**Current eligible artifacts: no-idx 1006 (graded mainline), with-idx 1034
+(dev flag pair `store_final_indices` + tail-aware ring plan).** Porting
+the pair into perf_takehome.py is NOT indicated — the repo's own tests
+check values only, so the tail is pure overhead on the graded artifact;
+the with-idx build is a leaderboard-submission variant. Submission to
+either board is an external action reserved for the user.
+
+Process note for the record: the driver's mid-run resume message to this
+builder wrongly claimed its first ledger append had not landed; the
+builder verified the disk state, declined the restart (avoiding a
+double-append), and recorded the discrepancy. Correct behavior on its
+side; driver error on timing inference from a kill notification.

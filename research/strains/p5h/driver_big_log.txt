@@ -45,3 +45,7 @@ CHECKPOINT campaign=t2 slots=12 threads=4 temp=2 opw=0.4 seed=315 secs=420.2 pro
 BEST cost=4.800 err=0 nonnop=12
 CHECKPOINT campaign=t2 slots=12 threads=4 temp=3 opw=0.4 seed=316 secs=420.2 proposals=914186240 best_cost=4.800 best_err=0 best_nonnop=12 zero_hits=0 finds=0
 BEST cost=4.800 err=0 nonnop=12
+CHECKPOINT campaign=t2 slots=12 threads=4 temp=4 opw=0.4 seed=317 secs=420.2 proposals=868139008 best_cost=199.000 best_err=195 best_nonnop=10 zero_hits=0 finds=0
+BEST cost=199.000 err=195 nonnop=10
+CHECKPOINT campaign=t2 slots=12 threads=4 temp=2 opw=0.4 seed=318 secs=420.2 proposals=961372160 best_cost=4.800 best_err=0 best_nonnop=12 zero_hits=0 finds=0
+BEST cost=4.800 err=0 nonnop=12

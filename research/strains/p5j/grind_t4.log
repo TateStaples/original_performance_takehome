@@ -1191,3 +1191,15 @@ COMBO t4 s1=28 s2=18 verdict=TIMEOUT [iter=0 solve=6051.4s reason=timeout] time=
 SPLIT-SUMMARY t4 pair=[2, 7] s1=[28,29) s2=[18,19) oddK=[0] status=OPEN(1) wall=6051s
 COMBO t4 s1=28 s2=20 verdict=TIMEOUT [iter=0 solve=7301.0s reason=timeout] time=7301.0s
 SPLIT-SUMMARY t4 pair=[2, 7] s1=[28,29) s2=[20,21) oddK=[0] status=OPEN(1) wall=7301s
+COMBO t4 s1=28 s2=24 verdict=TIMEOUT [iter=0 solve=4472.3s reason=timeout] time=4472.3s
+SPLIT-SUMMARY t4 pair=[2, 7] s1=[28,29) s2=[24,25) oddK=[0] status=OPEN(1) wall=4472s
+COMBO t4 s1=28 s2=26 verdict=TIMEOUT [iter=0 solve=4472.3s reason=timeout] time=4472.3s
+SPLIT-SUMMARY t4 pair=[2, 7] s1=[28,29) s2=[26,27) oddK=[0] status=OPEN(1) wall=4472s
+COMBO t4 s1=29 s2=2 verdict=TIMEOUT [iter=0 solve=4588.2s reason=timeout] time=4588.2s
+SPLIT-SUMMARY t4 pair=[2, 7] s1=[29,30) s2=[2,3) oddK=[0] status=OPEN(1) wall=4588s
+COMBO t4 s1=29 s2=3 verdict=TIMEOUT [iter=0 solve=4697.8s reason=timeout] time=4697.8s
+SPLIT-SUMMARY t4 pair=[2, 7] s1=[29,30) s2=[3,4) oddK=[0] status=OPEN(1) wall=4698s
+COMBO t4 s1=29 s2=4 verdict=TIMEOUT [iter=0 solve=4697.8s reason=timeout] time=4697.8s
+SPLIT-SUMMARY t4 pair=[2, 7] s1=[29,30) s2=[4,5) oddK=[0] status=OPEN(1) wall=4698s
+COMBO t4 s1=29 s2=5 verdict=TIMEOUT [iter=0 solve=3140.9s reason=timeout] time=3140.9s
+SPLIT-SUMMARY t4 pair=[2, 7] s1=[29,30) s2=[5,6) oddK=[0] status=OPEN(1) wall=3141s

@@ -825,6 +825,8 @@ class KernelBuilder:
         parity_ring: bool | tuple[tuple[int, int], ...] = False,
         parity_ring_extras: tuple[int, ...] = (),
         parity_ring_plan: tuple[tuple[tuple[int, int], tuple[int, int, int]], ...] = (),
+        parity_ring_drop: tuple[tuple[int, int], ...] = (),
+        ring_liveness_assert: bool | None = None,
         lazy_position_exit: bool | str = False,
         store_final_indices: bool = False,
         flow_spelling_plan: tuple[tuple[int, int], ...] = (),
@@ -1712,6 +1714,16 @@ class KernelBuilder:
             assert level(r) != 0
             return (2 ** level(r + 1) - 1 + 2 ** (level(r) + 1) - 2
                     + (1 if is_c5_xor_elided(r, g) else 0))
+
+        # P7-TAR: the ring donor-liveness assert reads the emission trace, so
+        # the trace must be recorded.  Recording is emission-neutral
+        # (`ListScheduler.put` only appends), so this cannot perturb the
+        # scheduled stream -- it only costs build time and memory, which is
+        # why it is not on by default for the plain ring searches.
+        if ring_liveness_assert is None:
+            ring_liveness_assert = bool(parity_ring_slices) and bool(store_final_indices)
+        if ring_liveness_assert and getattr(self, "sched_trace", None) is None:
+            self.sched_trace = []
 
         scheduler = ListScheduler()
         scheduler.trace = getattr(self, "sched_trace", None)
@@ -2887,6 +2899,16 @@ class KernelBuilder:
                     0 <= b and b + VLEN <= SCRATCH_SIZE for b in p_bases), \
                     f"parity_ring_plan bases out of range for {key}"
                 parity_ring_map[key] = tuple(int(b) for b in p_bases)
+            # P7-TAR: unfund specific (epoch, group) rings.  Ring borrow
+            # safety is liveness-TIMED, so a stream change can invalidate a
+            # SUBSET of the derived rings while the rest stay sound -- under
+            # the with-idx tail exactly 10 of 40 go dirty (6 native, 4
+            # planned).  `parity_ring_plan` can only ADD, so subtracting the
+            # dirty ones -- especially the NATIVE ones, which no plan entry
+            # names -- needs its own lever.  Applied last so it can remove
+            # structural, extras and planned rings alike.
+            for d_epoch, d_g in parity_ring_drop:
+                parity_ring_map.pop((int(d_epoch), int(d_g)), None)
 
         # P7 (T2-partial, `lazy_position_exit`): on a ring-covered
         # (epoch, group) the tournament CONDITIONS already come straight
@@ -3839,6 +3861,92 @@ class KernelBuilder:
         }
 
         self.instrs = [b for b in scheduler.bundles if b]
+
+        if ring_liveness_assert and parity_ring_map:
+            viol = self.audit_ring_donor_liveness()
+            assert not viol, (
+                f"parity_ring donor liveness violated ({len(viol)} reads); the ring "
+                f"overwrites a donor whose value is still needed after the borrow "
+                f"window -- unfund the listed (epoch, group) rings via "
+                f"parity_ring_drop, or re-mine the plan. First 8:\n  "
+                + "\n  ".join(viol[:8]))
+
+    def audit_ring_donor_liveness(self) -> list[str]:
+        """P7-TAR: trace-level check that every FUNDED parity ring's borrow is
+        sound, i.e. that the ring's writes cannot destroy a value someone
+        still needs.
+
+        A ring for (epoch, group) commandeers three donor vectors for the span
+        of that group's ring rounds (0..4 in epoch 0, `period`..`rounds-1` in
+        epoch 1).  The borrow is safe exactly when no donor word carries a
+        live value ACROSS that window:
+
+            for each donor word w and window [lo, hi] (emission indices),
+            every read of w at i > hi must have its defining write after lo.
+
+        A read whose defining write precedes `lo` is a **read-after-borrow**:
+        the ring wrote w inside the window, so that read observes the retained
+        parity instead of the donor's own value.  That is a silent
+        miscompile -- the kernel runs and returns wrong answers -- which is
+        why this is an assert and not a warning.
+
+        In-window accesses are treated as the ring's own (that is the same
+        assumption `tools/audit_ring_windows.py` mines the plan under; a
+        second ring legitimately sharing the donor also accesses it there,
+        and window-disjointness is what makes THAT safe).  So this checks the
+        one criterion that is sound to check from the trace alone, and it
+        checks it against the REALIZED stream rather than against the stream
+        the plan was mined on -- which is the whole point: ring safety is
+        liveness-timed, so a plan mined on one stream must be re-validated on
+        any other.  Measured: 0 violations on the 1006 ring mainline, 200 on
+        the same config once `store_final_indices` is enabled.
+
+        Requires the emission trace (`self.sched_trace`); returns a list of
+        human-readable violations and records the implicated ring keys in
+        `self._ring_liveness_bad` for a drop-and-rebuild fixpoint.
+        """
+        trace = getattr(self, "sched_trace", None)
+        lay = getattr(self, "_h048_layout", None)
+        assert trace is not None and lay is not None, \
+            "audit_ring_donor_liveness needs sched_trace + _h048_layout (build with ring_liveness_assert=True)"
+        ring_map = lay["parity_ring_map"]
+        period, rounds = lay["period"], lay["rounds"]
+
+        acc: dict[int, list[tuple[int, bool]]] = {}
+        span: dict[Any, list[int]] = {}
+        for idx, entry in enumerate(trace):
+            tag, reads, writes = entry[2], entry[4], entry[5]
+            for a in reads:
+                acc.setdefault(a, []).append((idx, False))
+            for a in writes:
+                acc.setdefault(a, []).append((idx, True))
+            if tag is not None:
+                s = span.setdefault(tag, [idx, idx])
+                s[1] = idx
+
+        viol: list[str] = []
+        bad: set[tuple[int, int]] = set()
+        for (epoch, g), bases in sorted(ring_map.items()):
+            rr = range(0, 5) if epoch == 0 else range(period, rounds)
+            idxs = [i for r in rr if (r, g) in span for i in span[(r, g)]]
+            if not idxs:
+                continue
+            lo, hi = min(idxs), max(idxs)
+            for b in bases:
+                for w in range(b, b + VLEN):
+                    last_w = -1
+                    for i, is_write in acc.get(w, ()):
+                        if lo <= i <= hi:
+                            continue  # the ring's own accesses
+                        if is_write:
+                            last_w = i
+                        elif i > hi and last_w < lo:
+                            bad.add((epoch, g))
+                            viol.append(
+                                f"ring ({epoch},{g}) donor word {w}: read@{i} sees a write@"
+                                f"{last_w} from BEFORE the borrow window ({lo},{hi})")
+        self._ring_liveness_bad = sorted(bad)
+        return viol
 
     def build_kernel_pipelined(
         self,

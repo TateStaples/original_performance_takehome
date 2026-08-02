@@ -439,3 +439,168 @@ into the trailing `pause` gate.
 4. `tools/h042_plan.json` (empty plan, written by the spelling search at the
    shipped config) was deleted rather than committed — it encodes "no plan",
    and a stray plan file in tools/ invites a stale-plan accident.
+
+## Tail-aware rings (P7-TAR) — status: done (awaiting review)
+
+**Builder started:** 2026-07-28. Objective: make parity rings coexist with `store_final_indices`
+tail. Baseline claims to re-verify: ring-free+tail = 1048, ringed no-tail = 1006, target
+with-idx eligible ~1022-1028.
+
+Plan: (1) land liveness assertion on ring donor borrows FIRST (converts silent miscompile
+into diagnosable reject), (2) re-derive ring map with tail-aware reduced donor set,
+(3) measure at whatever coverage survives.
+
+Results appended below after every gate.
+
+**Note (coordinator sync):** a mid-run message claimed the STATE header append never
+landed and asked for a restart. Verified on disk: it DID land (`grep -c` = 1). No restart,
+no double-append. Recorded so the ledger is not silently rewritten.
+
+### P7-TAR gate 1 — the liveness assert LANDED (and it reframes the problem)
+
+`KernelBuilder.audit_ring_donor_liveness()` + `ring_liveness_assert` kwarg
+(default `None` = auto-ON exactly when `parity_ring` AND `store_final_indices`
+are both live) + `parity_ring_drop` kwarg.
+
+**Criterion (the one that is sound to check from a trace alone):** for each
+funded ring `(epoch,g)` with borrow window `[lo,hi]` = the emission span of that
+group's ring rounds (0-4 / 11-15), and each donor word `w`: every read of `w`
+at `i>hi` must have its defining write AFTER `lo`. A read whose defining write
+precedes `lo` is a **read-after-borrow** — the ring overwrote `w` inside the
+window, so that read observes a retained parity. Silent miscompile, hence assert.
+
+| build | rings | A-violations |
+|---|---|---|
+| 1006 ring mainline (no tail) | 40 | **0** |
+| same + `store_final_indices` | 40 | **200** |
+
+* An in-window access is credited to the ring (same assumption
+  `tools/audit_ring_windows.py` mines under). A stricter "foreign in-window
+  access" criterion was also implemented and **rejected**: it fires 200 times on
+  the KNOWN-GOOD 1006 mainline, because a legitimately SHARED donor's second
+  ring accesses it inside the first ring's window. Window-disjointness governs
+  that case, not this check.
+
+**The reframing.** The 200 violations implicate only **10 of the 40 rings**,
+all in epoch 1 plus one epoch-0:
+
+* NATIVE (structural, no plan entry names them): (1,16) (1,17) (1,18) (1,24)
+  (1,25) (1,31)
+* PLANNED: (0,28) (1,28) (1,29) (1,30)
+
+So "`parity_ring` and the with-idx tail are structurally incompatible" is
+**too strong**. 30 of 40 rings are clean under the tail. The previous greedy
+prune kept zero because it could only remove PLANNED entries — and 6 of the 10
+dirty rings are native, which `parity_ring_plan` cannot express. That is the
+lever `parity_ring_drop` adds.
+
+**Gate — flag-OFF bit-exactness (sha256 of the bundle list, 3 configs x
+{default, explicit False}), all 6 identical to the HEAD values:**
+
+| config | cycles | sha | scratch |
+|---|---|---|---|
+| 1006 ring mainline | 1006 | `f0b92c3ed3295e87` | 1533 |
+| ring-free | 1026 | `ae44f09e55b36054` | 1533 |
+| rings+pools(15,4) | 1036 | `1a7972d2a6dfad23` | 1525 |
+
+Trace recording is emission-neutral (`ListScheduler.put` only appends) and is
+NOT enabled on any flag-OFF config, so the searches pay nothing.
+
+### P7-TAR gate 2 — RINGED WITH-IDX EXISTS: 1036, correct, 25/40 rings
+
+Derivation = **drop-and-rebuild fixpoint**: build with the tail, run the
+liveness audit, add every implicated ring to `parity_ring_drop`, rebuild,
+repeat until the audit is clean. Dropping rings changes the schedule, so new
+violations surface — the fixpoint is what handles that (it is NOT a one-shot
+subtract).
+
+| iter | dropped | rings | cycles | violations | newly dirty |
+|---|---|---|---|---|---|
+| 0 | 0 | 40 | 1033 | 200 | (0,28)(1,16)(1,17)(1,18)(1,24)(1,25)(1,28)(1,29)(1,30)(1,31) |
+| 1 | 10 | 30 | 1033 | 96 | (0,19)(0,29)(1,9)(1,21)(1,22) |
+| 2 | 15 | 25 | 1036 | **0** | — |
+
+Converges in 3 iterations. Final drop set (15 rings):
+`((0,19),(0,28),(0,29),(1,9),(1,16),(1,17),(1,18),(1,21),(1,22),(1,24),(1,25),(1,28),(1,29),(1,30),(1,31))`
+
+**Correctness gate — one build, 10 seeds, values AND indices:**
+
+| build | rings | cycles | values | indices vs `ref_mem[2054:2310]` |
+|---|---|---|---|---|
+| ring-free + tail (prior baseline, re-measured) | 0 | **1048** | 10/10 | 10/10 |
+| **tail-aware ringed + tail** | **25** | **1036** | **10/10** | **10/10** |
+
+**With-idx eligible is 1036, not 1048.** The ring is worth **-12** under the
+tail (vs -20 without it), recovered from a strain the previous pass recorded as
+closed. Scratch unchanged at 1533; the tail still allocates nothing.
+
+Honest framing of the delta vs the brief's ~1022-1028 target: that target
+assumed most of the ring's 20 cycles were recoverable. 12 of 20 is what the
+liveness constraint actually permits at this coverage — 25/40 rings, and the
+6 native casualties are the epoch-1 blocks whose donors are exactly the `st`/`nv`
+the tail resurrects.
+
+### P7-TAR gate 3 — re-mining ON THE TAIL STREAM beats pruning: 1034, 31 rings
+
+Two derivations were run, both to a clean liveness fixpoint:
+
+| derivation | rings | cycles | values | indices |
+|---|---|---|---|---|
+| ring-free + tail (baseline) | 0 | 1048 | 10/10 | 10/10 |
+| **prune**: inherited 1006 plan, drop the dirty 15 | 25 | 1036 | 10/10 | 10/10 |
+| **re-mine**: empty plan, 6 native drops, 17 fresh entries | **31** | **1034** | **10/10** | **10/10** |
+
+Add-back on the prune result: all 15 dropped rings were tried individually for
+re-add; **every one goes dirty** (8-80 violations each). The 15-drop set is
+exactly minimal — pruning an inherited plan tops out at 25 rings.
+
+Re-mining wins because it mines availability from the **realized tail-inclusive
+trace**, so donors whose liveness the tail EXTENDS simply stop being available;
+no hand-built exclusion list was needed. That is the substantive correction to
+the previous pass's model: the fix is not "subtract the tail's registers from
+the donor pool", it is "mine on the stream you will actually run".
+
+Native-only skeleton (empty plan) is 14 rings / 1043; the 17 mined entries add
+the other 17 rings and -9 cycles.
+
+The `ring_liveness_assert` default (auto-ON for ring+tail) ran on the 1034 build
+and passed — the correctness gate and the assert agree.
+
+### P7-TAR FINAL — coverage converged; 1034 is the with-idx-eligible number
+
+Add-back and re-mine are both at a fixpoint, so 31/40 is the ceiling for the
+sound donor classes:
+* mine loop: a second mining pass on the clean 31-ring trace adds NOTHING;
+* prune variant: all 15 of its dropped rings go dirty on individual re-add.
+
+Donor candidate classes were deliberately NOT widened. `audit_ring_windows.py`
+restricts donors to structural classes whose reads cannot appear/disappear with
+schedule state (`emit_any` races read different addresses per encoding); that
+restriction is a soundness invariant and widening it is how the earlier (1,1)
+miscompare happened.
+
+**Final gates**
+* Flag-OFF bit-exact, 3 configs x {default, explicit False}, re-run after the
+  last edit: all 6 digests identical to HEAD (see gate 1 table).
+* `python3 tests/submission_tests.py` -> **Ran 9 tests, OK, CYCLES: 1006**.
+* `git diff --stat dev.py perf_takehome.py problem.py tests/` -> `dev.py | 108 +++`
+  only. **`perf_takehome.py` untouched.**
+* Ringed with-idx (31 rings): values 10/10, indices 10/10, **1034** cycles.
+* `tools/p7tar_remine.py` re-derives the plan from an EMPTY plan and reproduces
+  `tools/p7tar_best_plan_1034.json` byte-identically; `--verify` replays it with
+  the liveness assert at its auto-ON default and passes.
+
+**Ledger correction.** The prior section's "`parity_ring` and the with-idx tail
+are structurally incompatible, and pruning cannot fix it" is **withdrawn**. The
+prune genuinely could not fix it — but only because `parity_ring_plan` can only
+ADD, so a prune over the 20 planned entries can never remove the 6 NATIVE dirty
+rings, and the native rings are what made even `parity_ring_plan=()` miscompile.
+With a subtract lever and a re-mine on the realized stream, 30-31 of 40 rings
+are sound under the tail.
+
+| board number | before | after |
+|---|---|---|
+| with-idx eligible | 1048 | **1034** |
+| graded (values-only) artifact | 1006 | 1006 (untouched) |
+
+**status: done — awaiting review.** Doc: `docs/agent-wiki/p7-tail-aware-rings.md`
