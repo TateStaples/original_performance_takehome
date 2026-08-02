@@ -1803,3 +1803,34 @@ and free-shape MCMC hit an avalanche wall in front of. Next force
 multiplier: the Rust port of the per-pair bit-serial machinery (z3 runs
 560s/pair; native could be ~100x), enabling the 2,956-shape queue and the
 71 remaining pairs to be decided at scale.
+
+### P6-C RESULT (2026-08-02): the decider brief is REFUTED — and the queue is
+### provably unclosable by per-pair decision at feasible compute
+
+- **Bit-serial lift-and-prune: dead at depth 0.** Rung-1 survivor sets
+  measured at 2^78-2^117 (the first output bit reads all 64 bits of K1,C1);
+  pruning is exactly ideal 1 bit/sample (no structure to exploit); out_0 is
+  NONLINEAR in the constant bits (116-167/2000 additivity violations), so
+  affine-class compression cannot work either.
+- **The charter's premise was a misreading (driver's error): z3 refutations
+  take median 3.6s / mean 8.0s. The 560s wall is NON-TERMINATION on pairs
+  it never decides — no faster engine helps.** CNF/CDCL (Cadical) built,
+  4 controls pass, and it is 19-130x SLOWER than z3.
+- **Real multiplier found: the window theorem kills 46.9% of the queue's
+  2,871,468 (shape, s1, s2) instances in 5.6 seconds** (5.1e5 inst/sec vs
+  z3's 0.12/sec). But the projection for the rest is decisive: decidable
+  residual = 63 CPU-days; with timeouts = 16 CPU-years leaving 29.6%
+  undecided. **Per-pair decision can never close the queue.**
+- Grind refresh: 3 more sandwich9 pairs refuted -> **68 open, 0 found.**
+- Highest-EV next unit (P6-C's own ranking): recover P5-I3's 324
+  fail-transfer-on-technicality shapes — theorem coverage, not solver
+  engineering.
+
+**Strategic consequence.** "No 9-op form exists" is now UNPROVABLE at
+feasible compute (the queue cannot be closed), and no 9-op form has been
+found. The only engine that explores the non-decomposable space at all is
+free-shape stochastic search, which hit an avalanche wall — but P5-H's
+calibration showed window-replace + temperature-ladder moves DO recover
+realistic compressions when they exist. The remaining program: extend
+theorem mass-kills (cheap), and scale the stochastic engine with the
+tier-logging observability fix P6-B specified.
