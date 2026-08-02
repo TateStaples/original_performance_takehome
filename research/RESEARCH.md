@@ -1500,3 +1500,33 @@ launched (32 slices, 2-concurrent). P5-H resumed post-reset with the
 sandwich9 shape as its first restricted-MCMC campaign — z3 cannot decide
 that shape (424s and 10,800s both timeout at iter=0), so stochastic
 evidence is the only remaining probe of the most plausible 9-op shape.
+
+### P5-H RESULT (2026-08-02): STOKE built + calibrated; zero finds; two lemmas
+### make sandwich9 exactly attackable
+
+Infrastructure validated by planted controls: free-shape gate PASS (a
+planted 12-op re-fused to a validated 10-op in 150s after move/temperature
+tuning; two calibration finds validated at 10,065,992 vectors each).
+
+**Campaigns, all zero finds:**
+- **Transformation mode (the strongest negative): chains sat ON the real
+  11-op form with fusion + arbitrary-constant moves for 1.50B proposals —
+  no correct 10-op neighbor ever appeared.** First evidence covering the
+  arbitrary-constant space around the known form.
+- Round body (t2): 2.07B proposals, best error 179/1024 bits — the
+  avalanche wall; free-shape MCMC cannot descend below ~180.
+- sandwich9 restricted: 20.9B proposals, best-err 336 — but the planted
+  from-scratch gate plateaus at 335, so **this negative is existence-blind
+  (proven weak by its own control).** sandwich9 remains undecided by all
+  three tool classes: MITM cannot reach it, z3 times out (424s + 10,800s),
+  MCMC is existence-blind.
+
+**New exact tools:** (1) odd-multiplier lemma — myhash is bijective, so all
+sandwich9 K's must be odd (prunes 7/8 of K-space); (2) analytic back-half
+inversion (fixed back-half constants make the last madd+sigma invertible).
+
+**ACTIONS:** P5-I dispatched — bit-serial lift-and-prune exact solver for
+sandwich9 (madd triangularity + bounded shift-coupling => per-(s1,s2)
+refutation or discovery, 961 independent pairs; sound refutation, full
+validation on any survivor). Driver grinding 10 more s9 basin-hopping
+slices in background. Fleet tier 2 (g=sub/rsub) running.

@@ -291,6 +291,8 @@ enum Campaign {
     T1,
     T2,
     T3,
+    S9,    // sandwich9 shape-restricted: does madd/sigma/madd/sigma/madd == myhash?
+    S9Cal, // planted sandwich9 recovery (calibration for the s9 machinery)
 }
 
 impl Campaign {
@@ -300,11 +302,13 @@ impl Campaign {
             Campaign::T1 => "t1",
             Campaign::T2 => "t2",
             Campaign::T3 => "t3",
+            Campaign::S9 => "s9",
+            Campaign::S9Cal => "s9cal",
         }
     }
     fn ninputs(self) -> usize {
         match self {
-            Campaign::Cal | Campaign::T1 => 1,
+            Campaign::Cal | Campaign::T1 | Campaign::S9 | Campaign::S9Cal => 1,
             Campaign::T2 => 2,
             Campaign::T3 => 3,
         }
@@ -316,9 +320,10 @@ impl Campaign {
             Campaign::Cal => hashseg::sigma16(hashseg::stage4(hashseg::f23(
                 hashseg::stage1(hashseg::stage0(x[0])),
             ))),
-            Campaign::T1 => myhash(x[0]),
+            Campaign::T1 | Campaign::S9 => myhash(x[0]),
             Campaign::T2 => myhash(x[0] ^ x[1]),
             Campaign::T3 => myhash(myhash(x[0] ^ x[1]) ^ x[2]),
+            Campaign::S9Cal => s9_eval(&S9_PLANTED, x[0]),
         }
     }
 }
@@ -392,6 +397,8 @@ fn real_hash_ops(src: usize, rb: usize) -> Vec<Op> {
 fn seed_prog(camp: Campaign) -> Prog {
     let ni = camp.ninputs();
     match camp {
+        // s9 campaigns have no known-correct seed; s9_chain never calls this.
+        Campaign::S9 | Campaign::S9Cal => s9_prog(&S9_PLANTED),
         Campaign::T1 => Prog { ops: real_hash_ops(0, 1), consts: REAL_CONSTS, ninputs: ni },
         Campaign::T2 => {
             let mut ops = vec![Op {
@@ -785,6 +792,475 @@ fn undo_move(p: &mut Prog, u: Undo) {
     }
 }
 
+// ---------------- sandwich9: shape-restricted campaign ----------------
+//
+// Skeleton (9 ops, the single most plausible 9-op shape, undecided by z3):
+//   b   = x*K1 + C1                      (madd)
+//   c   = b ^ M1 ^ (b >> S1)            (sigma1: shr, xor-const, xor)
+//   e   = c*K2 + C2                      (madd)
+//   w   = e ^ M2 ^ (e >> S2)            (sigma2)
+//   out = w*K3 + C3                      (madd)
+//
+// Lemma (prunes 7/8 of K-space): myhash is a bijection (all its stage
+// multipliers 2^s+1 are odd; xor-shift stages are bijective), so any
+// correct sandwich9 is a bijection, so K1,K2,K3 are all ODD (an even
+// multiplier makes its madd non-injective, hence the composition too).
+//
+// Cost: since K3 is odd and sigma2 is bijective, the back half inverts
+// analytically: w = (T - C3)*K3^{-1}, e_want = xorshift_inv(w ^ M2, S2).
+// cost = sum hamming( e_fwd(x), e_want(myhash(x)) ) — a MITM-style
+// midpoint objective that halves the avalanche depth on each side.
+
+#[derive(Clone, Copy, Debug)]
+struct S9 {
+    k: [u32; 3], // madd multipliers (kept odd)
+    c: [u32; 3], // madd addends
+    m: [u32; 2], // sigma xor masks
+    s: [u32; 2], // sigma shifts, 1..=31
+}
+
+/// Planted parameters for the s9cal recovery gate (arbitrary, mixing well).
+const S9_PLANTED: S9 = S9 {
+    k: [0xA5A5_A5A5, 0x30D0_4A85, 0x0001_9661],
+    c: [0x1234_5678, 0x9E37_79B9, 0x7F4A_7C15],
+    m: [0xDEAD_BEEF, 0xCAFE_BABE],
+    s: [13, 7],
+};
+
+#[inline(always)]
+fn s9_fwd_mid(p: &S9, x: u32) -> u32 {
+    let b = x.wrapping_mul(p.k[0]).wrapping_add(p.c[0]);
+    let c = b ^ p.m[0] ^ (b >> p.s[0]);
+    c.wrapping_mul(p.k[1]).wrapping_add(p.c[1])
+}
+
+fn s9_eval(p: &S9, x: u32) -> u32 {
+    let e = s9_fwd_mid(p, x);
+    let w = e ^ p.m[1] ^ (e >> p.s[1]);
+    w.wrapping_mul(p.k[2]).wrapping_add(p.c[2])
+}
+
+/// Inverse of odd k mod 2^32 (Newton–Hensel; x0=k is correct mod 8).
+fn mul_inv_odd(k: u32) -> u32 {
+    let mut x = k;
+    for _ in 0..4 {
+        x = x.wrapping_mul(2u32.wrapping_sub(k.wrapping_mul(x)));
+    }
+    x
+}
+
+/// Solve e ^ (e >> s) = y  (s in 1..=31).
+#[inline(always)]
+fn xorshift_inv(y: u32, s: u32) -> u32 {
+    let mut e = y;
+    let mut n = s;
+    while n < 32 {
+        e = y ^ (e >> s);
+        n += s;
+    }
+    e
+}
+
+#[inline(always)]
+fn s9_bwd_mid(p: &S9, t: u32, k3inv: u32) -> u32 {
+    let w = t.wrapping_sub(p.c[2]).wrapping_mul(k3inv);
+    xorshift_inv(w ^ p.m[1], p.s[1])
+}
+
+fn s9_err(p: &S9, battery: &[(u32, u32)], cutoff: u32) -> u32 {
+    let k3inv = mul_inv_odd(p.k[2]);
+    let mut e = 0u32;
+    for &(x, t) in battery {
+        e += (s9_fwd_mid(p, x) ^ s9_bwd_mid(p, t, k3inv)).count_ones();
+        if e > cutoff {
+            return u32::MAX;
+        }
+    }
+    e
+}
+
+// Odd multipliers worth proposing (real ones, 2^j+-1 family, classic mixers).
+const S9_KTABLE: [u32; 20] = [
+    3, 5, 9, 17, 33, 257, 4097, 65537, 36873, 135201, 297, 0x9E37_79B9,
+    0x85EB_CA6B, 0xC2B2_AE35, 0x2545_F491, 0xFF51_AFD7, 0xC4CE_B9FE, 0x0001_0001,
+    0x0100_0001, 0x1000_1001,
+];
+const S9_CTABLE: [u32; 14] = [
+    0,
+    1,
+    0x7ED5_5D16,
+    0xC761_C23C,
+    0x1656_67B1,
+    0xD3A2_646C,
+    0xFD70_46C5,
+    0xB55A_4F09,
+    0xE9F8_CC1D,
+    0xACCF_6200,
+    0x8000_0000,
+    0x8000_8000,
+    0xFFFF_FFFF,
+    0x5555_5555,
+];
+
+fn s9_move(p: &mut S9, rng: &mut Rng) {
+    let idx = rng.below(10);
+    match idx {
+        0..=2 => {
+            let v = p.k[idx];
+            p.k[idx] = (match rng.below(6) {
+                0 => v ^ (1 << (1 + rng.below(31))), // bit flip (never bit0)
+                1 => rng.u32(),
+                2 => v.wrapping_add(1 << (1 + rng.below(31))),
+                3 => v.wrapping_sub(1 << (1 + rng.below(31))),
+                4 => S9_KTABLE[rng.below(S9_KTABLE.len())],
+                _ => (1u32 << (1 + rng.below(31))).wrapping_add(1), // 2^j+1
+            }) | 1;
+        }
+        3..=5 => {
+            let i = idx - 3;
+            let v = p.c[i];
+            p.c[i] = match rng.below(6) {
+                0 => v ^ (1 << rng.below(32)),
+                1 => rng.u32(),
+                2 => v.wrapping_add(1),
+                3 => v.wrapping_sub(1),
+                4 => v.wrapping_add(1 << rng.below(32)),
+                _ => S9_CTABLE[rng.below(S9_CTABLE.len())],
+            };
+        }
+        6 | 7 => {
+            let i = idx - 6;
+            let v = p.m[i];
+            p.m[i] = match rng.below(6) {
+                0 => v ^ (1 << rng.below(32)),
+                1 => rng.u32(),
+                2 => v.wrapping_add(1),
+                3 => v.wrapping_sub(1),
+                4 => v ^ (3 << rng.below(31)), // adjacent-bit-pair flip
+                _ => S9_CTABLE[rng.below(S9_CTABLE.len())],
+            };
+        }
+        _ => {
+            let i = idx - 8;
+            p.s[i] = match rng.below(4) {
+                0 => 1 + rng.below(31) as u32,
+                1 => (p.s[i] + 1).min(31),
+                2 => p.s[i].saturating_sub(1).max(1),
+                _ => [3u32, 5, 9, 12, 16, 19][rng.below(6)],
+            };
+        }
+    }
+}
+
+/// Single-bit perturbation of param `param` (0..3 k, 3..6 c, 6..8 m, 8..10 s).
+/// None if the flip is invalid (k bit0 must stay set; s must stay 1..=31).
+fn s9_flip(p: &S9, param: usize, bit: usize) -> Option<S9> {
+    let mut q = *p;
+    match param {
+        0..=2 => {
+            if bit == 0 {
+                return None;
+            }
+            q.k[param] ^= 1 << bit;
+        }
+        3..=5 => q.c[param - 3] ^= 1 << bit,
+        6 | 7 => q.m[param - 6] ^= 1 << bit,
+        _ => {
+            if bit >= 5 {
+                return None;
+            }
+            let v = q.s[param - 8] ^ (1 << bit);
+            if v == 0 || v > 31 {
+                return None;
+            }
+            q.s[param - 8] = v;
+        }
+    }
+    Some(q)
+}
+
+/// Deterministic endgame polish: MCMC locks most params but stalls on small
+/// coordinated low-bit residues (measured: 8/10 exact with a C2+2/M2^6
+/// barrier). Steepest-descent single flips -> all-pairs -> low-bit triples
+/// over c/m params, looping until fixpoint. Returns the polished cost.
+fn s9_polish(cur: &mut S9, battery: &[(u32, u32)]) -> u32 {
+    let mut cost = s9_err(cur, battery, u32::MAX);
+    if cost == 0 {
+        return 0;
+    }
+    loop {
+        let mut improved = false;
+        // phase 1: single flips, first-improvement sweeps
+        for param in 0..10 {
+            for bit in 0..32 {
+                if let Some(q) = s9_flip(cur, param, bit) {
+                    let c2 = s9_err(&q, battery, cost);
+                    if c2 < cost {
+                        *cur = q;
+                        cost = c2;
+                        improved = true;
+                        if cost == 0 {
+                            return 0;
+                        }
+                    }
+                }
+            }
+        }
+        if improved {
+            continue;
+        }
+        // phase 2: all pairs of single-bit flips
+        'pairs: for p1 in 0..10 {
+            for b1 in 0..32 {
+                let Some(q1) = s9_flip(cur, p1, b1) else { continue };
+                for p2 in p1..10 {
+                    for b2 in 0..32 {
+                        if p2 == p1 && b2 <= b1 {
+                            continue;
+                        }
+                        let Some(q2) = s9_flip(&q1, p2, b2) else { continue };
+                        let c2 = s9_err(&q2, battery, cost);
+                        if c2 < cost {
+                            *cur = q2;
+                            cost = c2;
+                            improved = true;
+                            if cost == 0 {
+                                return 0;
+                            }
+                            break 'pairs;
+                        }
+                    }
+                }
+            }
+        }
+        if improved {
+            continue;
+        }
+        // phase 3: triples over the low 8 bits of c/m params (3..8)
+        let low: Vec<(usize, usize)> =
+            (3..8).flat_map(|p| (0..8).map(move |b| (p, b))).collect();
+        'triples: for i in 0..low.len() {
+            let Some(q1) = s9_flip(cur, low[i].0, low[i].1) else { continue };
+            for j in i + 1..low.len() {
+                let Some(q2) = s9_flip(&q1, low[j].0, low[j].1) else { continue };
+                for l in j + 1..low.len() {
+                    let Some(q3) = s9_flip(&q2, low[l].0, low[l].1) else { continue };
+                    let c2 = s9_err(&q3, battery, cost);
+                    if c2 < cost {
+                        *cur = q3;
+                        cost = c2;
+                        improved = true;
+                        if cost == 0 {
+                            return 0;
+                        }
+                        break 'triples;
+                    }
+                }
+            }
+        }
+        if !improved {
+            return cost;
+        }
+    }
+}
+
+fn s9_random(rng: &mut Rng, flavored: bool) -> S9 {
+    if flavored {
+        // real-hash-flavored start: draw from the tables with noise
+        S9 {
+            k: [
+                S9_KTABLE[rng.below(S9_KTABLE.len())] | 1,
+                S9_KTABLE[rng.below(S9_KTABLE.len())] | 1,
+                S9_KTABLE[rng.below(S9_KTABLE.len())] | 1,
+            ],
+            c: [
+                S9_CTABLE[rng.below(S9_CTABLE.len())],
+                S9_CTABLE[rng.below(S9_CTABLE.len())],
+                S9_CTABLE[rng.below(S9_CTABLE.len())],
+            ],
+            m: [
+                S9_CTABLE[rng.below(S9_CTABLE.len())],
+                S9_CTABLE[rng.below(S9_CTABLE.len())],
+            ],
+            s: [[3u32, 5, 9, 12, 16, 19][rng.below(6)], [3u32, 5, 9, 12, 16, 19][rng.below(6)]],
+        }
+    } else {
+        S9 {
+            k: [rng.u32() | 1, rng.u32() | 1, rng.u32() | 1],
+            c: [rng.u32(), rng.u32(), rng.u32()],
+            m: [rng.u32(), rng.u32()],
+            s: [1 + rng.below(31) as u32, 1 + rng.below(31) as u32],
+        }
+    }
+}
+
+/// Materialize the sandwich as a `Prog` (for the standard validate cascade
+/// and for reporting in the common op-listing format).
+fn s9_prog(p: &S9) -> Prog {
+    let r = |i: usize| Operand::reg(i);
+    let c = |i: usize| Operand::konst(i);
+    let consts: [u32; NCONSTS] = [
+        p.k[0], p.c[0], p.s[0], p.m[0], p.k[1], p.c[1], p.s[1], p.m[1], p.k[2], p.c[2], 0, 0,
+    ];
+    let ops = vec![
+        Op { opc: Opc::Madd, dst: 1, a: r(0), b: c(0), c: c(1) },
+        Op { opc: Opc::Shr, dst: 2, a: r(1), b: c(2), c: c(0) },
+        Op { opc: Opc::Xor, dst: 3, a: r(1), b: c(3), c: c(0) },
+        Op { opc: Opc::Xor, dst: 1, a: r(3), b: r(2), c: c(0) },
+        Op { opc: Opc::Madd, dst: 2, a: r(1), b: c(4), c: c(5) },
+        Op { opc: Opc::Shr, dst: 3, a: r(2), b: c(6), c: c(0) },
+        Op { opc: Opc::Xor, dst: 4, a: r(2), b: c(7), c: c(0) },
+        Op { opc: Opc::Xor, dst: 2, a: r(4), b: r(3), c: c(0) },
+        Op { opc: Opc::Madd, dst: 1, a: r(2), b: c(8), c: c(9) },
+    ];
+    Prog { ops, consts, ninputs: 1 }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn s9_chain(
+    id: usize,
+    camp: Campaign, // S9 or S9Cal
+    seed: u64,
+    temp: f64,
+    deadline: Instant,
+    restart_after: u64,
+    shared: &Shared,
+) {
+    let mut rng = Rng::new(seed ^ (id as u64).wrapping_mul(0xA24BAED4963EE407));
+    // battery of (x, target) pairs: 8 edges + 24 chain-random
+    let mut battery: Vec<(u32, u32)> = {
+        let mut b: Vec<(u32, u32)> = make_battery(camp, 0, 42, true)
+            .into_iter()
+            .map(|(inp, t)| (inp[0], t))
+            .take(8)
+            .collect();
+        b.extend(
+            make_battery(camp, 24, 2000 + id as u64, false)
+                .into_iter()
+                .map(|(inp, t)| (inp[0], t)),
+        );
+        b
+    };
+    // S9Cal basin measurement: chains id%4 = 0/1/2 start at planted+2/6/12
+    // param-kicks, id%4=3 from scratch. S9 (real target) has no planted
+    // point: alternate flavored/random starts.
+    let s9cal_start = |rng: &mut Rng, id: usize| -> S9 {
+        if camp == Campaign::S9Cal && id % 4 < 3 {
+            let mut p = S9_PLANTED;
+            for _ in 0..[2usize, 6, 12][id % 4] {
+                s9_move(&mut p, rng);
+            }
+            p
+        } else {
+            let fl = rng.below(2) == 0;
+            s9_random(rng, fl)
+        }
+    };
+    let mut cur = s9cal_start(&mut rng, id);
+    let mut cur_cost = s9_err(&cur, &battery, u32::MAX);
+    let mut local_best = cur_cost;
+    let mut polished_at = u32::MAX;
+    let mut since_improve = 0u64;
+    let mut iters = 0u64;
+    let max_uphill = (temp * 30.0) as u32 + 2;
+    let mut validated_keys: std::collections::HashSet<String> = Default::default();
+
+    loop {
+        iters += 1;
+        if iters % 8192 == 0 {
+            shared.proposals.fetch_add(8192, Ordering::Relaxed);
+            if Instant::now() >= deadline || shared.stop.load(Ordering::Relaxed) {
+                return;
+            }
+        }
+        let saved = cur;
+        s9_move(&mut cur, &mut rng);
+        if rng.below(8) == 0 {
+            s9_move(&mut cur, &mut rng); // double-kick: cross 2-param barriers
+        }
+        let cutoff = cur_cost.saturating_add(max_uphill);
+        let new_cost = s9_err(&cur, &battery, cutoff);
+        let accept = new_cost <= cur_cost
+            || (new_cost != u32::MAX
+                && rng.f64() < (-((new_cost - cur_cost) as f64) / temp).exp());
+        if !accept {
+            cur = saved;
+        } else {
+            cur_cost = new_cost;
+            if cur_cost < local_best {
+                local_best = cur_cost;
+                since_improve = 0;
+            } else {
+                since_improve += 1;
+            }
+        }
+        // endgame polish: MCMC stalls on coordinated low-bit residues; the
+        // deterministic flip search closes them. Guarded so each descent
+        // only pays for polish when it has meaningfully improved.
+        if cur_cost < 150 && cur_cost + 10 < polished_at {
+            cur_cost = s9_polish(&mut cur, &battery);
+            polished_at = cur_cost;
+            if cur_cost < local_best {
+                local_best = cur_cost;
+                since_improve = 0;
+            }
+        }
+        if local_best == cur_cost && since_improve == 0 {
+            let milli = (cur_cost as u64) * 1000;
+            let prev = shared.best_milli.fetch_min(milli, Ordering::Relaxed);
+            if milli < prev {
+                let mut bp = shared.best_prog.lock().unwrap();
+                let listing = format!("{:?}\n", cur);
+                if bp.as_ref().map(|(c2, _, _, _)| (cur_cost as f64) < *c2).unwrap_or(true) {
+                    *bp = Some((cur_cost as f64, cur_cost, 9, listing));
+                }
+            }
+        }
+        if cur_cost == 0 {
+            let prog = s9_prog(&cur);
+            let key = prog.serialize();
+            if !validated_keys.contains(&key) {
+                validated_keys.insert(key.clone());
+                shared.zero_hits.fetch_add(1, Ordering::Relaxed);
+                match validate(&prog, camp) {
+                    Ok(nvec) => {
+                        let mut finds = shared.finds.lock().unwrap();
+                        let listing = format!("params: {:?}\n{}", cur, prog.show());
+                        if !finds.iter().any(|(k2, _, _, _)| *k2 == key) {
+                            println!(
+                                "\nFIND camp={} nonnop=9 vectors={}\n{}",
+                                camp.name(),
+                                nvec,
+                                listing
+                            );
+                            finds.push((key, listing, nvec, 9));
+                        }
+                        drop(finds);
+                        shared.stop.store(true, Ordering::Relaxed);
+                        return;
+                    }
+                    Err(cex) => {
+                        if battery.len() < 96 {
+                            let want = camp.target(&cex);
+                            battery.push((cex[0], want));
+                        }
+                        cur_cost = s9_err(&cur, &battery, u32::MAX);
+                        local_best = local_best.max(cur_cost);
+                        polished_at = u32::MAX;
+                    }
+                }
+            }
+        }
+        if since_improve >= restart_after {
+            cur = s9cal_start(&mut rng, id);
+            cur_cost = s9_err(&cur, &battery, u32::MAX);
+            local_best = cur_cost;
+            since_improve = 0;
+            polished_at = u32::MAX;
+        }
+    }
+}
+
 // ---------------- driver ----------------
 
 struct Shared {
@@ -944,6 +1420,65 @@ fn chain(
     }
 }
 
+/// Direct verification of the endgame polish: does the deterministic flip
+/// search close (a) the exact measured gate-2 barrier (C2+2, M2^6) and
+/// (b) planted + k random s9_move kicks, k = 1..4? Prints per-trial results.
+fn s9_polish_test() {
+    let battery: Vec<(u32, u32)> = make_battery(Campaign::S9Cal, 0, 42, true)
+        .into_iter()
+        .map(|(i, t)| (i[0], t))
+        .take(8)
+        .chain(
+            make_battery(Campaign::S9Cal, 24, 3000, false)
+                .into_iter()
+                .map(|(i, t)| (i[0], t)),
+        )
+        .collect();
+    // (a) exact gate-2 residual
+    let mut p = S9_PLANTED;
+    p.c[1] = p.c[1].wrapping_add(2);
+    p.m[1] ^= 6;
+    let c0 = s9_err(&p, &battery, u32::MAX);
+    let t0 = Instant::now();
+    let c1 = s9_polish(&mut p, &battery);
+    println!(
+        "polishtest gate2-residual: cost {} -> {} in {:.2}s {}",
+        c0,
+        c1,
+        t0.elapsed().as_secs_f64(),
+        if c1 == 0 { "CLOSED" } else { "OPEN" }
+    );
+    // (b) random kick trials
+    let mut rng = Rng::new(999);
+    let mut closed = [0u32; 5];
+    let mut total = [0u32; 5];
+    for trial in 0..40 {
+        let kicks = 1 + trial % 4;
+        let mut p = S9_PLANTED;
+        for _ in 0..kicks {
+            s9_move(&mut p, &mut rng);
+        }
+        let c0 = s9_err(&p, &battery, u32::MAX);
+        let t0 = Instant::now();
+        let c1 = s9_polish(&mut p, &battery);
+        total[kicks] += 1;
+        if c1 == 0 {
+            closed[kicks] += 1;
+        }
+        println!(
+            "polishtest kicks={} trial={} cost {} -> {} ({:.2}s)",
+            kicks,
+            trial,
+            c0,
+            c1,
+            t0.elapsed().as_secs_f64()
+        );
+    }
+    for k in 1..5 {
+        println!("polishtest summary kicks={}: {}/{} closed", k, closed[k], total[k]);
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let mut camp = Campaign::Cal;
@@ -964,6 +1499,12 @@ fn main() {
             "t1" => camp = Campaign::T1,
             "t2" => camp = Campaign::T2,
             "t3" => camp = Campaign::T3,
+            "s9" => camp = Campaign::S9,
+            "s9cal" => camp = Campaign::S9Cal,
+            "s9polishtest" => {
+                s9_polish_test();
+                return;
+            }
             "--slots" => {
                 i += 1;
                 slots = args[i].parse().unwrap();
@@ -1015,6 +1556,17 @@ fn main() {
         let b = make_battery(c, 4096, 7, true);
         assert_eq!(err_bits(&p, &b, u32::MAX), 0, "seed program wrong for {}", c.name());
     }
+    // sanity: s9 midpoint algebra (fwd/bwd inversion) + prog materialization
+    {
+        let b = make_battery(Campaign::S9Cal, 4096, 7, true);
+        let bat: Vec<(u32, u32)> = b.iter().map(|(i, t)| (i[0], *t)).collect();
+        assert_eq!(s9_err(&S9_PLANTED, &bat, u32::MAX), 0, "s9 midpoint algebra broken");
+        let p = s9_prog(&S9_PLANTED);
+        assert_eq!(err_bits(&p, &b, u32::MAX), 0, "s9_prog materialization broken");
+        for k in [1u32, 3, 4097, 0xA5A5_A5A5, 0xFF51_AFD7] {
+            assert_eq!(k.wrapping_mul(mul_inv_odd(k)), 1, "mul_inv_odd broken");
+        }
+    }
 
     let shared = Shared {
         best_milli: AtomicU64::new(u64::MAX),
@@ -1036,19 +1588,25 @@ fn main() {
             // hot chains explore. id%4==0 is both coldest and seed-started.
             let temp_i = temp * [0.25, 0.5, 1.0, 2.0][id % 4];
             s.spawn(move || {
-                chain(
-                    id,
-                    camp,
-                    slots,
-                    seed.wrapping_mul(0x517C_C1B7_2722_0A95).wrapping_add(id as u64 + 1),
-                    temp_i,
-                    opw,
-                    max_ops_report,
-                    validate_max,
-                    deadline,
-                    restart_after,
-                    shared,
-                );
+                let chain_seed =
+                    seed.wrapping_mul(0x517C_C1B7_2722_0A95).wrapping_add(id as u64 + 1);
+                if camp == Campaign::S9 || camp == Campaign::S9Cal {
+                    s9_chain(id, camp, chain_seed, temp_i, deadline, restart_after, shared);
+                } else {
+                    chain(
+                        id,
+                        camp,
+                        slots,
+                        chain_seed,
+                        temp_i,
+                        opw,
+                        max_ops_report,
+                        validate_max,
+                        deadline,
+                        restart_after,
+                        shared,
+                    );
+                }
             });
         }
         // progress ticker
