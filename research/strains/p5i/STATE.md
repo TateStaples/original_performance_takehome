@@ -1083,3 +1083,16 @@ CHECKPOINT pair=(17,28) verdict=REFUTED rung=k8 iter=0 solve=3.2s total=3.2s rt=
 CHECKPOINT pair=(18,27) verdict=REFUTED rung=k8 iter=0 solve=3.4s total=3.4s rt=600s
 CHECKPOINT pair=(19,26) verdict=REFUTED rung=k8 iter=0 solve=8.6s total=8.6s rt=600s
 CHECKPOINT pair=(20,25) verdict=OPEN rung=k8 iter=0 timeout=600s reason=timeout rt=600s
+CHECKPOINT pair=(21,24) verdict=OPEN rung=k8 iter=0 timeout=600s reason=timeout rt=600s
+CHECKPOINT pair=(22,23) verdict=OPEN rung=k8 iter=0 timeout=600s reason=timeout rt=600s
+CHECKPOINT pair=(23,10) verdict=OPEN rung=k8 iter=0 timeout=600s reason=timeout rt=600s
+CHECKPOINT pair=(23,22) verdict=OPEN rung=k8 iter=0 timeout=600s reason=timeout rt=600s
+CHECKPOINT pair=(24,11) verdict=OPEN rung=k8 iter=0 timeout=600s reason=timeout rt=600s
+CHECKPOINT pair=(24,21) verdict=OPEN rung=k8 iter=0 timeout=600s reason=timeout rt=600s
+CHECKPOINT pair=(25,12) verdict=REFUTED rung=k8 iter=0 solve=284.9s total=284.9s rt=600s
+CHECKPOINT pair=(25,20) verdict=OPEN rung=k8 iter=0 timeout=600s reason=timeout rt=600s
+CHECKPOINT pair=(26,13) verdict=REFUTED rung=k8 iter=0 solve=87.8s total=87.8s rt=600s
+CHECKPOINT pair=(26,19) verdict=OPEN rung=k8 iter=0 timeout=600s reason=timeout rt=600s
+CHECKPOINT pair=(27,14) verdict=REFUTED rung=k8 iter=0 solve=72.2s total=72.2s rt=600s
+CHECKPOINT pair=(27,18) verdict=REFUTED rung=k8 iter=0 solve=40.4s total=40.4s rt=600s
+CHECKPOINT pair=(28,15) verdict=REFUTED rung=k8 iter=0 solve=3.7s total=3.7s rt=600s

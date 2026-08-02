@@ -1002,3 +1002,65 @@ COMBO t2 s1=20 s2=16 verdict=UNSAT [iter=0 solve=136.4s] time=136.4s
 SPLIT-SUMMARY t2 pair=[2, 4] s1=[20,21) s2=[16,17) oddK=[0, 5] status=UNSAT-ALL-COMBOS wall=136s
 COMBO t2 s1=27 s2=16 verdict=UNSAT [iter=0 solve=2.7s] time=2.7s
 SPLIT-SUMMARY t2 pair=[2, 4] s1=[27,28) s2=[16,17) oddK=[0, 5] status=UNSAT-ALL-COMBOS wall=3s
+COMBO t2 s1=25 s2=7 verdict=TIMEOUT [iter=0 solve=600.1s reason=timeout] time=600.1s
+SPLIT-SUMMARY t2 pair=[2, 4] s1=[25,26) s2=[7,8) oddK=[0, 5] status=OPEN(1) wall=600s
+COMBO t2 s1=27 s2=8 verdict=TIMEOUT [iter=0 solve=601.1s reason=timeout] time=601.1s
+SPLIT-SUMMARY t2 pair=[2, 4] s1=[27,28) s2=[8,9) oddK=[0, 5] status=OPEN(1) wall=601s
+COMBO t2 s1=27 s2=26 verdict=TIMEOUT [iter=0 solve=600.1s reason=timeout] time=600.1s
+SPLIT-SUMMARY t2 pair=[2, 4] s1=[27,28) s2=[26,27) oddK=[0, 5] status=OPEN(1) wall=600s
+COMBO t2 s1=28 s2=7 verdict=TIMEOUT [iter=0 solve=600.1s reason=timeout] time=600.1s
+SPLIT-SUMMARY t2 pair=[2, 4] s1=[28,29) s2=[7,8) oddK=[0, 5] status=OPEN(1) wall=600s
+COMBO t2 s1=28 s2=18 verdict=UNSAT [iter=0 solve=5.0s] time=5.0s
+SPLIT-SUMMARY t2 pair=[2, 4] s1=[28,29) s2=[18,19) oddK=[0, 5] status=UNSAT-ALL-COMBOS wall=5s
+COMBO t2 s1=28 s2=8 verdict=TIMEOUT [iter=0 solve=600.1s reason=timeout] time=600.1s
+SPLIT-SUMMARY t2 pair=[2, 4] s1=[28,29) s2=[8,9) oddK=[0, 5] status=OPEN(1) wall=600s
+COMBO t2 s1=29 s2=7 verdict=UNSAT [iter=0 solve=3.1s] time=3.1s
+SPLIT-SUMMARY t2 pair=[2, 4] s1=[29,30) s2=[7,8) oddK=[0, 5] status=UNSAT-ALL-COMBOS wall=3s
+COMBO t2 s1=28 s2=9 verdict=TIMEOUT [iter=0 solve=601.5s reason=timeout] time=601.5s
+SPLIT-SUMMARY t2 pair=[2, 4] s1=[28,29) s2=[9,10) oddK=[0, 5] status=OPEN(1) wall=601s
+COMBO t2 s1=29 s2=2 verdict=TIMEOUT [iter=0 solve=601.2s reason=timeout] time=601.2s
+SPLIT-SUMMARY t2 pair=[2, 4] s1=[29,30) s2=[2,3) oddK=[0, 5] status=OPEN(1) wall=601s
+COMBO t2 s1=29 s2=21 verdict=UNSAT [iter=0 solve=3.5s] time=3.5s
+SPLIT-SUMMARY t2 pair=[2, 4] s1=[29,30) s2=[21,22) oddK=[0, 5] status=UNSAT-ALL-COMBOS wall=4s
+COMBO t2 s1=29 s2=8 verdict=TIMEOUT [iter=0 solve=600.1s reason=timeout] time=600.1s
+SPLIT-SUMMARY t2 pair=[2, 4] s1=[29,30) s2=[8,9) oddK=[0, 5] status=OPEN(1) wall=600s
+COMBO t2 s1=29 s2=26 verdict=UNSAT [iter=0 solve=46.9s] time=46.9s
+SPLIT-SUMMARY t2 pair=[2, 4] s1=[29,30) s2=[26,27) oddK=[0, 5] status=UNSAT-ALL-COMBOS wall=47s
+COMBO t2 s1=30 s2=1 verdict=UNSAT [iter=0 solve=12.8s] time=12.8s
+SPLIT-SUMMARY t2 pair=[2, 4] s1=[30,31) s2=[1,2) oddK=[0, 5] status=UNSAT-ALL-COMBOS wall=13s
+COMBO t2 s1=29 s2=9 verdict=TIMEOUT [iter=0 solve=600.1s reason=timeout] time=600.1s
+SPLIT-SUMMARY t2 pair=[2, 4] s1=[29,30) s2=[9,10) oddK=[0, 5] status=OPEN(1) wall=600s
+COMBO t2 s1=30 s2=7 verdict=UNSAT [iter=0 solve=3.1s] time=3.1s
+SPLIT-SUMMARY t2 pair=[2, 4] s1=[30,31) s2=[7,8) oddK=[0, 5] status=UNSAT-ALL-COMBOS wall=3s
+COMBO t2 s1=30 s2=11 verdict=UNSAT [iter=0 solve=2.9s] time=2.9s
+SPLIT-SUMMARY t2 pair=[2, 4] s1=[30,31) s2=[11,12) oddK=[0, 5] status=UNSAT-ALL-COMBOS wall=3s
+COMBO t2 s1=30 s2=2 verdict=UNSAT [iter=0 solve=86.0s] time=86.0s
+SPLIT-SUMMARY t2 pair=[2, 4] s1=[30,31) s2=[2,3) oddK=[0, 5] status=UNSAT-ALL-COMBOS wall=86s
+COMBO t2 s1=30 s2=12 verdict=UNSAT [iter=0 solve=59.3s] time=59.3s
+SPLIT-SUMMARY t2 pair=[2, 4] s1=[30,31) s2=[12,13) oddK=[0, 5] status=UNSAT-ALL-COMBOS wall=59s
+COMBO t2 s1=30 s2=20 verdict=UNSAT [iter=0 solve=4.1s] time=4.1s
+SPLIT-SUMMARY t2 pair=[2, 4] s1=[30,31) s2=[20,21) oddK=[0, 5] status=UNSAT-ALL-COMBOS wall=4s
+COMBO t2 s1=29 s2=28 verdict=UNSAT [iter=0 solve=155.5s] time=155.5s
+SPLIT-SUMMARY t2 pair=[2, 4] s1=[29,30) s2=[28,29) oddK=[0, 5] status=UNSAT-ALL-COMBOS wall=156s
+COMBO t2 s1=30 s2=28 verdict=UNSAT [iter=0 solve=3.0s] time=3.0s
+SPLIT-SUMMARY t2 pair=[2, 4] s1=[30,31) s2=[28,29) oddK=[0, 5] status=UNSAT-ALL-COMBOS wall=3s
+COMBO t2 s1=30 s2=21 verdict=UNSAT [iter=0 solve=16.1s] time=16.1s
+SPLIT-SUMMARY t2 pair=[2, 4] s1=[30,31) s2=[21,22) oddK=[0, 5] status=UNSAT-ALL-COMBOS wall=16s
+COMBO t2 s1=30 s2=15 verdict=TIMEOUT [iter=0 solve=600.1s reason=timeout] time=600.1s
+SPLIT-SUMMARY t2 pair=[2, 4] s1=[30,31) s2=[15,16) oddK=[0, 5] status=OPEN(1) wall=600s
+COMBO t2 s1=31 s2=4 verdict=TIMEOUT [iter=0 solve=600.1s reason=timeout] time=600.1s
+SPLIT-SUMMARY t2 pair=[2, 4] s1=[31,32) s2=[4,5) oddK=[0, 5] status=OPEN(1) wall=600s
+COMBO t2 s1=31 s2=5 verdict=TIMEOUT [iter=0 solve=601.2s reason=timeout] time=601.2s
+SPLIT-SUMMARY t2 pair=[2, 4] s1=[31,32) s2=[5,6) oddK=[0, 5] status=OPEN(1) wall=601s
+COMBO t2 s1=31 s2=6 verdict=TIMEOUT [iter=0 solve=601.3s reason=timeout] time=601.3s
+SPLIT-SUMMARY t2 pair=[2, 4] s1=[31,32) s2=[6,7) oddK=[0, 5] status=OPEN(1) wall=601s
+COMBO t2 s1=31 s2=12 verdict=UNSAT [iter=0 solve=3.0s] time=3.0s
+SPLIT-SUMMARY t2 pair=[2, 4] s1=[31,32) s2=[12,13) oddK=[0, 5] status=UNSAT-ALL-COMBOS wall=3s
+COMBO t2 s1=31 s2=10 verdict=TIMEOUT [iter=0 solve=600.1s reason=timeout] time=600.1s
+SPLIT-SUMMARY t2 pair=[2, 4] s1=[31,32) s2=[10,11) oddK=[0, 5] status=OPEN(1) wall=600s
+COMBO t2 s1=31 s2=29 verdict=UNSAT [iter=0 solve=1.7s] time=1.7s
+SPLIT-SUMMARY t2 pair=[2, 4] s1=[31,32) s2=[29,30) oddK=[0, 5] status=UNSAT-ALL-COMBOS wall=2s
+COMBO t2 s1=31 s2=11 verdict=TIMEOUT [iter=0 solve=601.2s reason=timeout] time=601.2s
+SPLIT-SUMMARY t2 pair=[2, 4] s1=[31,32) s2=[11,12) oddK=[0, 5] status=OPEN(1) wall=601s
+COMBO t2 s1=31 s2=19 verdict=UNSAT [iter=0 solve=64.8s] time=64.8s
+SPLIT-SUMMARY t2 pair=[2, 4] s1=[31,32) s2=[19,20) oddK=[0, 5] status=UNSAT-ALL-COMBOS wall=65s

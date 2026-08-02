@@ -1765,3 +1765,41 @@ the 2,956-shape queue. Sound unfunded finds from P6-A now funded: R2
 (round-0 30-bit-domain short hash — a DOMAIN-RESTRICTED search, sound for
 32 group-rounds, ~8.5 cyc) and R3 (served-level-local conjugation MITM
 family, ~2 cyc overhead).
+
+### R2/R3 RESULTS (2026-08-02): the domain route is priced below viability;
+### the conjugation family dies to a seam-cancellation theorem
+
+**R3: DEAD, decisively.** The seam-cancellation theorem: at every interior
+seam B∘A = I, so the concatenated multi-round chain is op-IDENTICAL to
+baseline for EVERY GF(2)-linear conjugation (round-varying included;
+verified bit-exact over 6 phis x 200 walks x 16 rounds). **The whole
+served-level-local conjugation family is a re-parameterization of the
+already-searched cut-placement space** — H-016/H-025/G-10/span closures
+cover it. Dressed head/tail spans additionally closed member-by-member
+(76 z3 UNSAT + 48 analytic, 0 timeouts). The family needs 4-5 ops from
+the (S)-gap where the raw form needs 1 — strictly dominated. **Reusable
+rule adopted: any future representation-change proposal must pass
+seam-cancellation screening before funding.**
+
+**R2: PARTIAL, with a material re-pricing.** Domain verified (round-0
+inputs < 2^30; round 11 does NOT qualify). Minimum-shr re-derived soundly
+on the restricted domain (new counting leg replaces the domain-invalid
+x^2^31 probe); the prefix-cut route closed completely (66 UNSATs + 1
+theory kill); 27 shapes remain open at z3 walls. **But the prize
+correction is what matters: at the OPTIMAL frontier the binder is
+flow/load, not compute — a round-0 10-op form is worth -2.8 cycles, a
+9-op form -5.1/-6.0, and best-case everything lands at 940.9.** The
+domain route cannot reach 904/889 even if every open shape resolves SAT.
+(P6-A's 8.5/47 figures held only vs today's compute-bound schedule.)
+
+**Grind status:** sandwich9 219 pairs refuted (0 found), survivor grind
+continuing; templates 9,248 distinct combos UNSAT (0 SAT), escalation
+continuing; fleet tier 3 at 27/48 slices, all negative.
+
+**Phase-6 position:** every named route is now priced, searched, or
+refuted. The frontier's mechanism — which our own floors prove must
+exist — lives in the non-decomposable gap that enumeration cannot reach
+and free-shape MCMC hit an avalanche wall in front of. Next force
+multiplier: the Rust port of the per-pair bit-serial machinery (z3 runs
+560s/pair; native could be ~100x), enabling the 2,956-shape queue and the
+71 remaining pairs to be decided at scale.
