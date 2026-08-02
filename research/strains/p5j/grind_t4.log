@@ -1099,3 +1099,5 @@ COMBO t4 s1=25 s2=15 verdict=UNSAT [iter=0 solve=95.5s] time=95.5s
 SPLIT-SUMMARY t4 pair=[2, 7] s1=[25,26) s2=[15,16) oddK=[0] status=UNSAT-ALL-COMBOS wall=96s
 COMBO t4 s1=25 s2=13 verdict=TIMEOUT [iter=0 solve=600.1s reason=timeout] time=600.1s
 SPLIT-SUMMARY t4 pair=[2, 7] s1=[25,26) s2=[13,14) oddK=[0] status=OPEN(1) wall=600s
+COMBO t4 s1=25 s2=14 verdict=TIMEOUT [iter=0 solve=600.1s reason=timeout] time=600.1s
+SPLIT-SUMMARY t4 pair=[2, 7] s1=[25,26) s2=[14,15) oddK=[0] status=OPEN(1) wall=600s

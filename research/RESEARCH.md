@@ -1879,3 +1879,25 @@ plus the fold-in. Implications:
    existence probe available for an 11-op round body (one below par;
    an 11-op round body = k=10-equivalent = structural evidence, and the
    protocol validates any hit at 10M+ before reporting).
+
+### Search-matrix audit (2026-08-02): no cheap holes remain
+
+Driver re-read of stoke.rs chain init: cold chains (id%4==0) start AT the
+exact real form in EVERY campaign — transformation-mode has implicitly
+probed the t2 11-op neighborhood in every slice (an 11-op correct form
+would be strictly downhill at cost 4.4 vs 4.8; never observed). The
+driver's proposed "transformation-at-t2 gap" was not a gap. Leaderboard
+re-fetched: with-idx unchanged (904/940/958/981/994...).
+
+**The theory program has reached its edge.** Reachable space is empty at
+<=11 effective ops; the queue is unclosable; the frontier's mechanism is
+outside eight phases of maximum-effort search. Remaining spend options are
+a strategic fork that belongs to the user (decision requested):
+(a) IMPLEMENT the best sound design (floor 944-952, realized ~965-970 —
+    projected #4 on with-idx, ~#10 no-idx) while background theory
+    continues; implementation is ALSO an experiment (models were twice
+    corrected only by measurement);
+(b) continue pure theory indefinitely (restart waves, last theorem
+    buckets, grinds);
+(c) massive-compute push (63 CPU-days decidable residual + scaled STOKE);
+(d) community outreach (operator/frontier — needs consent).
