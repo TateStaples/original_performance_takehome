@@ -1488,3 +1488,15 @@ session limit mid-calibration; resume after reset.
 prefixes extrapolated; grind preempted by the fanout fleet per P5-D
 economics). Fanout fleet: slice 1 g=xor still running; launcher armed for
 slices 2-15 + g=add tier.
+
+### Fleet update (2026-08-01 late): join-at-4 family closed for xor and add
+
+All 31 slices negative: full_hash_core kf3-join g=xor 16/16 and g=add 16/16
+at <=10 ops (each slice ~24.2M joined prefixes x 2.118B chain nodes). The
+enumerable increment of the fan-out space is now closed for the two
+highest-priority join types (Lemma B ranked xor first as the real form's
+own join type; add partially P5-B-redundant). g=sub and g=rsub tiers
+launched (32 slices, 2-concurrent). P5-H resumed post-reset with the
+sandwich9 shape as its first restricted-MCMC campaign — z3 cannot decide
+that shape (424s and 10,800s both timeout at iter=0), so stochastic
+evidence is the only remaining probe of the most plausible 9-op shape.
