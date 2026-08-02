@@ -40,3 +40,12 @@ CHECKPOINT bin=fanout target=full_hash_core mode=kf3join join_g=sub join_r=all m
 CHECKPOINT bin=fanout target=full_hash_core mode=kf3join join_g=sub join_r=all maxchain=6 fwd_shard=5/16 link_shard=0/1 tabs=[p4:21868768] chain_nodes=2118524244 finds=0 secs=1253.4
 CHECKPOINT bin=fanout target=full_hash_core mode=kf3join join_g=sub join_r=all maxchain=6 fwd_shard=6/16 link_shard=0/1 tabs=[p4:21774833] chain_nodes=2118524244 finds=0 secs=1163.6
 CHECKPOINT bin=fanout target=full_hash_core mode=kf3join join_g=sub join_r=all maxchain=6 fwd_shard=7/16 link_shard=0/1 tabs=[p4:21812874] chain_nodes=2118524244 finds=0 secs=1164.5
+CHECKPOINT bin=fanout target=full_hash_core mode=kf3join join_g=sub join_r=all maxchain=6 fwd_shard=8/16 link_shard=0/1 tabs=[p4:21781568] chain_nodes=2118524244 finds=0 secs=1057.8
+CHECKPOINT bin=fanout target=full_hash_core mode=kf3join join_g=sub join_r=all maxchain=6 fwd_shard=9/16 link_shard=0/1 tabs=[p4:21854781] chain_nodes=2118524244 finds=0 secs=1058.1
+CHECKPOINT bin=fanout target=full_hash_core mode=kf3join join_g=sub join_r=all maxchain=6 fwd_shard=10/16 link_shard=0/1 tabs=[p4:21776089] chain_nodes=2118524244 finds=0 secs=1071.9
+CHECKPOINT bin=fanout target=full_hash_core mode=kf3join join_g=sub join_r=all maxchain=6 fwd_shard=11/16 link_shard=0/1 tabs=[p4:21826181] chain_nodes=2118524244 finds=0 secs=1072.5
+CHECKPOINT bin=fanout target=full_hash_core mode=kf3join join_g=sub join_r=all maxchain=6 fwd_shard=12/16 link_shard=0/1 tabs=[p4:21825542] chain_nodes=2118524244 finds=0 secs=1151.6
+CHECKPOINT bin=fanout target=full_hash_core mode=kf3join join_g=sub join_r=all maxchain=6 fwd_shard=13/16 link_shard=0/1 tabs=[p4:21844119] chain_nodes=2118524244 finds=0 secs=1151.7
+CHECKPOINT bin=fanout target=full_hash_core mode=kf3join join_g=sub join_r=all maxchain=6 fwd_shard=14/16 link_shard=0/1 tabs=[p4:21782331] chain_nodes=2118524244 finds=0 secs=1223.4
+CHECKPOINT bin=fanout target=full_hash_core mode=kf3join join_g=sub join_r=all maxchain=6 fwd_shard=15/16 link_shard=0/1 tabs=[p4:21811396] chain_nodes=2118524244 finds=0 secs=1223.0
+g=sub tier complete

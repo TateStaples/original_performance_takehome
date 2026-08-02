@@ -1,0 +1,16 @@
+COMBO t9 s1=16 s2=1 verdict=UNSAT [iter=0 solve=0.4s] time=0.4s
+COMBO t9 s1=1 s2=1 verdict=UNSAT [iter=0 solve=0.5s] time=0.5s
+COMBO t9 s1=16 s2=2 verdict=UNSAT [iter=0 solve=0.5s] time=0.5s
+COMBO t9 s1=1 s2=2 verdict=UNSAT [iter=0 solve=0.8s] time=0.8s
+COMBO t9 s1=16 s2=3 verdict=UNSAT [iter=0 solve=0.4s] time=0.4s
+COMBO t9 s1=16 s2=4 verdict=UNSAT [iter=0 solve=0.4s] time=0.4s
+COMBO t9 s1=16 s2=5 verdict=UNSAT [iter=0 solve=0.5s] time=0.5s
+COMBO t9 s1=16 s2=6 verdict=UNSAT [iter=0 solve=0.5s] time=0.5s
+COMBO t9 s1=16 s2=7 verdict=UNSAT [iter=0 solve=0.5s] time=0.5s
+COMBO t9 s1=1 s2=3 verdict=UNSAT [iter=0 solve=2.3s] time=2.3s
+COMBO t9 s1=16 s2=8 verdict=UNSAT [iter=0 solve=0.5s] time=0.5s
+COMBO t9 s1=1 s2=4 verdict=UNSAT [iter=0 solve=0.8s] time=0.8s
+COMBO t9 s1=16 s2=9 verdict=UNSAT [iter=0 solve=0.7s] time=0.7s
+COMBO t9 s1=16 s2=10 verdict=UNSAT [iter=0 solve=0.7s] time=0.7s
+COMBO t9 s1=1 s2=5 verdict=UNSAT [iter=0 solve=0.9s] time=0.9s
+COMBO t9 s1=16 s2=11 verdict=UNSAT [iter=0 solve=0.5s] time=0.5s

@@ -1530,3 +1530,21 @@ sandwich9 (madd triangularity + bounded shift-coupling => per-(s1,s2)
 refutation or discovery, 961 independent pairs; sound refutation, full
 validation on any survivor). Driver grinding 10 more s9 basin-hopping
 slices in background. Fleet tier 2 (g=sub/rsub) running.
+
+### P5-J RESULT (2026-08-02): t1 killed by a cut-vertex lemma; the split-grind
+### method is calibrated; workflow fanned out on the remaining 10
+
+- **New sound lemma (cut-vertex):** myhash bijective + increasing slot ids
+  => every cut-slot segment is bijective => a cut madd forces K odd (sound
+  pre-constraint on 10/12 templates) and a cut shr REFUTES the template
+  outright (image <= 2^31 cannot equal a bijection). **t1=[2,3] CLOSED by
+  the lemma alone — no solver.**
+- **t7=[4,7] 89% decided by shift-split grind:** 853/961 combos — 806
+  UNSAT, 47 hard-TIMEOUT, 0 SAT. Stragglers cluster where the deleted
+  structure most resembles the real form (the s2=16 column).
+- Monolithic z3 escalation is proven futile (all 60s iter=0 even with
+  odd-K); the split method runs 1-5s/combo. ~2,300 solves executed.
+- **Workflow `p5j-template-grind` launched: one agent per remaining
+  template (t9 priority, t0 last) + a t7-finisher — each grinding its
+  961-combo space with validated-SAT stop conditions.** Ledger:
+  strains/p5j/STATE.md.

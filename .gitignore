@@ -6,3 +6,4 @@ trace.json
 # Transient agent worktrees (Claude Code isolation checkouts)
 .claude/worktrees/
 .venv/
+tools/p5k_shapes_n9.json

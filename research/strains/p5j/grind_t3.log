@@ -1,0 +1,6 @@
+COMBO t3 s1=1 s2=1 verdict=UNSAT [iter=0 solve=0.8s] time=0.9s
+COMBO t3 s1=2 s2=1 verdict=UNSAT [iter=0 solve=0.9s] time=0.9s
+COMBO t3 s1=2 s2=2 verdict=UNSAT [iter=0 solve=0.8s] time=0.9s
+COMBO t3 s1=1 s2=2 verdict=UNSAT [iter=0 solve=1.2s] time=1.2s
+COMBO t3 s1=2 s2=3 verdict=UNSAT [iter=0 solve=1.2s] time=1.2s
+COMBO t3 s1=1 s2=3 verdict=UNSAT [iter=0 solve=1.2s] time=1.2s

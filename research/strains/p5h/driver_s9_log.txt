@@ -1,0 +1,11 @@
+CHECKPOINT campaign=s9 slots=12 threads=4 temp=4 opw=0.4 seed=41 secs=420.2 proposals=6043910144 best_cost=334.000 best_err=334 best_nonnop=9 zero_hits=0 finds=0
+CHECKPOINT campaign=s9 slots=12 threads=4 temp=2 opw=0.4 seed=42 secs=420.2 proposals=5030797312 best_cost=340.000 best_err=340 best_nonnop=9 zero_hits=0 finds=0
+CHECKPOINT campaign=s9 slots=12 threads=4 temp=3 opw=0.4 seed=43 secs=420.1 proposals=6218899456 best_cost=330.000 best_err=330 best_nonnop=9 zero_hits=0 finds=0
+CHECKPOINT campaign=s9 slots=12 threads=4 temp=4 opw=0.4 seed=44 secs=420.2 proposals=4847271936 best_cost=338.000 best_err=338 best_nonnop=9 zero_hits=0 finds=0
+CHECKPOINT campaign=s9 slots=12 threads=4 temp=2 opw=0.4 seed=45 secs=420.2 proposals=5329510400 best_cost=335.000 best_err=335 best_nonnop=9 zero_hits=0 finds=0
+CHECKPOINT campaign=s9 slots=12 threads=4 temp=3 opw=0.4 seed=46 secs=420.2 proposals=5671256064 best_cost=338.000 best_err=338 best_nonnop=9 zero_hits=0 finds=0
+CHECKPOINT campaign=s9 slots=12 threads=4 temp=4 opw=0.4 seed=47 secs=420.1 proposals=5009268736 best_cost=324.000 best_err=324 best_nonnop=9 zero_hits=0 finds=0
+CHECKPOINT campaign=s9 slots=12 threads=4 temp=2 opw=0.4 seed=48 secs=420.1 proposals=4971102208 best_cost=333.000 best_err=333 best_nonnop=9 zero_hits=0 finds=0
+CHECKPOINT campaign=s9 slots=12 threads=4 temp=3 opw=0.4 seed=49 secs=420.1 proposals=4785627136 best_cost=341.000 best_err=341 best_nonnop=9 zero_hits=0 finds=0
+CHECKPOINT campaign=s9 slots=12 threads=4 temp=4 opw=0.4 seed=50 secs=420.2 proposals=4474568704 best_cost=333.000 best_err=333 best_nonnop=9 zero_hits=0 finds=0
+S9 GRIND DONE
