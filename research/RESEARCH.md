@@ -1858,3 +1858,24 @@ Residual undecidable fraction ~28%: **P6-C's conclusion stands — the queue
 cannot be closed by per-pair decision.** sandwich9's 68 open pairs gain
 nothing (already forced-odd). Last unrecovered bucket: the 408
 syntactic-bijectivity shapes (the check may under-approximate).
+
+### STOKE breakthrough-then-hardening (2026-08-02): the engine rediscovered
+### THE REAL FORM from scratch — the avalanche wall was variance, and the
+### <=11 negatives harden accordingly
+
+Seed 102 (t2, temp 2) reached battery-err 0 at 12 live ops; the captured
+listing (rerun with find-size 12, deterministic) is **bit-for-bit the real
+fused form** — constants 4097/C0, s19, C1, 33/AP, 16896/AQ, 9/C4, s16, C5,
+plus the fold-in. Implications:
+1. The "avalanche wall cannot descend below ~180 err bits" finding is
+   OVERTURNED — it was seed/temperature variance, not a structural limit.
+   With restarts, free-shape MCMC reaches the global 12-op optimum on the
+   REAL target from random initialization.
+2. Every <=11 negative from this engine therefore hardens: the same
+   machinery that can climb to the true 12-op form has never produced a
+   battery-perfect <=11 candidate (zero_hits=0 across all campaigns, and
+   P6-B showed the battery is epsilon-tolerant to 1e-3).
+3. Restart wave launched: 20 seeds x t2 at max-ops 11 — the sharpest
+   existence probe available for an 11-op round body (one below par;
+   an 11-op round body = k=10-equivalent = structural evidence, and the
+   protocol validates any hit at 10M+ before reporting).
