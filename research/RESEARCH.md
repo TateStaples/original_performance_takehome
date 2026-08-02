@@ -1685,3 +1685,52 @@ untouched (nothing actually closed) — correct conservatism.
 **Template grind (driver): 9,187/9,610 distinct combos UNSAT, 0 SAT,
 423 stragglers** -> targeted 600s escalation launched (3-proc, per-combo).
 Fleet tier 3 (round12 y-fanout) and the sandwich9 survivor grind continue.
+
+## Phase 6 charter (2026-08-02): the contradiction narrows to TWO premises
+
+P6-A's elimination (tools/p6a_premise.py; full table strains/p6a/STATE.md):
+**P3 (loads), P5 (serving law), P7 (setup) are IMPOSSIBLE as explanations —
+even set FREE, k=11 still overruns 904/889 by +4.0/+5.5 cycles.** P2/P4/P6
+require violations of proved enumerations or verified source. Two premises
+remain live:
+
+- **P1 (hash census): needs only k <= 9.75/9.59 effective** — an 11-12%
+  leak, and the (S)-gap (non-decomposable restructurings) is still open.
+- **P8 (our reading of "correct"): the boards validate by SERVER-SIDE
+  SIMULATION** (verified: the client only builds; the server returns
+  {passed, cycles}) **against an UNKNOWN number of instances.** An
+  **ε-approximate hash** — wrong on a fraction ε of the 2^32 inputs —
+  passes a one-random-instance validation with probability (1-ε)^4096:
+  ε=1e-4 -> 66%, ε=1e-6 -> 99.6%. **Our tools reject ε > 1.05e-8; a
+  32-probe validator accepts ε <= 3.3e-3. Four decades of forms exist that
+  WE discard and a sampling validator would bless.**
+
+**Resubmission GAMBLING is refuted** (wouterkool 892 in 5 subs, glentaggart
+981 in 1; position gambles are 256-walker conjunctions with p ~ 1e-15).
+The ε-hash is different in kind: high per-instance pass rate, no
+resubmission needed. The board operator's own words (dougall, Mastodon,
+2026-02-01): the previous board "got overrun by python/rng-exploit
+submissions" — the community board exists to stop exploits, but its
+instance policy is unpublished.
+
+**Transfer audit (which of OUR negatives survive ε-tolerance):** z3
+sample-UNSATs and the bijectivity lemmas survive (sample-UNSAT refutes
+even approximate agreement on those samples). **P5-I2/I3's exact-count
+kills do NOT survive — 204 sandwich9 pairs RE-OPEN under ε.** MITM
+finds=0 counted verified-exact matches only, so ε-near forms would not
+have been counted as finds — but conversely, STOKE's cascade (65k -> 10M)
+would have logged any 65k-passer that failed 10M validation, and none was
+ever logged: weak evidence AGAINST ε-forms in the searched families.
+
+**Phase-6 program:** R1 ε-audit (does any searched family contain ε-near
+forms? re-mine MITM probe-match counts + STOKE checkpoints + ε-tolerant
+sandwich9); R2 round-0 30-bit-domain hash shortening (SOUND, P5-E left it
+unsearched, ~8.5 cyc realistic); R3 served-level-local conjugation
+(~2 cyc overhead, a NEW MITM target family); R4 ask the board operator
+the validation policy (NEEDS USER CONSENT).
+
+> **STANDING DECISION FLAG FOR THE USER: pursuing ε-approximate kernels
+> as RESEARCH (do they exist? is that what the frontier runs?) is in
+> scope. SUBMITTING one is a different act — a kernel that is wrong on a
+> known fraction of inputs, passing a sampling validator — and will not
+> be done without explicit user instruction.**

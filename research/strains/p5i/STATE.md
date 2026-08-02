@@ -1072,3 +1072,5 @@ The 71 ALIVE break down as: t=1 -> 10, t=2 -> 11, t=14 -> 11,
 10+11+11+37+2 = 71.  (Sec. 12.4's one-line summary said "39 pairs with
 q == +-1"; the correct split is 37 + 2.)  The DEAD/ALIVE lists themselves
 were re-verified against the code: both match exactly, 136 + 71 = 207.
+CHECKPOINT pair=(10,23) verdict=OPEN rung=k8 iter=0 timeout=600s reason=timeout rt=600s
+CHECKPOINT pair=(11,24) verdict=OPEN rung=k8 iter=0 timeout=600s reason=timeout rt=600s
