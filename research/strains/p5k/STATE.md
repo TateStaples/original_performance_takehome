@@ -1,10 +1,25 @@
 # Strain P5-K — 9-op question COMPLETE at the shape level (Phase-5)
 
-status: IN PROGRESS (theorem + funnel + ownership done; enumeration of
-top strata running; z3 screens pending)
-tools: `tools/p5k_enum.py` (enumerate/DP/canon/normalize/map; selftest PASS),
-`tools/p5k_queue.json` (deliverable queue, pending), shapes file
-`tools/p5k_shapes_n9.json` (pending)
+status: DONE (partial on two named axes: capped stratum (3,2,1,3);
+36/2992 unowned shapes screened)
+tools: `tools/p5k_enum.py` (enumerate/DP/canon/normalize/map; selftest
+PASS), `tools/p5k_screen.py` (queue build + z3 screen),
+`tools/p5k_queue.json` (THE deliverable queue),
+`tools/p5k_shapes_n9.json` (458,161 canonical shapes, 49MB),
+`tools/p5k_screen_results.jsonl`
+
+## SCREEN TABLE (2026-08-02, top-36 by rank, 60s z3, full const freedom)
+
+UNSAT 4 (closed): ranks 24, 28, 29, 30 (28-30 share prefix
+madd,madd,xor2(1,2) = xor-of-two-affines; all refuted in 1.4-3.5s).
+TIMEOUT 32 (open, iter=0): every 3-madd sigma-rich shape hits the same
+wall P5-D documented (z3 QF_BV cannot decide >=3 chained free 32-bit
+multipliers at 60-120s; sandwich9 identically). SAT-candidates: 0.
+=> The perfect tier is z3-RESISTANT as a class. The right solver for
+the whole tier is P5-I's per-(s1,s2) window/differential machinery, not
+longer z3 budgets. Queue statuses: QUEUED 2,956 / SCREEN-TIMEOUT 32 /
+SCREEN-UNSAT 4 / OWNED-P5J 8 / OWNED-P5I 1 (sandwich9, rank 328) /
+CLOSED-P5D 4.
 
 ## 0. Scope statement (what "complete" means here)
 
@@ -155,10 +170,23 @@ NEW STRUCTURAL CLOSURES of previously-open templates (no z3 needed):
 P5-J's effective queue after P5-K: 7 distinct canonical shapes
 (was 12 templates).
 
-## 7. NEXT
+## 7. RESUME PROTOCOL (driver / P5-I)
 
-- z3 screen running (top-36, 60s each, 3 workers) -- results below
-- complete (3,2,1,3) enumeration (perfect-tier completeness)
-- n=8 sub-question unowned (counts in sec. 3)
-- constants caveat: z3 screens here ARE full-constant-freedom (sound);
-  the vocabulary caveat of sec. 0 stands (no runtime binary add/mul)
+1. **Complete stratum (3,2,1,3)** (the only cap): one long pass of
+   `p5k_enum.py` with cap raised (est. 40 min Python; storage-filter to
+   score-0 keeps memory sane) or a Rust port. Until then the perfect
+   tier (808 known members) is a LOWER bound.
+2. **P5-I generalization is the solver for the tier**: every score-0
+   shape is madd/sigma-structured with 2 shrs; the window theorem
+   (out_0 reads x mod 2^(pathshift+1)) and the row differentials apply
+   per shape with the same soundness. Consume `p5k_queue.json` entries
+   status=QUEUED in rank order.
+3. z3 screening deeper into the queue only pays on madd-light shapes
+   (the 4 UNSATs were the madd-degenerate prefixes); do not spend z3 on
+   3-4-madd shapes at <600s.
+4. n=8 sub-question unowned (counts in sec. 3); any R1/R3/R4-killed
+   9-op instance lands there.
+5. Vocabulary caveat stands (sec. 0): completeness is over the 4-type
+   template basis; runtime binary add/mul/and/or joins are outside it
+   (P5-B/P5-D MITM partially cover those for chain-decomposable shapes;
+   P5-D Lemma A kills additive-shift links generally).

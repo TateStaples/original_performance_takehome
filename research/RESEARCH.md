@@ -1548,3 +1548,37 @@ slices in background. Fleet tier 2 (g=sub/rsub) running.
   template (t9 priority, t0 last) + a t7-finisher — each grinding its
   961-combo space with validated-SAT stop conditions.** Ledger:
   strains/p5j/STATE.md.
+
+### P5-K RESULT (2026-08-02): the 9-op question is SHAPE-COMPLETE
+
+Funnel over the template vocabulary {madd, shr, xorc, xor2}: 514.9B raw
+sequences -> 1.151B valid -> 522.2M after two NEW SOUND THEOREMS ->
+458,161 canonical shapes materialized across the 7 closest-to-real strata,
+ranked in `tools/p5k_queue.json` (2,956 QUEUED; ownership-marked;
+sandwich9 = rank 328).
+
+**New theorems:**
+- **MINIMUM-SHR: one shr provably cannot compute myhash for ANY constants**
+  (s<=30 by bit-window; s=31 by constancy of a directional derivative,
+  concrete witnesses recorded). >=2 shrs required — a strong structural
+  filter on the whole space.
+- **Cut-bijectivity (K2):** a shr at any DAG cut vertex is dead (myhash is
+  bijective). Kills all pure chains; the funnel arithmetic closes exactly.
+
+**Corrections to the running picture:** P5-J's queue is really 7 shapes,
+not 12 — DEL[2,3] is K2-dead (independently re-deriving P5-J's own t1
+closure), DEL[4,6] reduces to 8 ops, and P5-D's "16 UNSATs" decompose as
+10 degenerate reductions + 4 real shapes.
+
+**Screens:** 36 z3 screens -> 4 UNSAT (madd-degenerate prefixes), 32
+timeout-at-iter=0, 0 SAT. **The perfect tier (808 known shapes, all
+madd/sigma-structured with exactly 2 shrs) is z3-resistant AS A CLASS —
+P5-I's per-(s1,s2) bit-serial machinery is the designated solver for the
+entire tier.** Caveat: the (3,2,1,3) stratum was capped at 8.3% of its
+DFS; 678 of the 808 perfect-tier shapes came from it, so the tier is a
+LOWER bound — the driver has launched the uncapped completion run
+(background, ~40 min).
+
+Everything now converges on one instrument: **P5-I's exact solver
+consuming p5k_queue.json in rank order.** The workflow grinds P5-J's
+(reduced) template list in parallel.

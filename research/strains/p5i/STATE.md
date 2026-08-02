@@ -398,3 +398,9 @@ CHECKPOINT pair=(26,22) verdict=OPEN rung=k8 iter=0 timeout=25s reason=timeout r
 CHECKPOINT pair=(27,11) verdict=OPEN rung=k8 iter=0 timeout=25s reason=timeout rt=25s
 CHECKPOINT pair=(27,21) verdict=OPEN rung=k8 iter=0 timeout=25s reason=timeout rt=25s
 CHECKPOINT pair=(28,12) verdict=OPEN rung=k8 iter=0 timeout=25s reason=timeout rt=25s
+CHECKPOINT pair=(28,20) verdict=OPEN rung=k8 iter=0 timeout=25s reason=timeout rt=25s
+CHECKPOINT pair=(29,13) verdict=OPEN rung=k8 iter=0 timeout=25s reason=timeout rt=25s
+CHECKPOINT pair=(29,19) verdict=OPEN rung=k8 iter=0 timeout=25s reason=timeout rt=25s
+CHECKPOINT pair=(30,14) verdict=OPEN rung=k8 iter=0 timeout=25s reason=timeout rt=25s
+CHECKPOINT pair=(30,18) verdict=REFUTED rung=k8 iter=0 solve=15.2s total=15.2s rt=25s
+CHECKPOINT pair=(31,15) verdict=REFUTED rung=k8 iter=0 solve=8.8s total=8.8s rt=25s
