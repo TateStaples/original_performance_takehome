@@ -1,6 +1,8 @@
 # Strain P5-L — 2-round composite <=19 ops: mechanism accounting by theory
 
-status: IN PROGRESS (2026-08-02)
+status: FINAL (2026-08-02) — **<=19 composite REFUTED by arithmetic within
+the complete named-mechanism space; the 2-round route reduces exactly to
+the single-round <=9 question (no independent composite magic exists).**
 brief: decide by THEORY whether myhash(myhash(x^y1)^y2) has a <=19-op form
 (24 naive = 2 fold-ins + 2x11). P5-D closed the LOCAL boundary route
 (span7->5 all 10 deletion templates UNSAT); this strain does the GLOBAL
@@ -16,32 +18,40 @@ Composite = fold-in(^y1) + 11 + fold-in(^y2) + 11 = 24.
 Op totals: 8 madd, 4 shr, 4 xorc, 6 xor2, 2 fold-in xor.
 Target <=19 => must save >=5.
 
-## 1. Mechanism accounting table
-
-(filled in as results land; args below)
+## 1. Mechanism accounting table (FINAL)
 
 | # | mechanism | max ops savable | argument | status |
 |---|---|---|---|---|
 | a | mask absorption into fold-ins (c5_prexor) | 2 (amortized) | node-table transform free; ALREADY BANKED in census (hash(k)=512k+176 nets 336 elisions) | CLOSED (banked, not new) |
-| b | sigma-sigma layer merge | 0 | no adjacent sigma pair exists (every pair madd-separated); even if adjacency forced: L19*L16 = I^S16^S19 costs 4 ops = 2+2 separate (support lemma + z3 merge3); mask-merge 1 op is the SAME op banked in (a) | pending z3 merge3 |
-| c | madd<->sigma commutation (enabler for b,f) | 0 | conjugate of mult-by-K through sigma_s is non-GF(2)-affine; z3: no affine B for boundary (K,s,dir) triples | pending z3 commute |
-| d | shorter sigma / mask transport past madds | 0 | sigma_s floor = 2 ops (1-op refuted, sec. 3); masks cannot cross madds (P3-F XOR<->ADD lemma) | CLOSED |
-| e | fold-in absorption into madd addend | 0 | runtime lemma: v^y == v + f(y) for all v iff y in {0,2^31}; y uniform [0,2^30) | CLOSED (P3-F lemma, runtime form verified) |
-| f | cross-boundary madd fusion (madd4*madd0') | 0 | separated by sigma16 AND runtime fold-in xor; needs (c) AND xor-past-madd, both refuted | CLOSED conditional on (c) |
+| b | sigma-sigma layer merge | 0 | no adjacent sigma pair exists (every pair madd-separated); even if adjacency were forced: L19*L16 = I^S16^S19 costs exactly 4 ops = 2+2 separate (support lemma + z3 merge3 1509/1 UNSAT/analytic); mask-merge 1 op is the SAME op banked in (a) | CLOSED (sec 3.1, 3.4) |
+| c | madd<->sigma commutation (enabler for b,f) | 0 direct; <=1 speculative via dir1 | z3 quadruple-criterion queries over ALL affine B, all odd K'', all consts: dir2 (4097,19) UNSAT 2.6s; dir2 (9,16) UNSAT 4.5s; dir1 (4097,16) and dir1 (33,19) TIMEOUT=OPEN. Even granting dir1 SAT: only enables madd4*madd'' fusion worth 1 op, and the runtime y2 fold-in then blocks it (mech e) plus affine byproduct B must be implemented (cost >= saving) | dir2 CLOSED, dir1 OPEN worth <=1 |
+| d | shorter sigma / mask transport past madds | 0 | sigma_s floor = 2 ops (1-op refuted: madd needs C=0,K=1 => sigma=id false; shr/xorc/xor2 trivially fail); masks cannot cross madds (P3-F XOR<->ADD lemma); no two masks adjacent | CLOSED |
+| e | fold-in absorption into madd addend | 0 | runtime lemma: v^y == v + f(y) for all v iff y in {0,2^31}; y uniform [0,2^30) (2^31 unreachable, 0 measure 2^-30) | CLOSED (sec 3.5) |
+| f | cross-boundary madd fusion (madd4*madd0') | 0 | separated by sigma16 AND runtime fold-in xor; needs (c)-dir2 (UNSAT) or (c)-dir1 AND xor-past-madd (refuted by e) | CLOSED |
 
-Sum of NEW savings (beyond banked (a)): 0. Banked best composite = 22 ops
-(effective k=11 — the mainline). 22 - 19 = 3 short.
+**Sum of savings beyond banked (a): 0 proven; <=1 in the worst case where
+dir1 were SAT. Needed: 3 (24 - 2 banked - 19). 0 (or 1) < 3 => the <=19
+composite is REFUTED across the entire mechanism space, with margin
+covering the one OPEN z3 query.**
 
-## 2. Reduction statement (what would have to be true instead)
+## 2. Reduction statement (FINAL)
 
-Savings must come from loci, not mechanisms:
-- boundary span (SPAN_7, 7 ops): ->5 UNSAT (P5-D, deletion family);
-  ->6 tested here (sec. 5); ->4 would alone give 19 (open, full-shape
-  z3 sweep ~40k shapes = driver-fleet job).
-- within-round: = the single-round k<=10 question (P5-B/D/H negatives,
-  open only at the (S)-hypothesis level; owned by P5-I/J/K).
-The composite question REDUCES to (span<=6?) x (single-round<=10?): no
-composite-specific mechanism exists.
+Cross-round interaction savings = 0 (sec 1) and the boundary span is rigid
+at 7 ops in the deletion family (span7->5 UNSAT P5-D; span7->6 ALL UNSAT
+here). Therefore:
+
+  min composite ops = 2*(min single-round ops) + 2 fold-ins - 2 elisions
+  = 2*m + 2 - 2 = 2m.   Composite <= 19  <=>  m <= 9 (integer).
+
+**The 2-round composite question REDUCES EXACTLY to the single-round 9-op
+question (P5-I sandwich9 lift-and-prune, P5-J/K).** There is no independent
+2-round route to effective k<=9.5. Caveats (the only formal gaps):
+(i) dir1 commutation OPEN — worth <=1 op, insufficient alone (needs 3);
+(ii) non-decomposable global 19-op restructurings — the same (S)-hypothesis
+gap as P3-F's N>=11; bounded here by the span deletion-family closures and
+by every P5-B/D/H search negative. A full-shape z3 sweep of 4-op and 5-op
+boundary-span forms (~40k shapes) would upgrade (ii) at the span locus;
+est. driver-fleet job, not in-session.
 
 ## 3. Computations
 
@@ -96,9 +106,26 @@ plus ANY odd K'', C'', C satisfy the commutation identity?
 Soundness: UNSAT on sampled triples => no affine B exists (samples are
 necessary conditions).
 
-### 3.4 z3 merge3 + span7->6 (running)
+### 3.4 z3 merge3: no 3-op merged sigma layer (tools/p5l_z3.py merge3)
 
-(pending)
+Target v ^ (v>>16) ^ (v>>19), ALL 3-op shapes, extended vocab
+{madd,shr,xorc,andc,orc} unary + {xor2,add2,sub2,and2,or2,mul2} binary,
+all constants free: **1510 pruned shapes: 1509 UNSAT, 1 TIMEOUT, 0 FOUND**
+(230s total). The one TIMEOUT [madd, shr, madd] is closed ANALYTICALLY:
+(K1*v+C1)>>s has image size <= 2^(32-s) < 2^32 for s>=1 and a following
+madd cannot re-inflate it, but the target has GF(2)-rank 32 (bijective).
+=> **merged sigma19*sigma16 costs exactly 4 ops — identical to separate
+implementation. Sigma merging saves 0 linear ops, closed soundly.**
+
+### 3.4b z3 span7->6: boundary span cannot save even ONE op (deletion family)
+
+All 1-deletion templates of P5-D's SPAN_7 (primed boundary span
+stage1(stage0(sigma16(e)^y')) at 6 ops, full constant freedom:
+**5 valid templates, ALL UNSAT** (del=[1]b1 164.5s, del=[2]b1 177.2s,
+del=[3] 0.0s, del=[4] 0.0s, del=[5] 1.3s; del=[0] degenerates, del=[1]b0 /
+del=[2]b0 cascade below 6 ops = SKIP, subsumed by P5-D's span7->5 UNSAT).
+Combined with P5-D: **the 7-op boundary span is rigid at 7 in the deletion
+family — neither 1-op nor 2-op savings exist.**
 
 ### 3.5 Runtime XOR<->ADD lemma (fold-in absorption, runtime form)
 

@@ -49,3 +49,11 @@ CHECKPOINT bin=fanout target=full_hash_core mode=kf3join join_g=sub join_r=all m
 CHECKPOINT bin=fanout target=full_hash_core mode=kf3join join_g=sub join_r=all maxchain=6 fwd_shard=14/16 link_shard=0/1 tabs=[p4:21782331] chain_nodes=2118524244 finds=0 secs=1223.4
 CHECKPOINT bin=fanout target=full_hash_core mode=kf3join join_g=sub join_r=all maxchain=6 fwd_shard=15/16 link_shard=0/1 tabs=[p4:21811396] chain_nodes=2118524244 finds=0 secs=1223.0
 g=sub tier complete
+CHECKPOINT bin=fanout target=full_hash_core mode=kf3join join_g=rsub join_r=all maxchain=6 fwd_shard=0/16 link_shard=0/1 tabs=[p4:21781657] chain_nodes=2118524244 finds=0 secs=1341.0
+CHECKPOINT bin=fanout target=full_hash_core mode=kf3join join_g=rsub join_r=all maxchain=6 fwd_shard=1/16 link_shard=0/1 tabs=[p4:21828565] chain_nodes=2118524244 finds=0 secs=1342.3
+CHECKPOINT bin=fanout target=full_hash_core mode=kf3join join_g=rsub join_r=all maxchain=6 fwd_shard=2/16 link_shard=0/1 tabs=[p4:21775703] chain_nodes=2118524244 finds=0 secs=1119.9
+CHECKPOINT bin=fanout target=full_hash_core mode=kf3join join_g=rsub join_r=all maxchain=6 fwd_shard=3/16 link_shard=0/1 tabs=[p4:21832512] chain_nodes=2118524244 finds=0 secs=1118.9
+CHECKPOINT bin=fanout target=full_hash_core mode=kf3join join_g=rsub join_r=all maxchain=6 fwd_shard=4/16 link_shard=0/1 tabs=[p4:21763256] chain_nodes=2118524244 finds=0 secs=915.1
+CHECKPOINT bin=fanout target=full_hash_core mode=kf3join join_g=rsub join_r=all maxchain=6 fwd_shard=5/16 link_shard=0/1 tabs=[p4:21868768] chain_nodes=2118524244 finds=0 secs=914.8
+CHECKPOINT bin=fanout target=full_hash_core mode=kf3join join_g=rsub join_r=all maxchain=6 fwd_shard=6/16 link_shard=0/1 tabs=[p4:21774833] chain_nodes=2118524244 finds=0 secs=902.9
+CHECKPOINT bin=fanout target=full_hash_core mode=kf3join join_g=rsub join_r=all maxchain=6 fwd_shard=7/16 link_shard=0/1 tabs=[p4:21812874] chain_nodes=2118524244 finds=0 secs=903.0

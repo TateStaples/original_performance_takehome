@@ -318,6 +318,14 @@ def run_commute_query(K, s_shift, direction, timeout_s=420, n_triples=24,
     triples = [tuple(rng.getrandbits(32) for _ in range(3))
                for _ in range(n_triples)]
     triples += [(0, 1, 2), (1, 1 << 31, MASK)]
+    # basis triples: concrete powers of two make the unknown-products plain
+    # shifts -- cheap circuits that expose low-bit/carry conflicts.
+    for i in range(0, 32, 3):
+        for j in range(1, 32, 7):
+            if i != (i + j) % 32:
+                triples.append((0, 1 << i, 1 << ((i + j) % 32)))
+    for i in range(0, 30, 5):
+        triples.append((1 << i, 1 << (i + 1), 1 << (i + 2)))
     for it in range(iters):
         for t in triples:
             add_triple(*t)

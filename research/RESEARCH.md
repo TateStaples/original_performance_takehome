@@ -1582,3 +1582,22 @@ LOWER bound — the driver has launched the uncapped completion run
 Everything now converges on one instrument: **P5-I's exact solver
 consuming p5k_queue.json in rank order.** The workflow grinds P5-J's
 (reduced) template list in parallel.
+
+### Usage-limit wave + recovery (2026-08-02 early AM)
+
+The Fable-5 quota killed P5-I (mid-slice, method proven: "refutation is
+cheap-or-never at 25s, all landing at rung k=8"), P5-L (mid-write-up), and
+the workflow's t7-finisher; the 10 template-grind agents were force-
+returned PARTIAL and their z3 processes died with them. **Tally at the
+cut: ~2,250 combos decided across 10 templates, ALL UNSAT, zero SAT.**
+t9 is ~87% done, t3 ~97%.
+
+Recovery actions:
+- Template grind moved to DRIVER-OWNED background processes (3-proc,
+  full bands, immune to model quotas): scratchpad/tgrind.sh ->
+  research/strains/p5j/fleet_status.txt on completion.
+- P5-I2 and P5-L2 relaunched on model=opus, each inheriting its
+  predecessor's incremental STATE.md (the persist-early discipline paying
+  off exactly as designed).
+- Stratum (3,2,1,3) completion run finished (uncapped enumeration output
+  in scratchpad; to be merged into the queue on next harvest).

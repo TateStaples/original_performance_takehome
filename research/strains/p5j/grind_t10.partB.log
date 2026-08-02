@@ -14,3 +14,5 @@ COMBO t10 s1=17 s2=13 verdict=UNSAT [iter=0 solve=1.3s] time=1.3s
 COMBO t10 s1=17 s2=14 verdict=UNSAT [iter=0 solve=6.8s] time=6.8s
 COMBO t10 s1=17 s2=15 verdict=UNSAT [iter=0 solve=6.3s] time=6.3s
 COMBO t10 s1=17 s2=16 verdict=UNSAT [iter=0 solve=1.1s] time=1.1s
+COMBO t10 s1=17 s2=17 verdict=UNSAT [iter=0 solve=6.7s] time=6.7s
+COMBO t10 s1=17 s2=18 verdict=UNSAT [iter=0 solve=6.8s] time=6.8s
