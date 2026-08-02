@@ -1447,3 +1447,44 @@ preempting further kf4 batches per P5-D's economics (32 box-hours covers
 the whole join-at-4 class vs 64 box-days for kf4). **sandwich9 relaunched
 by the driver at 3h solver budget** (`tools/p5d_sandwich9.py`, background).
 kf4 batch: 6 more slices complete, all negative (7/4096 total).
+
+### Iteration close-out (2026-08-01 evening): workflow intel, sandwich9 undecided,
+### session-limit interruption
+
+**Deep-research workflow (98 agents; 34 + synthesis killed by the session
+limit) — 12 claims verified 3-0 before the cutoff; unverified extractions
+recovered from the journal by the driver:**
+- **corsix (Pete Cawley) publicly confirmed on X (Mar 5, 2026) that the
+  sub-1000 results on vliw-challenge.fly.dev are LEGIT** and that Vogel's
+  Lean-"proven" 1,081 load-bound must therefore be flawed — i.e. the
+  frontier BREAKS the 2,089-load assumption (load elimination via serving;
+  consistent with our serve-more analysis). He also states
+  kerneloptimization.fun "doesn't verify properly" (its 1,001-cycle entries
+  are harness exploits) — that board is now excluded from consideration.
+- Two targeted extraction passes over corsix's article re-confirm: **no
+  mention of hash-op reduction or cross-round fusion anywhere** — his
+  disclosed technique set is exactly what we ship (Phase-4 reconciliation
+  stands).
+- fiigii/ai-comp publicly documents WITHIN-round cross-stage fusion
+  (stages 2+3 -> two independent madds + xor) — this is our existing
+  KQ/AQ fusion, already in the 11-op form. Nothing new.
+- Vogel's 1,105 = Claude-Code orchestration; his 1,081 "lower bound" is
+  refuted by the frontier's existence (its premise: 2,089 unavoidable
+  loads).
+- wouterkool GitHub: zero related artifacts (29 repos enumerated).
+- dougall CONFIRMED as the operator of vliw-challenge.fly.dev itself
+  (announced it on Mastodon 2026-02-01) — the board's legitimacy has a
+  named maintainer with a public track record.
+
+**sandwich9: still OPEN after a 10,800s z3 solve (iter=0 timeout).** The
+single most plausible 9-op shape remains undecided. Next escalations
+(queued for after the session-limit reset): (a) shift-split grind — fix the
+two sigma shifts (961 (s1,s2) pairs), each sub-problem far smaller,
+parallelizable, sound per-pair; (b) P5-H MCMC restricted to the sandwich9
+shape (~10 free 32-bit params — ideal stochastic target). P5-H died on the
+session limit mid-calibration; resume after reset.
+
+**kf4 batch complete: shards 0-12/4096 all negative** (~29B chained-4
+prefixes extrapolated; grind preempted by the fanout fleet per P5-D
+economics). Fanout fleet: slice 1 g=xor still running; launcher armed for
+slices 2-15 + g=add tier.

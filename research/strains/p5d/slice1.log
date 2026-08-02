@@ -2,3 +2,7 @@
    pool (12): [C0=0x7ed55d16, K0=0x00001001, C1=0xc761c23c, KP=0x00000021, AP=0xe9f8cc1d, KQ=0x00004200, AQ=0xaccf6200, K4=0x00000009, C4=0xfd7046c5, C5=0xb55a4f09, s19=0x00000013, s16=0x00000010]
    link pool: 72 constants, 1284 links; link shard 0/1
    JOINED tab kf=3+g (prefix 4 ops) g=xor r=all shard 1/16: 24218328 entries (652.5s)
+   engine C: 2118524244 chain nodes probed in 1485.6s (max_chain=6)
+CHECKPOINT bin=fanout target=full_hash_core mode=kf3join join_g=xor join_r=all maxchain=6 fwd_shard=1/16 link_shard=0/1 tabs=[p4:24218328] chain_nodes=2118524244 finds=0 secs=2138.1
+   RESULT: no program of <= 10 ops in this slice's space
+

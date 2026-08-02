@@ -66,7 +66,14 @@ validated 10-op program in minutes.
   11->10 (fold add's C into the madd addend) not yet landed in-slice.
   Bug found+fixed: ckpt JSON path was cwd-relative (silently unwritten);
   validate-bar added.
-- cal slice 2 (300s, seed 3): RUNNING
+- cal slice 2 (seed 3): **PASS.** Validated 10-op form found at t=150s
+  (stopped at --max-ops gate), via the 11-op intermediate. 227.5M proposals,
+  ~1.5M/s, zero_hits=2 finds=2, both at 10,065,992 vectors.
+  `CHECKPOINT campaign=cal slots=12 threads=8 temp=2 opw=0.4 seed=3
+  secs=150.1 proposals=227500032 best_cost=4.000 best_err=0 best_nonnop=10
+  zero_hits=2 finds=2`
+  **CALIBRATION GATE CLEARED — machinery verified end-to-end (planted
+  compression recovered, cascade validation, checkpointing).**
 
 ## Run protocol
 
