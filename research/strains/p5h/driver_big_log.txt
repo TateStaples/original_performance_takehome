@@ -31,3 +31,17 @@ CHECKPOINT campaign=t2 slots=12 threads=4 temp=4 opw=0.4 seed=308 secs=420.1 pro
 BEST cost=4.800 err=0 nonnop=12
 CHECKPOINT campaign=t2 slots=12 threads=4 temp=2 opw=0.4 seed=309 secs=420.2 proposals=791322624 best_cost=61.800 best_err=57 best_nonnop=12 zero_hits=0 finds=0
 BEST cost=61.800 err=57 nonnop=12
+CHECKPOINT campaign=t2 slots=12 threads=4 temp=3 opw=0.4 seed=310 secs=420.2 proposals=781115392 best_cost=4.800 best_err=0 best_nonnop=12 zero_hits=0 finds=0
+BEST cost=4.800 err=0 nonnop=12
+CHECKPOINT campaign=t2 slots=12 threads=4 temp=4 opw=0.4 seed=311 secs=420.2 proposals=910024704 best_cost=4.800 best_err=0 best_nonnop=12 zero_hits=0 finds=0
+BEST cost=4.800 err=0 nonnop=12
+CHECKPOINT campaign=t2 slots=12 threads=4 temp=2 opw=0.4 seed=312 secs=420.2 proposals=909721600 best_cost=4.800 best_err=0 best_nonnop=12 zero_hits=0 finds=0
+BEST cost=4.800 err=0 nonnop=12
+CHECKPOINT campaign=t2 slots=12 threads=4 temp=3 opw=0.4 seed=313 secs=420.2 proposals=880803840 best_cost=4.800 best_err=0 best_nonnop=12 zero_hits=0 finds=0
+BEST cost=4.800 err=0 nonnop=12
+CHECKPOINT campaign=t2 slots=12 threads=4 temp=4 opw=0.4 seed=314 secs=420.2 proposals=851435520 best_cost=4.800 best_err=0 best_nonnop=12 zero_hits=0 finds=0
+BEST cost=4.800 err=0 nonnop=12
+CHECKPOINT campaign=t2 slots=12 threads=4 temp=2 opw=0.4 seed=315 secs=420.2 proposals=841654272 best_cost=4.800 best_err=0 best_nonnop=12 zero_hits=0 finds=0
+BEST cost=4.800 err=0 nonnop=12
+CHECKPOINT campaign=t2 slots=12 threads=4 temp=3 opw=0.4 seed=316 secs=420.2 proposals=914186240 best_cost=4.800 best_err=0 best_nonnop=12 zero_hits=0 finds=0
+BEST cost=4.800 err=0 nonnop=12

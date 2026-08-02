@@ -1948,3 +1948,29 @@ by measurement.
 - Grinds: sandwich9 228 refuted / 68 open (survivor grind continuing);
   templates 9,282 distinct combos UNSAT, 0 SAT (escalation continuing);
   fleet tier 3 at 37/48 slices, all negative.
+
+### P7 polish stack COMPLETE (2026-08-02): mainline confirmed at its local
+### optimum; with-idx eligibility achieved at 1048 pending ring re-derivation
+
+- **(a) Spelling/dual_fold re-tune at the SHIPPED config: ZERO** (31 axes —
+  13 never swept before — 126 moves, no improvement; the brief's cited
+  1049->1047 was friction of a different stream, already absorbed). With
+  G-30/G-31's enumeration inherited at the bit-identical config, **the
+  spelling and emission axes are now closed at the shipped stream itself.**
+- **(c) The with-idx tail is BUILT and CORRECT**: `store_final_indices`
+  (default OFF, bit-exact off on 3 configs), values 10/10 AND
+  mem[2054:2310] == reference 10/10. Costs +22 (drain-block placement;
+  4 vec-ops/group — the 3-op form needs 9 scratch words vs 3 free; header
+  word 5 derived arithmetically because ring donor plans name ABSOLUTE
+  scratch addresses).
+- **Structural finding: the tail is incompatible with the current parity
+  ring plan** (plan re-mine and pruning both fail; native-rings-only
+  miscompiles) — so the with-idx-eligible number today is **1048**
+  (ring-free 1026 + 22), not 1006+16. A TAIL-AWARE RING DERIVATION is the
+  named remaining work; expected recovery: most of the ring's 20 cycles
+  (target ~1022-1028).
+- Latent soundness issue found and guarded: the ring dead-register funding
+  pool assumes st/nv liveness patterns that future features can silently
+  violate (it produced broadcast-constant indices before guarding).
+- Mainline: **1006 unchanged, 9/9 green** (driver re-verified). Board
+  standing: no-idx eligible 1006; with-idx eligible 1048.

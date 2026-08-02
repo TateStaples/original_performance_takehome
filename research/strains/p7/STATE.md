@@ -229,3 +229,213 @@ result and are still unpriced against measurement.
 3. `lazy_position_exit` is dead code at any configuration with no ring
    coverage; it is asserted nowhere. Harmless, but a reviewer may prefer
    an explicit `assert parity_ring_slices` when the flag is on.
+
+---
+
+# P7 — Polish stack (milestones a/b/c)
+
+status: in-progress ledger, appended as each gate lands
+task: (a) spelling/dual_fold re-tune at the SHIPPED config, (b) emission-order
+re-mine, (c) the with-idx tail (`store_final_indices`, default OFF).
+
+## (a) Spelling / dual_fold re-tune at the shipped 1006 config — ZERO, and
+## the brief's "1049 -> 1047" does NOT transfer
+
+**The brief's cited win is at a different stream.** `tools/p4c_retune.py
+--gmin "(6,31)" --rounds 1` descends from `run_variant.BASE_KWARGS` with only
+`l4_gmin` overridden. Reproduced exactly:
+
+```
+l4_gmin=(6, 31)  as-shipped-flags = 1049 (correct=True)
+  iter0 pair_tournament_first_fold_race: 3 -> 0   1049 -> 1047
+RETUNED = 1047 (was 1049, friction 2) evals=75
+```
+
+That 1049 stream is NOT what `perf_takehome.py` ships. The shipped stream is
+`tools/h061_common.kwargs()` = BASE_KWARGS + `h059_curve.MIX` (rings, gmin
+(6,31), c5-primed (5,6), mem-prime flags) + the h057 1006 emission order.
+The 2 cycles `ptff 3->0` buys at 1049 are friction the shipped config has
+already absorbed.
+
+**Re-tune run AT the shipped config: 0 cycles.** Coordinate descent over 31
+axes (p4c's 18 plus 13 it never swept: `shallow_tournament_reverse_select_race`,
+`reverse_newest_parity_fold_at_shallow_levels`, `gather_load_offset`,
+`idx_boundary_select`, `parity_conds`, `c5_prexored_value_domain`,
+`flow_first_fold_levels`, `hash1_avec_race`, `temp_pool_coloring`,
+`vec_reclaim_margin`, `parity_early`, `mem_prime_ignore_l4_hazard`,
+`store_order`, `group_window`, `emit_order`), 126 evaluated moves, 3 rounds
+requested, terminated at iteration 0 with **no improving move**:
+
+```
+shipped-1006 base = 1006 (correct=True)
+  [iter0 done] best=1006 evals=126
+RETUNED = 1006 (was 1006, friction 0) plan delta: {}
+```
+
+`skew` and `l4_gmin` are pinned (dev.py:1625 asserts the ring funding map is
+derived for the (4,3)/32-group shape; the ring plan is gmin-specific).
+
+Axis sensitivity spot-check (so the zero is not a silent all-exceptions
+result): pool (15,4) = 1036, (17,4) = out of scratch, `alu_offload=False` =
+1212, `tie_break=()` = 1010, `flow_race_bias=1` = 1009,
+`reverse_newest_parity_fold=()` = 1012, `idx_select_before_madd=False` = 1024,
+`emit_order='round'`/`store_order='round'` = 1006 (inert under an explicit
+`emission_plan`). The axes are live; the config is a strict single-move
+optimum.
+
+**Spelling plan search at the shipped config: also 0.** `flow_spelling_plan`
+is EMPTY in the shipped MIX, so it was a genuinely unexplored lever.
+`tools/spelling_plan_search.py` re-pointed at `h061_common.kwargs()` (site
+numbering is emission-order specific, so a plan mined at any other order is
+meaningless here): start 1006, one full sweep of reverse flips + forward
+flips + drops, **fixpoint at 1006 with plan size 0**.
+
+**ACCEPTED CHANGE: none. `perf_takehome.py` is UNTOUCHED** (still 1006).
+
+## (b) Emission-order re-mine — ZERO, and it is closed a priori
+
+(b) was scoped as "re-mine on top of (a)'s accepted config". (a) accepted
+nothing, so the config is bit-identical to the one G-30/G-31 already closed by
+enumeration: 25,550 single-entry moves zero below 1006 (f18_exhaust1), then
+438,247 multi-move evals zero below 1006 with the k=2 interacting space
+EXHAUSTED (f37). G-32 records the same closure for the spelling and packing
+axes at this mix. No new moves can have opened, because nothing about the
+stream changed. Not re-run; **0 cycles, by inheritance from an exhaustive
+enumeration at the identical config.**
+
+Ring-plan audit obligation for (a)/(b): vacuous — no accept, so the shipped
+plan is unchanged and still the one it was mined for.
+
+## (c) The with-idx tail (`store_final_indices`) — IN PROGRESS
+
+See the "with-idx tail" section appended below as gates land.
+
+### (c) gate log — measurements so far
+
+Config vocabulary: "ring-free" = `h061_common.kwargs(rings=False)` = **1026**
+(structural rings only); "ringed mainline" = `h061_common.kwargs()` = **1006**
+(the shipped stream, 40 funded rings, h057 order).
+
+| build | base | with-idx | delta | values | indices vs `ref_mem[2054:2310]` |
+|---|---|---|---|---|---|
+| ring-free, index vstores in the DRAIN block | 1026 | **1048** | +22 | OK | **256/256 exact** |
+| ring-free, index vstores INSIDE round 15 | 1026 | 1071 | +45 | OK | 256/256 exact |
+| ringed mainline | 1006 | **build FAULTS** | — | — | — |
+
+* The tail is CORRECT: the new check compares
+  `machine.mem[iip:iip+256]` against `reference_kernel2`'s final
+  `mem[inp_indices_p:...]` (iip measured = 2054, ivp = 2310, matching the
+  brief's mem[2054..2309]); 0 of 256 words differ, values still exact.
+* Drain-block stores beat in-round stores by 23 cycles, so the drain form is
+  the one being kept. (In-round stores were tried to shorten `st`/`nv`
+  liveness for the ring plan's sake; it did NOT fix the ring fault and cost
+  23 cycles, so the trade is strictly bad.)
+* +22 on the ring-free base is above the +16 the model predicted. Op census
+  for the tail: 4 vec-ops/group for the 31 groups that GATHER at round 15
+  (st holds the true level-4 gather address) and 6 for the one SERVED group,
+  + 32 flow add_imm + 32 vstores = ~130 vec-ops. Equalising the added
+  lane-ops across valu/alu predicts a floor of ~1008 from 995, i.e. ~+13
+  floor and ~+22 realized once the drain's regret is added.
+
+### (c) open blocker: the ringed mainline needs a ring re-mine
+
+With `parity_ring` on, the with-idx build **faults at cycle ~878 on a
+round-8 gather of group 28** (`state_vecs[28]` = scratch 761, which the mined
+plan hands to `(0,19)` as a ring donor). This is NOT the tail's liveness: the
+fault is in EPOCH 0, hundreds of cycles before any tail op, and it survived
+moving the index stores into round 15 (which shortens `st`/`nv` liveness
+back to nearly where it was). It is the documented G-30/F-35 failure mode —
+**ring borrow windows are liveness-TIMED and order-specific, and the tail
+shifts the whole schedule by ~30-45 cycles, so the mined plan goes dirty.**
+Fixing it is a ring re-mine (grow-then-prune, F-35), not a code fix.
+
+### (c) two build-time hazards found and fixed (both would have shipped wrong answers)
+
+1. **Never allocate scratch ahead of the state allocations.** The first
+   version loaded `inp_indices_p` from the header (1 word). That shifted every
+   later scratch address by one and silently re-pointed the ENTIRE
+   `parity_ring_plan`, whose donors are absolute addresses — gather addresses
+   corrupted at cycle 123. The tail now derives the index region
+   arithmetically (`add_imm(addr, val_addrs[g], -batch_size)`), relying on
+   `build_mem_image`'s `inp_values_p == inp_indices_p + batch_size` (the same
+   invariant `bcast_via_mem` already uses). ZERO new scratch — which the
+   1533/1536 occupancy required anyway.
+2. **`make_newest_parity_last_diffs`'s dead-register pool is built ENTIRELY
+   out of `st` and `nv`** — exactly the two registers the tail keeps live
+   through round 15. Unguarded, 16 groups' final indices came back as a single
+   broadcast constant (their donated `st`s). The pool is now empty under
+   `store_final_indices`, so the served group falls back to `dffold`; that
+   fallback aliases `omf1_vec`, so the flag additionally requires
+   `b3l_safe_leaf_fallback=True` (asserted with that message). The b3l assert
+   itself is untouched and still fires.
+
+### (c) FINAL — the tail is correct and costs +22, but it FORFEITS the ring
+
+**Shipped form: index vstores in the drain block, right after each group's
+value vstore.** `store_final_indices=True` (default OFF) +
+`b3l_safe_leaf_fallback=True`.
+
+| config | base | with-idx | delta |
+|---|---|---|---|
+| ring-free (`parity_ring` off) | 1026 | **1048** | **+22** |
+| ringed mainline (40 planned + ~20 native rings) | 1006 | INCORRECT | — |
+| ringed, `parity_ring_plan=()` (native rings only) | 1017 | INCORRECT (1041) | — |
+
+**`parity_ring` and the with-idx tail are structurally incompatible, and
+pruning cannot fix it.** A greedy prune over all 20 planned entries (add-back
+from empty, correctness in the objective) kept ZERO: even with the plan
+emptied, the ~20 NATIVELY derived rings still miscompile. The reason is not
+timing noise — the ring funds retained parities out of registers it believes
+are dead, and its liveness model says a group's `st` dies at its round-15
+gather issue and its `nv` at the round-15 fold-in xor. **Those are exactly the
+two registers the tail resurrects**, in every group. Shortening the
+resurrection (computing AND storing the index inside round 15 instead of at
+the drain) does not help either — still incorrect, and 23 cycles worse
+(1071 vs 1048), because round 15 is the busiest region and the drain's store
+engine is idle. F-35's rule applies: planned rings are prunable, natively
+derived ones are a property of the ORDER and unrepairable.
+
+So the honest **with-idx-eligible number today is 1048**, not 1006+22: the
+tail costs +22 of its own AND forfeits the ring's 20 cycles. Recovering the
+ring for a with-idx build needs the ring DERIVATION (not just the plan) made
+tail-aware, and by construction that leaves far fewer donors — the ceiling is
+close to the ring-free base anyway.
+
+**Gates**
+* Flag-OFF bit-exact vs `git show HEAD:dev.py`, sha256 of the bundle list +
+  bundle count + `scratch_next_addr`, on 3 configs, default AND explicit
+  `store_final_indices=False`:
+
+  | config | HEAD | new default | new explicit OFF |
+  |---|---|---|---|
+  | 1006 ring mainline | (1006, `f0b92c3ed3295e87`, 1533) | identical | identical |
+  | ring-free | (1026, `ae44f09e55b36054`, 1533) | identical | identical |
+  | rings + pools (15,4) | (1036, `1a7972d2a6dfad23`, 1525) | identical | identical |
+
+* Tail correctness, 10 seeds, ring-free with-idx build (one build, 10 inputs):
+  values exact 10/10 AND `machine.mem[2054:2310]` == `ref_mem[2054:2310]`
+  10/10. Cycles 1048 on every seed (the schedule is data-independent).
+* `python3 tests/submission_tests.py` → **Ran 9 tests, OK, CYCLES: 1006**.
+  `perf_takehome.py` NOT MODIFIED (no accept in (a)/(b) to port, and the tail
+  is a board variant, not a grader improvement — the grader compares values
+  only).
+* Scratch unchanged at 1533/1536 with the flag on: the tail allocates NOTHING.
+
+**Files:** `dev.py` only — `store_final_indices` kwarg; `emit_final_index()` /
+`emit_final_index_store()`; a `pre_madd` hook in `b3l_fold_diffs`;
+`should_fold_b3` extended for a served final round; the dead-register-pool
+guard in `make_newest_parity_last_diffs`; `final_index_store_cycles` folded
+into the trailing `pause` gate.
+
+**Open issues**
+1. Ringed with-idx is unavailable (above). Reopen only with a tail-aware ring
+   derivation; expect it to be worth much less than 20 cycles.
+2. The gathered-group tail is 4 vec-ops where 3 would do; the missing op is a
+   `(1 - 2*fp)` broadcast, 9 scratch words against 3 free. Worth ~5 cycles if
+   9 words are ever freed.
+3. `store_final_indices` requires `b3l_safe_leaf_fallback=True` whenever any
+   group is L4-served at round 15 (asserted). At `l4_gmin=(6,31)` that is one
+   group; the fallback alone measures 1006 (free) at the mainline.
+4. `tools/h042_plan.json` (empty plan, written by the spelling search at the
+   shipped config) was deleted rather than committed — it encodes "no plan",
+   and a stray plan file in tools/ invites a stale-plan accident.

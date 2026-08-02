@@ -826,6 +826,7 @@ class KernelBuilder:
         parity_ring_extras: tuple[int, ...] = (),
         parity_ring_plan: tuple[tuple[tuple[int, int], tuple[int, int, int]], ...] = (),
         lazy_position_exit: bool | str = False,
+        store_final_indices: bool = False,
         flow_spelling_plan: tuple[tuple[int, int], ...] = (),
         vec_partition_plan: tuple[tuple[int, str], ...] = (),
         vec_tie_offload: int = 0,
@@ -2095,6 +2096,12 @@ class KernelBuilder:
              scheduler.flow_race_bias_taken) = snap
 
         # --- header (inp_indices is never read: only values are graded) ---
+        # NB: do NOT add allocations here.  `parity_ring_plan` names its donor
+        # registers by ABSOLUTE scratch address, so inserting one word ahead
+        # of the state allocations shifts every later address and silently
+        # re-points the whole ring plan (measured: gather addresses corrupt at
+        # cycle 123).  The with-idx tail derives inp_indices_p arithmetically
+        # for exactly this reason.
         for name, hidx in (("forest_values_p", 4), ("inp_values_p", 6)):
             self.alloc_scratch(name)
             caddr = const(hidx)
@@ -2663,6 +2670,25 @@ class KernelBuilder:
             nonlocal newest_parity_last_leaf_diffs_e, newest_parity_last_leaf_diffs_d, newest_parity_last_dead_reg_pool
             if newest_parity_last_leaf_diffs_e is not None:
                 return
+            if store_final_indices:
+                # P7 (with-idx): this pool is built ENTIRELY out of `st` and
+                # `nv`, and the tail keeps BOTH live through round 15 for
+                # every group (st holds the level-5 index until its vstore,
+                # nv hosts the final parity).  There are no dead donors left,
+                # so the diff-table path is unfundable and the served group
+                # falls back to `dffold` -- 1 group at the shipped l4_gmin.
+                # (Measured before this guard: 16 groups' indices came back
+                # as one broadcast constant -- the donated `st`s.)
+                assert b3l_safe_leaf_fallback or not any(
+                    is_pair_tournament_served(r, g) for g in range(n_groups)), (
+                    "store_final_indices forces the round-15 dffold fallback, whose "
+                    "lv leaf temps alias omf1_vec -- pass b3l_safe_leaf_fallback=True "
+                    "(P3-D: degrades the 4 leaf selects to plain flow vselects off the "
+                    "broadcast tables, zero extra scratch) or serve no L4 at round 15")
+                newest_parity_last_leaf_diffs_e = []
+                newest_parity_last_leaf_diffs_d = []
+                newest_parity_last_dead_reg_pool = []
+                return
             assert state_vecs is not None and node_val_vecs is not None
             unserved = [g for g in range(n_groups) if not is_pair_tournament_served(r, g)]
             early_dead_group_count = 2 * bs_  # first two skew blocks die earliest
@@ -2720,7 +2746,8 @@ class KernelBuilder:
                     out.append(h)
 
         def b3l_fold_diffs(state_vec_: int, node_val_: int,
-                           ring_: tuple[int, int, int] | None = None) -> None:
+                           ring_: tuple[int, int, int] | None = None,
+                           pre_madd: Callable[[], None] | None = None) -> None:
             # Final-round b3-last fold with precomputed diffs and private
             # registers: masks computed ONCE (exact 0/1, off st_ which is
             # ready at round start), each leaf a dual_fold (1 valu madd
@@ -2759,6 +2786,11 @@ class KernelBuilder:
                 dual_fold(r2, mask_b2, dt[3], tabs[6])    # u3
                 comb(r1, mask_b1, r2, r1)                 # q1 = b1 ? u3 : u2
                 comb(r0, mask_b0, r1, r0)                 # winner = b0 ? q1 : q0
+            if pre_madd is not None:
+                # P7 (with-idx): the newest parity b3 rides node_val_ and is
+                # destroyed by the madd below, so anything that still needs
+                # it (the final-index position fold) runs here.
+                pre_madd()
             madd(node_val_, node_val_, d_lo, e_lo)                    # node_val = E + b3*D
 
         # H-045 (parity_ring): (epoch, group) -> 3 ring vector bases holding
@@ -2903,6 +2935,91 @@ class KernelBuilder:
         # emission loop can interleave stages across a block's groups
         # (`emit_order`); the default drains each group fully in order,
         # reproducing the historical contiguous emission bit-for-bit.
+        # P7 (`store_final_indices`, the "with-idx" tail).  The graded
+        # submission is a no-idx artifact: only inp_values is compared, so the
+        # last round returns right after the hash and the level-5 index is
+        # never formed.  Boards that also require the final inp_indices need
+        # it, and this is the LEAN form of that tail (P5-C frame 8 priced a
+        # 6-op/group Horner rebuild from raw parities; the shipped shape has
+        # the level-4 gather ADDRESS in st for 31 of 32 groups, so most groups
+        # cost 4 ops and none costs a packed-accumulator rebuild).
+        #
+        # Rounds wrap at height+1 = 11, so round 15 reads level 4 and the
+        # final index is at level 5:  idx5 = 2*idx4 + 1 + b15  (no wrap check
+        # needed -- max level-5 index 62 << n_nodes 2047).
+        #
+        # GATHERED at round 15 (st = fp + idx4, the true gather address):
+        #     st += omf        -> idx4 + 1        (omf = 1 - fp, already live)
+        #     pv  = vl & 1     -> b15
+        #     pv -= one        -> b15 - 1
+        #     st  = 2*st + pv  -> 2*idx4 + 1 + b15 = idx5
+        # Four ops, ZERO new scratch.  A dedicated (1 - 2*fp) broadcast would
+        # fuse the first and last into one madd (3 ops/group, ~-5 cycles) but
+        # costs 9 words and the mainline has 3 free (scratch 1533/1536).
+        #
+        # SERVED at round 15 (l4_gmin's epoch-1 tail: 1 group at (6,31)):
+        # st is the packed COMPLEMENT position and the newest parity b3 rides
+        # nv, which the fold's last madd destroys -- so the b3 fold is
+        # re-enabled (`should_fold_b3` / `pre_madd`) and then the round-4
+        # exit's own reconstruction constant rec_k = fp + k does the rest.
+        # With L=4, Ln=5 the exit identity gives fp + idx5 = -2*p' + 61 + fp
+        # + b15, so any live rec_k works with a constant correction of k-60:
+        #     st = -2*st + rec_k ; st += pv   -> fp + idx5 + (k - 61)
+        #     st += omf ; st -= (k - 60)      -> idx5
+        def emit_final_index(g: int, st: int, vl: int, pv: int) -> None:
+            assert not lazy_position_exit, \
+                "with-idx tail needs the packed position; lazy_position_exit elides it"
+            if not is_served_without_gather(rounds - 1, g):
+                vec("+", st, st, one_minus_forest_values_p_vec)
+                vec("&", pv, vl, one_vec)
+                vec("-", pv, pv, one_vec)
+                madd(st, st, two_vec, pv)
+                return
+            assert c5_prexored_value_domain, \
+                "with-idx tail's served-group path assumes the c5-prexor exit identity"
+            key = next((k for k in (61, 62) if k in gaddr_reconstruction_vecs), None)
+            assert key is not None, (
+                "with-idx tail needs a level-5 gaddr reconstruction constant; "
+                f"have {sorted(gaddr_reconstruction_vecs)}")
+            correction = {61: one_vec, 62: two_vec}[key]
+            vec("&", pv, vl, one_vec)
+            madd(st, st, negtwo_vec, gaddr_reconstruction_vecs[key])
+            vec("+", st, st, pv)
+            vec("+", st, st, one_minus_forest_values_p_vec)
+            vec("-", st, st, correction)
+
+        final_index_store_cycles: list[int] = []
+
+        def emit_final_index_store(g: int) -> int:
+            """vstore the level-5 indices, emitted immediately after the tail
+            computes them so `st`/`nv` die where they died before (the ring
+            plan's borrow windows are liveness-timed and ORDER-specific --
+            deferring these stores to the drain block keeps 32 state vectors
+            live to the end and breaks the mined plan).
+
+            Emitted right after the group's VALUE vstore, so the address
+            register is just `val_addrs[g]`, dead from that point.  Retiring
+            the pair together measured 23 cycles better than computing and
+            storing the index inside round 15 (1048 vs 1071 on the ring-free
+            base): the store engine is idle at the drain, and round 15 is not.
+            `build_mem_image` lays the regions out
+            adjacently (inp_values_p = inp_indices_p + batch_size), the same
+            invariant `bcast_via_mem` uses, so no header load and therefore
+            NO new scratch: `parity_ring_plan` names its donors by absolute
+            address, so one extra word ahead of the state allocations
+            re-points the whole plan (measured: gather addresses corrupt at
+            cycle 123)."""
+            assert val_addrs is not None and state_vecs is not None
+            scheduler.emit("flow",
+                           ("add_imm", val_addrs[g], val_addrs[g], -batch_size),
+                           (val_addrs[g],), (val_addrs[g],))
+            c = scheduler.emit("store", ("vstore", val_addrs[g], state_vecs[g]),
+                               (val_addrs[g],) + self._v(state_vecs[g]), (),
+                               mem_write=True,
+                               ignore_mem_read_hazard=store_disjoint_region)
+            final_index_store_cycles.append(c)
+            return c
+
         def _round_stage_generator(r: int, g: int) -> Iterator[None]:
             if True:  # keep the original indentation of the body below
                 assert (temp_pool_size is not None and cond_pool_size is not None
@@ -3131,7 +3248,10 @@ class KernelBuilder:
                     # occupying nv, condA joins the value-temp rotation.
                     assert condA is not None and condB is not None and tm is not None and tmM is not None
                     nvsrc = nv
-                    should_fold_b3 = r != rounds - 1
+                    # P7 (with-idx): the final round normally drops the b3
+                    # fold (nothing reads st after it); the with-idx tail
+                    # reads it, so a served last round folds b3 after all.
+                    should_fold_b3 = r != rounds - 1 or store_final_indices
                     if r in newest_parity_last_rounds:
                         # H-023 (b3_last): fold E_vecs and D_vecs by the
                         # OLDER bits b0,b1,b2 (in st, ready at round start)
@@ -3156,7 +3276,10 @@ class KernelBuilder:
                             # (falls through to dffold if the dead-register
                             # pool cannot fund another private group).
                             # H-045: ringed groups skip the 5 mask ops.
-                            b3l_fold_diffs(st, nv, ring)
+                            b3l_fold_diffs(
+                                st, nv, ring,
+                                pre_madd=(lambda: fold_position(st, nv))
+                                if should_fold_b3 and r == rounds - 1 else None)
                         else:
                             nonlocal two_minus_fp_vec_clobbered
                             # P3-D (b3l_safe_leaf_fallback): the lv leaf
@@ -3328,6 +3451,10 @@ class KernelBuilder:
 
                 # ---- position/state update & gather prefetch for r+1 ----
                 if r == rounds - 1:
+                    if store_final_indices:
+                        # nv is dead here (the node value was folded into vl
+                        # rounds ago), so the parity temp costs no scratch.
+                        emit_final_index(g, st, vl, nv)
                     return
                 next_level = level(r + 1)
                 if next_level == 0:
@@ -3497,6 +3624,8 @@ class KernelBuilder:
                 "store", ("vstore", val_addrs[g], hash_chain_vecs[g]),
                 (val_addrs[g],) + self._v(hash_chain_vecs[g]), (),
                 mem_write=True, ignore_mem_read_hazard=store_disjoint_region))
+            if store_final_indices:
+                early_store_cycles.append(emit_final_index_store(g))
             early_stored.add(g)
 
         # Groups are fully independent, so they need not march in lockstep:
@@ -3675,6 +3804,13 @@ class KernelBuilder:
                        (val_addrs[g],) + self._v(hash_chain_vecs[g]), (), mem_write=True,
                        ignore_mem_read_hazard=store_disjoint_region)
             last_store_cycle = max(last_store_cycle, c)
+            if store_final_indices:
+                last_store_cycle = max(last_store_cycle, emit_final_index_store(g))
+        if final_index_store_cycles:
+            # P7 (with-idx): index stores retire inside their group's round 15,
+            # which can be after the last value store -- the trailing pause
+            # must still dominate them.
+            last_store_cycle = max(last_store_cycle, max(final_index_store_cycles))
         scheduler.emit("flow", ("pause",), min_cycle=last_store_cycle)
 
         # H-048: debug-only export of the allocation/ring layout for the
