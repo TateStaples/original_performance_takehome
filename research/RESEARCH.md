@@ -1632,3 +1632,10 @@ which P5-I2 (bit-serial exact solver) + the P5-K queue now decide alone.**
 Residual scope gap (pre-existing, shared with P3-F): non-decomposable
 global restructurings — the (S)-hypothesis gap — not covered by any
 accounting argument.
+
+### Fleet complete (2026-08-02): join-at-4 family CLOSED for all four join types
+
+63/63 slices negative across g=xor, add, sub, rsub (each ~24.2M joined
+prefixes x 2.118B chain nodes). The entire enumerable increment of the
+fan-out space is closed. Tier 3 launched: round12 --join-r y g=xor (the
+nv-fanout hole, 48 slices, 1-concurrent behind the template grind).

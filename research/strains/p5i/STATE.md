@@ -518,3 +518,109 @@ CHECKPOINT2 pair=(29,7) verdict=OPEN rung=k8 iter=0 n=34 timeout=25s reason=time
 CHECKPOINT2 pair=(30,8) verdict=OPEN rung=k8 iter=0 n=34 timeout=25s reason=timeout rt=25s
 CHECKPOINT2 pair=(26,27) verdict=OPEN rung=k8 iter=0 n=34 timeout=25s reason=timeout rt=25s
 CHECKPOINT2 pair=(27,6) verdict=OPEN rung=k8 iter=0 n=34 timeout=25s reason=timeout rt=25s
+
+## 9. TOP-BIT DIFFERENTIAL-COUNT THEOREM — kills every pair with s2 <= 14
+
+THEOREM (forward). Let out_0 be bit 0 of sandwich9 and
+    N := #{ x in Z_2^32 : out_0(x ^ 2^31) != out_0(x) }.
+For 1 <= s1 <= 30, 1 <= s2 <= 30, s1+s2 >= 32 (so u := 31-s1 >= 1 and
+t := s1+s2-31 >= 1), for EVERY choice of the 8 constants:
+        N == 0   (mod 2^(33-s2)).
+Proof. b* = b ^ 2^31 exactly (K1 odd); c* = c ^ 2^31 ^ 2^u exactly;
+e* = e + 2^31 + sg*K2*2^u with sg = +-1 from c_u. out_0 = e_0 ^ e_{s2} ^
+const and e*_0 = e_0 (u>=1), so with A := bits u..u+t-1 of e, q := K2 mod
+2^t (odd), the differential is exactly
+    D(x) = K2_t ^ [A + q >= 2^t]   (sg=+1) ,   K2_t ^ [A < q]   (sg=-1).
+Split c = c_hi*2^(u+1) + c_u*2^u + c_lo. For fixed (c_u, c_lo), bits
+u+1..u+t-1 of e are EXACTLY uniform over c_hi (K2 odd) while bit u of e is
+pinned to g ^ c_u, g := bit_u(K2*c_lo + C2). Counting both sg-classes and
+using that q is odd (alpha(p) = beta(p^1)) gives
+    M = 2^(32-t)*(q-1) + 2^(33-s2)*n_1,   n_1 := #{c_lo<2^u : g=1},
+and N = M or 2^32 - M according to K2_t. s1 <= 30 makes 32-t >= 33-s2, so
+2^(33-s2) divides both. QED
+
+NUMERIC GUARD (tools/p5i_diffcount.py, scaled word width): w=14, 528
+(pair,constants) trials over every legal (s1,s2), VIOLATIONS = 0, and the
+observed common 2-adic valuation EQUALS the predicted w+1-s2 for every s2
+-- the modulus is SHARP, not conservative. Control at t=0 (s1+s2=w-1)
+reproduces sec. 2's N == 2^w exactly, 11/11.
+
+MYHASH SIDE (tools/p5i_myhash_diffcount.py, full 2^32 numpy sweep, numpy
+myhash cross-checked against the scalar reference):
+        N_myhash = 2172911616 = 2^18 * 8289,   v2 = 18.
+=> 33-s2 > 18, i.e. s2 <= 14, is REFUTED EXACTLY for every s1 in 1..30
+with s1+s2 >= 32. 78 pairs in the z3 scope, 68 of them previously
+undecided. (Consistent with, and strictly containing, the z3 refutations
+already on record at s2 <= 14.)
+
+COSET REFINEMENT — TESTED AND DEAD. The natural strengthening ("the
+differential density is the same in every coset x mod 2^m") is FALSE for
+s2 > s1 (scaled-model counterexamples at (3,12),(5,11),(7,8),(8,9),...;
+it holds empirically iff s2 <= s1 or t=1). And it buys nothing anyway:
+myhash's coset counts N_m(rho) are EXACTLY constant for all m = 1..8
+(m=8: 8487936 in every one of the 256 cosets). No kills.
+
+## 10. MIRROR THEOREM (sandwich9^{-1}) — VALID BUT VACUOUS
+
+sandwich^{-1} = A1' o T1 o A2' o T2 o A3' with A' madds (odd K^{-1}) and
+T_i = sigma_i^{-1} = multi-term xorshift. For s1,s2 >= 16 each T has
+exactly two terms on 32 bits and the sec. 9 argument transfers verbatim
+with (observed bit, low shift) = (s1, u2 := 31-s2), same t = s1+s2-31:
+        N' == 0 (mod 2^(33-s1)),  N' := #{y : g_0(y) != g_0(y^2^31)}.
+NUMERIC GUARD (tools/p5i_mirror.py): w=14 288 trials and w=16 196 trials
+in the two-term regime, VIOLATIONS = 0, observed valuation == predicted
+for every s1 -- sharp.
+MYHASH SIDE (tools/p5i_myhash_invdiff.py; myhash^{-1} built stage-by-stage
+in numpy, round-trip verified on 2^20 randoms + edge cases):
+        N'_myhash = 2011299840 = 2^17 * 15345,  v2 = 17.
+=> refutes s1 <= 32-17 = 15. But the theorem's validity regime is
+s1 >= 16. The kill range and the validity range are DISJOINT (by one
+notch), so the mirror closes ZERO pairs. Recorded so nobody re-derives it.
+CHECKPOINT2 pair=(27,26) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(28,25) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(30,23) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(26,26) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(27,25) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(28,24) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(29,23) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(30,22) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(25,26) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(26,25) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(27,24) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(28,23) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(29,22) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(30,21) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(7,25) verdict=REFUTED rung=k8 iter=0 n=34 solve=10.4s total=10.4s rt=15s
+CHECKPOINT2 pair=(25,25) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(26,24) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(27,23) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(28,22) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(29,21) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(30,20) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(8,25) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(9,26) verdict=REFUTED rung=k8 iter=0 n=34 solve=5.5s total=5.5s rt=15s
+CHECKPOINT2 pair=(24,25) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(25,24) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(26,23) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(27,22) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(28,21) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(29,20) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(30,19) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(8,24) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(9,25) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(22,26) verdict=REFUTED rung=k8 iter=0 n=34 solve=6.0s total=6.0s rt=15s
+CHECKPOINT2 pair=(23,25) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(24,24) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(25,23) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(26,22) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(27,21) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(28,20) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(29,19) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(9,24) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(10,25) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(22,25) verdict=REFUTED rung=k8 iter=0 n=34 solve=12.0s total=12.0s rt=15s
+CHECKPOINT2 pair=(23,24) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(24,23) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(25,22) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(26,21) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s
+CHECKPOINT2 pair=(27,20) verdict=OPEN rung=k8 iter=0 n=34 timeout=15s reason=timeout rt=15s

@@ -837,3 +837,162 @@ COMBO t4 s1=26 s2=4 verdict=UNSAT [iter=0 solve=0.6s] time=0.6s
 COMBO t4 s1=26 s2=5 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
 COMBO t4 s1=26 s2=6 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
 COMBO t4 s1=26 s2=7 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=26 s2=8 verdict=TIMEOUT [iter=0 solve=13.5s reason=timeout] time=13.5s
+COMBO t4 s1=26 s2=9 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=26 s2=10 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=26 s2=11 verdict=UNSAT [iter=0 solve=2.3s] time=2.4s
+COMBO t4 s1=26 s2=12 verdict=UNSAT [iter=0 solve=2.2s] time=2.2s
+COMBO t4 s1=26 s2=13 verdict=TIMEOUT [iter=0 solve=13.7s reason=timeout] time=13.7s
+COMBO t4 s1=26 s2=14 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=26 s2=15 verdict=TIMEOUT [iter=0 solve=13.9s reason=timeout] time=13.9s
+COMBO t4 s1=26 s2=16 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=26 s2=17 verdict=UNSAT [iter=0 solve=4.4s] time=4.4s
+COMBO t4 s1=26 s2=18 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=26 s2=19 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=26 s2=20 verdict=UNSAT [iter=0 solve=2.4s] time=2.4s
+COMBO t4 s1=26 s2=21 verdict=UNSAT [iter=0 solve=2.2s] time=2.2s
+COMBO t4 s1=26 s2=22 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=26 s2=23 verdict=UNSAT [iter=0 solve=1.2s] time=1.2s
+COMBO t4 s1=26 s2=24 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=26 s2=25 verdict=UNSAT [iter=0 solve=0.8s] time=0.8s
+COMBO t4 s1=26 s2=26 verdict=UNSAT [iter=0 solve=0.9s] time=0.9s
+COMBO t4 s1=26 s2=27 verdict=UNSAT [iter=0 solve=0.9s] time=0.9s
+COMBO t4 s1=26 s2=28 verdict=UNSAT [iter=0 solve=0.2s] time=0.2s
+COMBO t4 s1=26 s2=29 verdict=UNSAT [iter=0 solve=0.2s] time=0.2s
+COMBO t4 s1=26 s2=30 verdict=UNSAT [iter=0 solve=0.2s] time=0.2s
+COMBO t4 s1=26 s2=31 verdict=UNSAT [iter=0 solve=0.2s] time=0.2s
+COMBO t4 s1=27 s2=1 verdict=UNSAT [iter=0 solve=0.3s] time=0.3s
+COMBO t4 s1=27 s2=2 verdict=UNSAT [iter=0 solve=0.3s] time=0.3s
+COMBO t4 s1=27 s2=3 verdict=UNSAT [iter=0 solve=0.3s] time=0.3s
+COMBO t4 s1=27 s2=4 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.2s
+COMBO t4 s1=27 s2=5 verdict=TIMEOUT [iter=0 solve=12.3s reason=timeout] time=12.3s
+COMBO t4 s1=27 s2=6 verdict=TIMEOUT [iter=0 solve=12.2s reason=timeout] time=12.2s
+COMBO t4 s1=27 s2=7 verdict=TIMEOUT [iter=0 solve=12.2s reason=timeout] time=12.2s
+COMBO t4 s1=27 s2=8 verdict=TIMEOUT [iter=0 solve=14.1s reason=timeout] time=14.1s
+COMBO t4 s1=27 s2=9 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=27 s2=10 verdict=TIMEOUT [iter=0 solve=12.2s reason=timeout] time=12.2s
+COMBO t4 s1=27 s2=11 verdict=UNSAT [iter=0 solve=3.6s] time=3.6s
+COMBO t4 s1=27 s2=12 verdict=TIMEOUT [iter=0 solve=12.3s reason=timeout] time=12.3s
+COMBO t4 s1=27 s2=13 verdict=UNSAT [iter=0 solve=4.2s] time=4.2s
+COMBO t4 s1=27 s2=14 verdict=TIMEOUT [iter=0 solve=12.5s reason=timeout] time=12.5s
+COMBO t4 s1=27 s2=15 verdict=TIMEOUT [iter=0 solve=13.6s reason=timeout] time=13.6s
+COMBO t4 s1=27 s2=16 verdict=UNSAT [iter=0 solve=4.5s] time=4.5s
+COMBO t4 s1=27 s2=17 verdict=UNSAT [iter=0 solve=2.3s] time=2.4s
+COMBO t4 s1=27 s2=18 verdict=TIMEOUT [iter=0 solve=12.2s reason=timeout] time=12.2s
+COMBO t4 s1=27 s2=19 verdict=UNSAT [iter=0 solve=2.4s] time=2.5s
+COMBO t4 s1=27 s2=20 verdict=TIMEOUT [iter=0 solve=13.7s reason=timeout] time=13.7s
+COMBO t4 s1=27 s2=21 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=27 s2=22 verdict=UNSAT [iter=0 solve=2.4s] time=2.4s
+COMBO t4 s1=27 s2=23 verdict=UNSAT [iter=0 solve=2.4s] time=2.4s
+COMBO t4 s1=27 s2=24 verdict=TIMEOUT [iter=0 solve=13.5s reason=timeout] time=13.5s
+COMBO t4 s1=27 s2=25 verdict=UNSAT [iter=0 solve=1.0s] time=1.0s
+COMBO t4 s1=27 s2=26 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.2s
+COMBO t4 s1=27 s2=27 verdict=UNSAT [iter=0 solve=2.2s] time=2.2s
+COMBO t4 s1=27 s2=28 verdict=UNSAT [iter=0 solve=2.3s] time=2.3s
+COMBO t4 s1=27 s2=29 verdict=UNSAT [iter=0 solve=2.2s] time=2.2s
+COMBO t4 s1=27 s2=30 verdict=UNSAT [iter=0 solve=0.4s] time=0.4s
+COMBO t4 s1=27 s2=31 verdict=UNSAT [iter=0 solve=0.5s] time=0.5s
+COMBO t4 s1=28 s2=1 verdict=UNSAT [iter=0 solve=0.7s] time=0.7s
+COMBO t4 s1=28 s2=2 verdict=UNSAT [iter=0 solve=0.7s] time=0.7s
+COMBO t4 s1=28 s2=3 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=28 s2=4 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.2s
+COMBO t4 s1=28 s2=5 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=28 s2=6 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=28 s2=7 verdict=TIMEOUT [iter=0 solve=13.6s reason=timeout] time=13.6s
+COMBO t4 s1=28 s2=8 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=28 s2=9 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.2s
+COMBO t4 s1=28 s2=10 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=28 s2=11 verdict=TIMEOUT [iter=0 solve=13.6s reason=timeout] time=13.7s
+COMBO t4 s1=28 s2=12 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=28 s2=13 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=28 s2=14 verdict=UNSAT [iter=0 solve=4.4s] time=4.4s
+COMBO t4 s1=28 s2=15 verdict=UNSAT [iter=0 solve=2.1s] time=2.1s
+COMBO t4 s1=28 s2=16 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=28 s2=17 verdict=UNSAT [iter=0 solve=2.1s] time=2.1s
+COMBO t4 s1=28 s2=18 verdict=TIMEOUT [iter=0 solve=13.5s reason=timeout] time=13.5s
+COMBO t4 s1=28 s2=19 verdict=UNSAT [iter=0 solve=1.0s] time=1.0s
+COMBO t4 s1=28 s2=20 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=28 s2=21 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=28 s2=22 verdict=UNSAT [iter=0 solve=2.3s] time=2.3s
+COMBO t4 s1=28 s2=23 verdict=UNSAT [iter=0 solve=2.4s] time=2.4s
+COMBO t4 s1=28 s2=24 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=28 s2=25 verdict=UNSAT [iter=0 solve=2.1s] time=2.2s
+COMBO t4 s1=28 s2=26 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=28 s2=27 verdict=UNSAT [iter=0 solve=2.4s] time=2.4s
+COMBO t4 s1=28 s2=28 verdict=UNSAT [iter=0 solve=2.3s] time=2.3s
+COMBO t4 s1=28 s2=29 verdict=UNSAT [iter=0 solve=2.2s] time=2.2s
+COMBO t4 s1=28 s2=30 verdict=UNSAT [iter=0 solve=0.5s] time=0.5s
+COMBO t4 s1=28 s2=31 verdict=UNSAT [iter=0 solve=0.4s] time=0.5s
+COMBO t4 s1=29 s2=1 verdict=UNSAT [iter=0 solve=0.6s] time=0.7s
+COMBO t4 s1=29 s2=2 verdict=TIMEOUT [iter=0 solve=13.8s reason=timeout] time=13.8s
+COMBO t4 s1=29 s2=3 verdict=TIMEOUT [iter=0 solve=13.6s reason=timeout] time=13.6s
+COMBO t4 s1=29 s2=4 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=29 s2=5 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=29 s2=6 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=29 s2=7 verdict=TIMEOUT [iter=0 solve=13.6s reason=timeout] time=13.6s
+COMBO t4 s1=29 s2=8 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=29 s2=9 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=29 s2=10 verdict=UNSAT [iter=0 solve=2.3s] time=2.3s
+COMBO t4 s1=29 s2=11 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.2s
+COMBO t4 s1=29 s2=12 verdict=UNSAT [iter=0 solve=2.2s] time=2.2s
+COMBO t4 s1=29 s2=13 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=29 s2=14 verdict=UNSAT [iter=0 solve=4.2s] time=4.3s
+COMBO t4 s1=29 s2=15 verdict=TIMEOUT [iter=0 solve=13.5s reason=timeout] time=13.5s
+COMBO t4 s1=29 s2=16 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=29 s2=17 verdict=UNSAT [iter=0 solve=2.2s] time=2.2s
+COMBO t4 s1=29 s2=18 verdict=UNSAT [iter=0 solve=4.3s] time=4.3s
+COMBO t4 s1=29 s2=19 verdict=UNSAT [iter=0 solve=4.2s] time=4.2s
+COMBO t4 s1=29 s2=20 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.2s
+COMBO t4 s1=29 s2=21 verdict=TIMEOUT [iter=0 solve=13.5s reason=timeout] time=13.5s
+COMBO t4 s1=29 s2=22 verdict=UNSAT [iter=0 solve=1.0s] time=1.0s
+COMBO t4 s1=29 s2=23 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=29 s2=24 verdict=TIMEOUT [iter=0 solve=12.2s reason=timeout] time=12.2s
+COMBO t4 s1=29 s2=25 verdict=UNSAT [iter=0 solve=3.9s] time=3.9s
+COMBO t4 s1=29 s2=26 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=29 s2=27 verdict=UNSAT [iter=0 solve=4.1s] time=4.1s
+COMBO t4 s1=29 s2=28 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=29 s2=29 verdict=UNSAT [iter=0 solve=2.2s] time=2.2s
+COMBO t4 s1=29 s2=30 verdict=UNSAT [iter=0 solve=2.3s] time=2.3s
+COMBO t4 s1=29 s2=31 verdict=UNSAT [iter=0 solve=2.1s] time=2.1s
+COMBO t4 s1=30 s2=1 verdict=TIMEOUT [iter=0 solve=12.2s reason=timeout] time=12.2s
+COMBO t4 s1=30 s2=2 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=30 s2=3 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=30 s2=4 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=30 s2=5 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=30 s2=6 verdict=TIMEOUT [iter=0 solve=13.7s reason=timeout] time=13.7s
+COMBO t4 s1=30 s2=7 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=30 s2=8 verdict=TIMEOUT [iter=0 solve=13.6s reason=timeout] time=13.6s
+COMBO t4 s1=30 s2=9 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=30 s2=10 verdict=UNSAT [iter=0 solve=2.4s] time=2.4s
+COMBO t4 s1=30 s2=11 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.2s
+COMBO t4 s1=30 s2=12 verdict=TIMEOUT [iter=0 solve=13.6s reason=timeout] time=13.6s
+COMBO t4 s1=30 s2=13 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=30 s2=14 verdict=TIMEOUT [iter=0 solve=12.2s reason=timeout] time=12.2s
+COMBO t4 s1=30 s2=15 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=30 s2=16 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=30 s2=17 verdict=UNSAT [iter=0 solve=2.3s] time=2.3s
+COMBO t4 s1=30 s2=18 verdict=UNSAT [iter=0 solve=4.6s] time=4.6s
+COMBO t4 s1=30 s2=19 verdict=UNSAT [iter=0 solve=2.2s] time=2.2s
+COMBO t4 s1=30 s2=20 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=30 s2=21 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=30 s2=22 verdict=UNSAT [iter=0 solve=2.3s] time=2.3s
+COMBO t4 s1=30 s2=23 verdict=UNSAT [iter=0 solve=2.2s] time=2.2s
+COMBO t4 s1=30 s2=24 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=30 s2=25 verdict=UNSAT [iter=0 solve=2.2s] time=2.2s
+COMBO t4 s1=30 s2=26 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=30 s2=27 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=30 s2=28 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=30 s2=29 verdict=UNSAT [iter=0 solve=2.1s] time=2.1s
+COMBO t4 s1=30 s2=30 verdict=UNSAT [iter=0 solve=2.1s] time=2.2s
+COMBO t4 s1=30 s2=31 verdict=UNSAT [iter=0 solve=2.0s] time=2.0s
+COMBO t4 s1=31 s2=1 verdict=UNSAT [iter=0 solve=4.7s] time=4.7s
+COMBO t4 s1=31 s2=2 verdict=UNSAT [iter=0 solve=5.6s] time=5.6s
+COMBO t4 s1=31 s2=3 verdict=UNSAT [iter=0 solve=5.7s] time=5.7s
+COMBO t4 s1=31 s2=4 verdict=TIMEOUT [iter=0 solve=13.6s reason=timeout] time=13.6s
+COMBO t4 s1=31 s2=5 verdict=TIMEOUT [iter=0 solve=12.2s reason=timeout] time=12.2s
+COMBO t4 s1=31 s2=6 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=31 s2=7 verdict=TIMEOUT [iter=0 solve=13.5s reason=timeout] time=13.5s
+COMBO t4 s1=31 s2=8 verdict=TIMEOUT [iter=0 solve=12.2s reason=timeout] time=12.2s
+COMBO t4 s1=31 s2=9 verdict=TIMEOUT [iter=0 solve=13.0s reason=timeout] time=13.0s
+COMBO t4 s1=31 s2=10 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
+COMBO t4 s1=31 s2=11 verdict=TIMEOUT [iter=0 solve=12.1s reason=timeout] time=12.1s
