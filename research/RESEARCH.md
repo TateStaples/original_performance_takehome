@@ -1834,3 +1834,27 @@ calibration showed window-replace + temperature-ladder moves DO recover
 realistic compressions when they exist. The remaining program: extend
 theorem mass-kills (cheap), and scale the stochastic engine with the
 tier-logging observability fix P6-B specified.
+
+### P6-D RESULT (2026-08-02): all 324 technicality shapes RECOVERED — and the
+### queue conclusion still stands
+
+**THEOREM P6D-1** (proved, 5,688 guard trials across 4 families, 0
+violations): the even-K2 correction to the differential-count theorem is
+exactly the substitution (t,q,C2) -> (t-v, q', C2>>v) scaled by 2^v where
+v = v2(K2); v=0 IS the original theorem, and the realizability machinery
+then applies verbatim. The 73 "even-K split" shapes were never a separate
+phenomenon (their K2 madd was being swept into the parity split by a
+transfer-code branch); a new CHAIN-T6b lemma forces K2 odd through
+xorc/madd chains for 9 of them.
+
+**Recorded dead end that matters:** the natural closed-form guess for the
+even case is FALSE and the w=14 FORM guard caught it — it would have
+OVER-KILLED. Third time this phase the guard discipline has prevented a
+false theorem from being applied at scale.
+
+**Ledger:** queue kills 46.85% -> **49.23%** (1,413,676 of 2,871,468
+instances; both prior strains' figures reproduced exactly as controls).
+Residual undecidable fraction ~28%: **P6-C's conclusion stands — the queue
+cannot be closed by per-pair decision.** sandwich9's 68 open pairs gain
+nothing (already forced-odd). Last unrecovered bucket: the 408
+syntactic-bijectivity shapes (the check may under-approximate).
