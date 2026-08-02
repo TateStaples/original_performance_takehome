@@ -1662,3 +1662,26 @@ nv-fanout hole, 48 slices, 1-concurrent behind the template grind).
   to the entire p5k queue (every queue shape has >=2 shrs, so the
   divisibility argument may transfer — with the transfer conditions to be
   proved, not assumed).
+
+### P5-I3 RESULT + grind status (2026-08-02 morning)
+
+**The realizability arithmetic works: 136 of sandwich9's 207 survivors die
+with NO solver** (exact condition, not merely sound: (q, n_1) depend only
+on t = s1+s2-31; achievable n_1 for K2 ≡ k (mod 2^(u+1)) is exactly the
+window [m(k,u), 2^u - m(k,u)] with a descent-lemma lower bound; verdict
+verified against 660+182 planted trials, 32.7% teeth). **sandwich9 ledger:
+961 = 479 theory + 209 z3 + 68 differential-count + 136 realizability +
+~71 open** (shrinking — the 600s survivor grind has already refuted pairs
+beyond the sec-11 list). Still ZERO found.
+
+**Mass filter: the differential-count theorem transfers to only 30 of
+3,005 queue shapes** — a bijectivity precondition (T6a) is load-bearing,
+caught by the numeric guard on a shape that passes every other condition
+(104/198 violations). Each transferred shape narrows 961 -> 174 open
+pairs. 324 more shapes fail transfer only on technicalities (cut test /
+even-K split) and are recoverable with more work. Queue statuses left
+untouched (nothing actually closed) — correct conservatism.
+
+**Template grind (driver): 9,187/9,610 distinct combos UNSAT, 0 SAT,
+423 stragglers** -> targeted 600s escalation launched (3-proc, per-combo).
+Fleet tier 3 (round12 y-fanout) and the sandwich9 survivor grind continue.

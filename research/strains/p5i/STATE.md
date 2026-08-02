@@ -887,3 +887,188 @@ WHAT WOULD ACTUALLY CLOSE THE BLOCK (in order of expected value)
      realizability question was not settled in general -- if some pair's
      required n_1 is unreachable, that pair dies with no solver at all.
   3. Brute compute: ~207 pairs x >=10 min each with the v2 encoder.
+CHECKPOINT pair=(28,18) verdict=OPEN rung=k8 iter=0 timeout=600s reason=timeout rt=600s
+CHECKPOINT pair=(29,15) verdict=OPEN rung=k8 iter=0 timeout=600s reason=timeout rt=600s
+CHECKPOINT pair=(29,17) verdict=REFUTED rung=k8 iter=0 solve=7.4s total=7.4s rt=600s
+CHECKPOINT pair=(30,16) verdict=REFUTED rung=k8 iter=0 solve=3.0s total=3.0s rt=600s
+
+
+## 12. [P5-I3] REALIZABILITY FILTER — 136 of the 207 survivors die, no solver
+
+(P5-I3 own section; appended after the driver's CHECKPOINT lines.
+Tools: `tools/p5i3_arith.py` (filter + 3 guards), `tools/p5i3_planted.py`
+(SELFTEST-PLANTED).  This is item 2 of sec. 11's "what would close the block".)
+
+### 12.1 The arithmetic is CLOSED FORM: (q, n_1) depend only on t
+
+Sec. 9 gives, with u = 31-s1, t = s1+s2-31, s2 = u+t:
+    M = 2^(32-t)(q-1) + 2^(33-s2) n_1,  N = M or 2^32 - M,
+    q = K2 mod 2^t (odd),  n_1 = #{c_lo<2^u : bit_u(K2 c_lo + C2)=1} in [0,2^u].
+Put Ntilde := M / 2^(33-s2) = 2^u Q + n_1 with q = 2Q+1, Q in [0,2^(t-1)-1].
+For N = N_myhash = 2^18*8289 (branch A=8289) and 2^32-N = 2^18*8095
+(branch A=8095), Ntilde = A*2^(s2-15) EXACTLY, so for t <= 15
+    Q = A >> (15-t),   q = 2Q+1,   n_1 = (A mod 2^(15-t)) << (s2-15),
+and for t > 15, Q = A*2^(t-15), n_1 = 0 (plus the boundary alternative
+n_1 = 2^u with q = 2Q-1).  **q and n_1/2^u depend on t ONLY** -- not on u,
+not on s1, not on s2 separately.  Range checks (Ntilde <= 2^(s2-1),
+Q <= 2^(t-1)-1) are automatic because A < 2^14.
+
+### 12.2 REALIZABILITY THEOREM (what n_1 a given K2 can produce)
+
+Only k := K2 mod 2^(u+1) and C := C2 mod 2^(u+1) matter.  With
+n1(C) = #{c<2^u : bit_u(kc+C)=1}:
+  (a) n1(C+1)-n1(C) in {-1,0,+1}   (the count is a sliding half-circle window
+      over S = {kc mod 2^(u+1) : c<2^u}, and S is a TRANSVERSAL of the pairs
+      {v, v+2^u} because k is odd);
+  (b) n1(C) + n1(C+2^u) = 2^u.
+=> the achievable set is EXACTLY the contiguous, centred range
+        [ m(k,u), 2^u - m(k,u) ],    m(k,u) := min_C n1(C).
+Brute force (all odd k, u <= 8) confirms the set is exactly that range
+(GUARD-RANGE, 0 violations) and that m(k,u) = 0 **iff k = +-1 mod 2^(u+1)**
+(S is then an interval).  m(k,u) = m(k^{-1},u) = m(-k,u).
+
+DESCENT LEMMA (proved).   m(u,k) >= 2 * m(u-1, k mod 2^u).
+  Split c = 2c' and c = 2c'+1.  With C = 2C'+C_0 and k+C = 2E+f:
+  bit_u(k(2c')+C) = bit_{u-1}(kc'+C') and bit_u(k(2c'+1)+C) = bit_{u-1}(kc'+E),
+  so n1(C) is a SUM of two level-(u-1) counts at modulus k mod 2^u.
+  Iterating: m(u,k) >= 2^(u-j) * m(j, k mod 2^(j+1)) for every j <= u.
+GUARD-DESCENT: 7,172 (u<=9, all odd k, all j) instances, 0 violations.
+Typical size: min{m(j,k) : k != +-1} / 2^j -> 1/3 (5/16, 10/32, 21/64,
+42/128, ...), i.e. a NON-+-1 multiplier can only reach n_1 in ~[1/3,2/3]*2^u.
+
+### 12.3 THE FILTER (sound; EXACT for u <= 10, i.e. s1 >= 21)
+
+Branch dies if  n_1 < LB  or  n_1 > 2^u - LB,  where LB = 2^(u-j)*min{m(j,r)}
+over the r reachable at level j = min(u,10) (r == q mod 2^t if t <= j+1, else
+the single r = q mod 2^(j+1)).  Pair dies iff BOTH N-branches die.
+For u <= 10 the level IS u, so LB = the true min and the verdict is EXACT.
+For u > 10 the only ALIVE pairs have t <= 2 or n_1 = 2^(u-1), both of which
+are realizable unconditionally -- so the verdict is exact on the whole
+survivor set as well.
+
+SELFTEST-PLANTED (tools/p5i3_planted.py): random constants at scaled width w,
+TRUE N by 2^w brute force, then the width-w filter must return ALIVE (a
+solution exists by construction).  w=14: 660 trials, 0 violations.
+w=16: 182 trials, 0 violations.  TEETH (non-vacuity): at w=14, over every
+legal N (all multiples of 2^(w+1-s2) in [0,2^w]) for every legal (s1,s2), the
+filter returns DEAD for 13,424 / 41,028 = 32.7%.  It kills a third of the
+possible N values and never the achievable ones.
+GUARD-FORMULA (the sec. 9 identity itself, not just its modulus):
+N in {M, 2^w - M} verified over 180 random-constant trials at w=12,
+0 violations.
+
+### 12.4 VERDICT on sec. 11's 207 survivors:  136 DEAD, 71 remain
+
+DEAD (136) -- every pair with t = s1+s2-31 in 3..13 except (24,16),(25,15),
+(28,16),(29,15); plus 23 pairs with t >= 15:
+(9,25)(10,24)(10,25)(11,23..25)(12,22..25)(13,21..25)(14,20..24)(15,19..25)
+(16,18..25)(17,17..24)(18,16..24)(19,15..24)(20,15..24)(21,15..23)
+(22,15..22)(22,24)(23,15..21)(23,23..25)(24,15)(24,17..20)(24,22..25)
+(25,16..19)(25,21..26)(26,15..18)(26,21..24)(27,15..17)(27,20..22)
+(28,15)(28,19)(28,20)
+ALIVE (71), with the reason -- and every reason is UNCONDITIONAL, so these
+71 cannot be touched by any sharpening of this filter:
+  t=1  (10 pairs)  q = 1  => K2 = 1 is admissible, m = 0, any n_1 works.
+  t=2  (11 pairs)  the A=8095 branch has Q=0 => q=1, same escape.
+  t=14 (11 pairs)  n_1 = 2^(u-1) EXACTLY (the centre of the window), and
+                   m(k,u) <= 2^(u-1) always => realizable for every k.
+  t>=13 with q == +-1 mod 2^(u+1)  (39 pairs, all s1 >= 24, u <= 7).
+Full ALIVE list:
+(8,24)(8,25)(9,23)(9,24)(10,22)(10,23)(11,21)(11,22)(12,20)(12,21)(13,19)
+(13,20)(14,18)(14,19)(15,17)(15,18)(16,16)(16,17)(17,15)(17,16)(18,15)
+(20,25)(21,24)(22,23)(23,22)(24,16)(24,21)(25,15)(25,20)(26,19)(26,20)
+(26,25)(26,26)(26,27)(27,18)(27,19)(27,23..28)(28,16)(28,17)(28,18)
+(28,21..24)(28,26)(28,27)(28,28)(29,15)(29,16)(29,19..23)(29,26)(29,27)
+(29,28)(30,15)(30,17)(30,19..23)(30,27)(30,28)
+LEDGER NOW: 961 = 479 (secs 1-3) + 207 (z3) + 68 (sec 9) + 136 (sec 12)
++ 71 OPEN.  Still 0 FOUND.
+
+FULL-GRID form (needed by sec. 13): over all 435 pairs with s1,s2 <= 30 and
+t >= 1, sec. 9 + sec. 12 kill 322 (91 by s2 <= 14, 231 NEW) and leave 113.
+With the window theorem (435 pairs, s1+s2 <= 30) and row-31 (30 pairs), the
+open shift space of a sandwich-structured shape is 113 + 61 (the s1 = 31 row
+and s2 = 31 column, where sec. 9 is not valid: it needs u >= 1 and s2 <= 30)
+= 174 of 961.
+
+## 13. [P5-I3] TIER TRANSFER — sec. 9/12 reach 30 of the 3,005 p5k shapes
+
+Tools: `tools/p5i3_transfer.py` (abstract differential interpreter over a
+shape DAG + the transfer test), `tools/p5i3_guard_shape.py` (numeric guard).
+
+TRANSFER CONDITIONS (a shape must satisfy ALL; each is checked syntactically):
+ T1  exactly 2 shr ops (a 3rd breaks every step);
+ T2  x reaches shr A's input carrying the EXACT single-bit flip 2^31 (only
+     madd/xorc/xor2-with-exact-branches upstream);
+ T3  the value c feeding the middle madd carries an EXACT flip set that is
+     {31, u} or {u} alone, u = 31-s1 >= 1.  ({u} alone is enough: the 2^31
+     term is invisible at every bit < 31, so both give the same differential
+     at bit 0 and bit s2.)
+ T4  exactly ONE madd between c and shr B's input (xorc and xor2 with
+     exact-flip branches are transparent), so e* - e = [2^31 +] sg*K2*2^u;
+ T5  bit 0 of out = bit 0 of shr B's output xored with CONSTANT-differential
+     terms only (bit-0 differentials tracked in GF(2) over {1, D} so that
+     re-joining bypass branches cancel correctly);
+ T6a x -> c must be a BIJECTION *syntactically* (cone of c = madd/xorc/
+     xorshift-motif only);
+ T6b shr B's input slot is a DAG cut => out = G(F(x)) with F bijective
+     (P5-K filter K2) => K2 is ODD.
+Even-K case split: every parity assignment of the other madds must yield
+either the same D or a CONSTANT bit-0 differential (then N in {0, 2^32},
+which is divisible by everything and != N_myhash).
+
+T6a IS NOT OPTIONAL — the guard caught it.  Queue rank 2953
+[madd,madd,madd,shr,xor2(2,3),xor2(4,5),madd,shr,xor2(7,8)] passes T1-T5 and
+T6b but its c = (x>>s1) ^ (two different madds of the same slot) is not a
+bijection; at w=14 it produced 104/198 DIVISIBILITY violations and 135/198
+FORM violations.  The sec. 9 count is a count OVER c; without bijectivity it
+is re-weighted and the theorem is false.  (Recorded so nobody re-derives it.)
+
+NUMERIC GUARD (tools/p5i3_guard_shape.py, w=14, all 66 legal (s1,s2) x 3
+random odd-K constant sets = 198 trials per shape), on 5 accepted shapes
+including two with a re-joining bypass xor2 and two with no leading madd:
+  rank 200, 328 (=sandwich9), 634, 905, 1097
+  -> DIV-VIOLATIONS 0/198 and FORM-VIOLATIONS 0/198 for every one.
+(Being accepted, sandwich9 itself is a positive control on the analyser.)
+
+MASS-FILTER RESULT.  Over tools/p5k_queue.json (3,005 entries):
+  TRANSFER                                       30   (29 QUEUED + sandwich9)
+  no sandwich pattern                         2,242
+  no pattern + x->c not syntactically bijective  408
+  no pattern + shr-B input not a cut             251
+  no pattern + an even-K branch is not constant   73
+  #shr != 2                                        1
+Transferred ranks: 200 213 323 328 410 416 442 454 476 481 504 634 644 754
+797 798 802 803 805 806 904 905 909 957 1000 1045 1046 1048 1051 1097.
+Each of those 30 shapes has its shift space cut from 961 to **174** open
+(s1,s2) assignments (sec. 12.4): 787 assignments refuted with no solver.
+Before P5-I3 the same shapes stood at 405 open (window + row-31 + s2<=14).
+
+MIRROR (sec. 10) CONTRIBUTES ZERO, for every shape.  Its kill range
+(s1 <= 32 - v2(N'_myhash) = 15) and its validity range (s1 >= 16, needed for
+sigma^{-1} to be a TWO-term xorshift on 32 bits) are disjoint by one notch.
+That gap depends only on N'_myhash = 2^17*15345, not on the shape, so the
+mirror is vacuous tier-wide.  Do not re-derive it.
+
+QUEUE STATUSES: **DELIBERATELY NOT EDITED.**  No shape is CLOSED by this
+filter -- 174 shift assignments survive on every transferred shape -- so
+flipping any entry off QUEUED would silently retire a shape that is still
+open (p5k's resume protocol consumes status=QUEUED in rank order).  Queue
+size before = after = 3,005 (QUEUED 2,956).  The correct record of the
+narrowing is this section.
+
+WHAT WOULD CLOSE THE 30 (and, by the same argument, sandwich9's 71):
+the surviving region is exactly {t <= 2} U {t = 14} U {q == +-1 mod 2^(u+1)}
+U {s1 = 31 or s2 = 31}.  Nothing keyed on s2 can touch it (sec. 11 item 1
+still stands).  A statistic keyed on a SECOND output bit (out_1, whose
+differential brings in the carry structure of K3 as well) is the obvious
+next axis, and it is untried.
+
+### 13.1 [P5-I3] correction to 12.4's reason tally (append-only; supersedes)
+
+The 71 ALIVE break down as: t=1 -> 10, t=2 -> 11, t=14 -> 11,
+**q == +-1 mod 2^(u+1) -> 37** (t in 13,15..27, all s1 >= 26 except
+(28,16)), and **2 by "n_1 lands inside the narrow window"**: (24,16) and
+(25,15), both t=9, where the exact m(k,u) happens to be small enough.
+10+11+11+37+2 = 71.  (Sec. 12.4's one-line summary said "39 pairs with
+q == +-1"; the correct split is 37 + 2.)  The DEAD/ALIVE lists themselves
+were re-verified against the code: both match exactly, 136 + 71 = 207.

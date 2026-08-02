@@ -1088,3 +1088,9 @@ COMBO t0 s1=31 s2=29 verdict=UNSAT [iter=0 solve=0.2s] time=0.2s
 COMBO t0 s1=31 s2=30 verdict=UNSAT [iter=0 solve=0.2s] time=0.2s
 COMBO t0 s1=31 s2=31 verdict=UNSAT [iter=0 solve=0.2s] time=0.2s
 SPLIT-SUMMARY t0 pair=[0, 7] s1=[21,32) s2=[1,32) oddK=[] status=OPEN(32) wall=605s
+COMBO t0 s1=20 s2=16 verdict=UNSAT [iter=0 solve=0.4s] time=0.4s
+SPLIT-SUMMARY t0 pair=[0, 7] s1=[20,21) s2=[16,17) oddK=[] status=UNSAT-ALL-COMBOS wall=0s
+COMBO t0 s1=21 s2=12 verdict=UNSAT [iter=0 solve=1.2s] time=1.2s
+SPLIT-SUMMARY t0 pair=[0, 7] s1=[21,22) s2=[12,13) oddK=[] status=UNSAT-ALL-COMBOS wall=1s
+COMBO t0 s1=23 s2=13 verdict=UNSAT [iter=0 solve=0.4s] time=0.4s
+SPLIT-SUMMARY t0 pair=[0, 7] s1=[23,24) s2=[13,14) oddK=[] status=UNSAT-ALL-COMBOS wall=0s

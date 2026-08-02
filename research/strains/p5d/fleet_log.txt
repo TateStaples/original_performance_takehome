@@ -80,3 +80,6 @@ CHECKPOINT bin=fanout target=round12 mode=kf3join join_g=xor join_r=y maxchain=6
 CHECKPOINT bin=fanout target=round12 mode=kf3join join_g=xor join_r=y maxchain=6 fwd_shard=11/48 link_shard=0/1 tabs=[p4:4124366] chain_nodes=2118524244 finds=0 secs=457.5
 CHECKPOINT bin=fanout target=round12 mode=kf3join join_g=xor join_r=y maxchain=6 fwd_shard=12/48 link_shard=0/1 tabs=[p4:4152538] chain_nodes=2118524244 finds=0 secs=468.1
 CHECKPOINT bin=fanout target=round12 mode=kf3join join_g=xor join_r=y maxchain=6 fwd_shard=13/48 link_shard=0/1 tabs=[p4:4098119] chain_nodes=2118524244 finds=0 secs=438.0
+CHECKPOINT bin=fanout target=round12 mode=kf3join join_g=xor join_r=y maxchain=6 fwd_shard=14/48 link_shard=0/1 tabs=[p4:4136741] chain_nodes=2118524244 finds=0 secs=462.9
+CHECKPOINT bin=fanout target=round12 mode=kf3join join_g=xor join_r=y maxchain=6 fwd_shard=15/48 link_shard=0/1 tabs=[p4:4162440] chain_nodes=2118524244 finds=0 secs=467.6
+CHECKPOINT bin=fanout target=round12 mode=kf3join join_g=xor join_r=y maxchain=6 fwd_shard=16/48 link_shard=0/1 tabs=[p4:4121433] chain_nodes=2118524244 finds=0 secs=466.7
