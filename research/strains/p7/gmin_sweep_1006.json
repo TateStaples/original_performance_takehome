@@ -1,0 +1,42 @@
+{
+ "(6, 31)": [
+  1006,
+  "n/a"
+ ],
+ "(4, 31)": [
+  "ERR",
+  "parity_ring_plan entry (0, 4) already ring-funded"
+ ],
+ "(8, 31)": [
+  "ERR",
+  "parity_ring_plan entry (0, 3) already ring-funded"
+ ],
+ "(2, 31)": [
+  "ERR",
+  "parity_ring_plan entry (0, 3) already ring-funded"
+ ],
+ "(6, 29)": [
+  "ERR",
+  "parity_ring_plan entry (1, 29) already ring-funded"
+ ],
+ "(6, 27)": [
+  "ERR",
+  "parity_ring_plan entry (1, 28) already ring-funded"
+ ],
+ "(9, 30)": [
+  "ERR",
+  "parity_ring_plan entry (0, 3) already ring-funded"
+ ],
+ "(10, 31)": [
+  "ERR",
+  "parity_ring_plan entry (0, 3) already ring-funded"
+ ],
+ "(4, 29)": [
+  "ERR",
+  "parity_ring_plan entry (0, 4) already ring-funded"
+ ],
+ "(12, 31)": [
+  "ERR",
+  "parity_ring_plan entry (0, 3) already ring-funded"
+ ]
+}

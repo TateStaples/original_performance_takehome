@@ -2078,3 +2078,23 @@ Latent fragility flagged for the record: memory correctness rests on hand
 region-disjointness + explicit min_cycles (the coarse clock never binds and
 12 priming vstores are off the write clock) — correct today, fragile to any
 future mem-reading feature.
+
+### Iteration (2026-08-03): serve-count screen finds a live 10-cycle lead;
+### t3 elevated from last-resort to DEDUCED LOCATION
+
+**Ring-free gmin screen** (research/strains/p7/gmin_sweep_noring.json, on
+the 1049 ringless base): **(9,30) = 1039 (-10 vs shipped (6,31) = 1049)**;
+(8,31) = 1045. Ring plans (assert-proven gmin-specific) and possibly the
+emission plan absorb some or all of this at the full stream — the cascade
+builder is running the honest test: per-gmin ring derivation via the
+p7tar machinery, 10-seed verification, both tail-off (mainline candidate
+vs 1006) and tail-on (with-idx candidate vs 1034).
+
+**t3's status corrected in the record:** it is not a last-resort search
+but the DEDUCED location of the frontier's mechanism — the inversion
+forces effective k <= 9.75; the single-round reachable space is
+exhaustively empty; decomposable cross-round fusion is refuted; therefore
+if the frontier is real and the floors are right, a NON-DECOMPOSABLE
+MULTI-ROUND structure is the remaining possibility, and t3's slots=26
+transformation search is the only engine exploring it. Wave B: 11 slices,
+0 finds so far.

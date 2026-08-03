@@ -1251,3 +1251,5 @@ COMBO t4 s1=30 s2=9 verdict=TIMEOUT [iter=0 solve=600.1s reason=timeout] time=60
 SPLIT-SUMMARY t4 pair=[2, 7] s1=[30,31) s2=[9,10) oddK=[0] status=OPEN(1) wall=600s
 COMBO t4 s1=30 s2=11 verdict=TIMEOUT [iter=0 solve=600.7s reason=timeout] time=600.7s
 SPLIT-SUMMARY t4 pair=[2, 7] s1=[30,31) s2=[11,12) oddK=[0] status=OPEN(1) wall=601s
+COMBO t4 s1=30 s2=12 verdict=TIMEOUT [iter=0 solve=601.0s reason=timeout] time=601.0s
+SPLIT-SUMMARY t4 pair=[2, 7] s1=[30,31) s2=[12,13) oddK=[0] status=OPEN(1) wall=601s
