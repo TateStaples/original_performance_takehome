@@ -2054,3 +2054,27 @@ the modeled edges against the simulator's exact commit semantics
 compile-time-provable address-disjointness the coarse mem clocks ignore),
 then measuring any tightening. The 408-bucket unit was deprioritized (it
 extends mass-kills but closes nothing).
+
+### P7-C RESULT (2026-08-03): the scheduler-conservatism axis closes at ZERO
+
+Ground truth derived AND empirically confirmed on the real Machine (RAW-s 1,
+WAR-s 0, WAW-s 0, mem RAW 1/WAR 0/WAW 0; same-cycle WAW winner = bundle-dict
+insertion order, not engine-handler order). The model has exactly THREE
+conservatisms (WAW-scratch +1; coarse whole-mem RAW clock; coarse mem WAR
+clock) and all three are worth ZERO: a binding census over all 25,718 ready
+calls shows they never sole-bind, and deleting the ENTIRE memory hazard
+model plus the WAW rule still schedules 1006, correct 10/10 (a different
+program, same length). The three existing bypass flags already capture 100%
+of the memory-model value. Read/write annotations are exact (20,462 puts,
+zero over-declarations).
+
+**Ceiling arithmetic: valu is saturated 975/1006 cycles with only 70 unused
+slots (all ramp/drain), so ANY scheduling improvement at the shipped census
+is bounded by 1006 - 995 = 11 cycles — and the residual is data-arrival
+ramp + drain, not dependency height.** Bonus datum: dropping WAR entirely
+schedules WORSE (1011) — the constraints guide the greedy.
+
+Latent fragility flagged for the record: memory correctness rests on hand
+region-disjointness + explicit min_cycles (the coarse clock never binds and
+12 priming vstores are off the write clock) — correct today, fragile to any
+future mem-reading feature.

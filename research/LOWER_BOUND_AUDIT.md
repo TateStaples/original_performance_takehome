@@ -98,6 +98,7 @@ lane-ops total.**
 | C1* implementable (T2 −2,072 lane-ops) | **phantom** (G-39, built and measured): Horner-at-exit costs exactly the upkeep it deletes; P3-A's 35-exit count was really 63; the never-read set is 1 group-epoch |
 | Phase-3 structural floor **944–952**, realized ~965–970 | **stands** — three independent models converged *after* their shared-frame errors were removed; independently validated by a 966 no-idx entrant sitting exactly at the predicted realized ceiling |
 | shipped 1006 as local optimum | **verified at the shipped stream itself** (P7): 31-axis retune = 0 moves; emission enumeration inherited at the bit-identical config |
+| scheduler dependency model as a hidden tax | **closed at zero** (P7-C): exactly three conservatisms exist vs true commit semantics, none ever sole-binds; deleting the whole memory hazard model still schedules 1006 correct; any scheduling gain at this census ≤ 11 cycles (valu saturated 975/1006 cycles) |
 
 ### 2.6 The frontier inversion (what 904/889 *require*)
 
@@ -143,10 +144,7 @@ each found by audit or measurement, none by re-argument.
 | with-idx | **1034** (dev flag pair, values+indices 10/10) | 904 | −130 |
 
 Open audit surfaces still being worked: the (S)-gap (t3 composite wave B —
-the first properly-configured search of that space), the scheduler-
-conservatism audit (P7-C, in flight — whether our dependency model demands
-more separation than the simulator's true commit semantics), and the
-finite grind tails (sandwich9 ~66 pairs, template stragglers, fleet 46/48).
+the first properly-configured search of that space), and the finite grind tails (sandwich9 ~66 pairs, template stragglers, fleet 46/48).
 
 **Bottom line: the lower-bound structure is internally consistent, has
 survived adversarial audit at every load-bearing joint, and says the
