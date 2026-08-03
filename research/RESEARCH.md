@@ -2037,3 +2037,20 @@ engaged (best_err ~335 = approximation noise). This also retroactively
 voids P5-H's "t3 token slice" as evidence about the composite. Wave B
 (16 seeds, slots=26, find<=23) is the FIRST real search of the composite's
 non-decomposable space. Fleet tier 3: 44/48 negative.
+
+### Iteration (2026-08-03): scheduler-conservatism audit funded (P7-C)
+
+Boards re-fetched: no-idx frontier unchanged (889/892/908; junming211 rose
+to 932); with-idx unchanged (904). Grinds: t3 wave B 7 slices negative;
+fleet 46/48; sandwich9 230; templates 11.5k UNSAT lines. Zero SAT anywhere.
+
+**New axis, never audited in nine phases: does OUR scheduler's dependency
+model require more separation than problem.py's Machine actually needs?**
+Floors price slots, not edges — a conservative edge class inflates
+realized cycles invisibly, and the frontier's independently-built
+schedulers would not share our specific conservatisms. P7-C is diffing
+the modeled edges against the simulator's exact commit semantics
+(including within-cycle engine ordering for write conflicts and
+compile-time-provable address-disjointness the coarse mem clocks ignore),
+then measuring any tightening. The 408-bucket unit was deprioritized (it
+extends mass-kills but closes nothing).
