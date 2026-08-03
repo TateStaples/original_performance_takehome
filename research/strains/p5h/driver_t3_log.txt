@@ -1,0 +1,2 @@
+CHECKPOINT campaign=t3 slots=12 threads=4 temp=3 opw=0.4 seed=400 secs=420.2 proposals=697180160 best_cost=341.200 best_err=338 best_nonnop=8 zero_hits=0 finds=0
+BEST cost=341.200 err=338 nonnop=8

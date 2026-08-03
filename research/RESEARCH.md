@@ -2019,3 +2019,11 @@ region, with the LARGEST non-decomposable space** (P5-L2's refutation
 covered decomposable mechanisms only). A 16-seed transformation campaign
 at find-threshold 23 is now grinding (any compression of the ~24-op
 composite = ~17-34 cycles of floor).
+
+### Harvest (2026-08-02 evening): all fronts grinding, box saturated
+
+- t3 wave: machinery verified (smoke test clean); slices starved by box
+  oversubscription (~13 CPU-min accrued on slice 1) — will complete slowly.
+- Fleet tier 3: 43/48, all negative. sandwich9: 230 refuted / ~66 open.
+  Template escalation: 9,285 distinct UNSAT (the 600s tail is the hard
+  region, progressing slowly). Zero SAT anywhere.
