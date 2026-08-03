@@ -2123,3 +2123,14 @@ Also recorded: two different configs share the name "ring-free base"
 Residual (disclosed, not closed): a full f18/f37-scale order re-mine at
 (9,30) was not run (25-min descent only); bounded interest given the
 17-cycle deficit it would need to close.
+
+### t3 status + wave C (2026-08-03): reach at par proven on the composite;
+### sustained campaign launched
+
+Wave B tally: 2 slices independently reached the REAL 24-op composite
+(err=0 at nonnop=24 — transformation mode engaging at slots=26); zero
+finds <=23; from-scratch chains plateau at the expected avalanche wall.
+The evidential pattern mirrors t2 (reach proven at par, nothing below).
+**Wave C launched: 32 seeds x 600s, slots alternating 26/30 (30 gives
+restructuring room above par)** — sustained compute on the deduced
+location while grind tails finish.
