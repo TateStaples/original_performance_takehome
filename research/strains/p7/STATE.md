@@ -604,3 +604,115 @@ are sound under the tail.
 | graded (values-only) artifact | 1006 | 1006 (untouched) |
 
 **status: done — awaiting review.** Doc: `docs/agent-wiki/p7-tail-aware-rings.md`
+
+---
+
+## gmin cascade (P7-G) — the screen's 10-cycle lead INVERTS at the full stream
+
+**Builder started:** 2026-08-03. Question: does `l4_gmin=(9,30)` (or `(8,31)`),
+which led the driver's ring-free screen (`gmin_sweep_noring.json`: (6,31)=1049,
+(8,31)=1045, (9,30)=1039), beat the shipped mainline once it gets a ring plan
+DERIVED AT THAT GMIN? Tool: `tools/p7g_remine.py` = the P7-TAR derivation
+parameterized over `--gmin`/`--tail`/`--order` (`p7tar_remine.py` imported,
+never modified; its module-global `build` is re-pointed, so
+`derive`/`fixpoint`/`mine` stay bit-identical).
+
+### P7-G gate 1 — ring-free screen on the REAL base already inverts the ranking
+
+The screen's "ringless base" is `BASE_KWARGS + l4_gmin` (1049 at (6,31)), which
+carries **no emission plan**. The strain's ring-free base is
+`h061_common.kwargs(gmin, rings=False)` = **1026** at (6,31). On that base
+(seed 1, `correct=True` everywhere):
+
+| gmin | (6,31) | (8,31) | (9,31) | (9,30) | (10,31) |
+|---|---|---|---|---|---|
+| ring-free cycles | **1026** | 1028 | 1028 | 1030 | 1032 |
+
+### P7-G gate 2 — full cascade: derived ring plan per gmin, tail OFF and ON
+
+Derivation from an EMPTY plan at each gmin (liveness fixpoint + mine off the
+realized trace, to convergence). **Control:** re-deriving at the shipped
+(6,31) reproduces the mainline to within 1 cycle, and at `--tail on`
+reproduces `tools/p7tar_best_plan_1034.json` **byte-identically** — so the
+gaps below are not derivation loss.
+
+| gmin | tail | ring-free | natives only | derived | rings | 10-seed verify |
+|---|---|---|---|---|---|---|
+| **(6,31)** | off | 1026 | 1017 | **1007** (shipped plan 1006) | 39 | 10/10 values |
+| (8,31) | off | 1028 | 1018 | **1015** | 38 | 10/10 values |
+| (9,30) | off | 1030 | 1023 | **1023** (mining REGRESSES to 1027) | 20 | 10/10 values |
+| **(6,31)** | on | — | 1043 | **1034** | 31 | 10/10 values+indices |
+| (8,31) | on | — | 1042 | **1041** | 30 | 10/10 values+indices |
+| (9,30) | on | — | 1052 | **1049** | 30 | 10/10 values+indices |
+
+Plans: `research/strains/p7/p7g_plan_{6_31,8_31,9_30}_{off,on}.json`
+(deliberately not in `tools/` — (c) open issue 4). Verify replays with
+`ring_liveness_assert` at its auto-ON default and checks values AND, under the
+tail, the 256 final indices vs `reference_kernel2`; 6/6 configs PASS.
+
+**Nothing beats 1006, and nothing beats 1034.** Best non-shipped candidate is
+(8,31) at 1015 (+9) / 1041 (+7).
+
+### P7-G gate 3 — WHERE the 10 cycles went: the h057 emission order
+
+Layer-by-layer attribution (ring-free until the last column):
+
+| gmin | bare BASE+gmin | + h059 MIX flags, no order | + h057 order | + derived rings |
+|---|---|---|---|---|
+| (6,31) | 1049 | 1049 | **1026** (−23) | **1007** (−19) |
+| (8,31) | 1043 | 1045 | **1028** (−17) | **1015** (−13) |
+| (9,30) | 1038 | 1039 | **1030** (−9) | **1023** (−7) |
+
+* Column 2 reproduces the driver's screen (1049/1045/1039) — so the screen was
+  measuring the ORDERLESS stream.
+* The h059 MIX flags are gmin-neutral (±2, ranking unchanged): NOT the absorber.
+* The **h057 emission order is the absorber and it is not a constant offset**
+  (−23/−17/−9). It re-ranks the three candidates by itself, before rings.
+  Rings then compound in the same direction (−19/−13/−7).
+
+**This is why the mainline sits at (6,31).** On a raw stream (6,31) is the
+WORST of the three (1049 vs 1038); it wins because the two expensive
+order-specific layers were co-optimized with it, and they are worth more than
+the raw serve-profile difference. Corollary for future screens: a serve-profile
+screen run without the emission plan measures a different optimum than the one
+the stream actually has.
+
+### P7-G gate 4 — the steelman: re-mine the emission order AT (9,30). It gets WORSE.
+
+If the h057 order is the absorber, the fair question is whether (9,30) with its
+OWN order beats (6,31) with h057. Measured, not argued
+(`tools/emission_order_search.py`, `EOS_OVERRIDES` = h059 MIX flags ring-free at
+`l4_gmin=(9,30)`, `parity_ring=False`):
+
+* `phase1` (structured families + pairwise compositions): 53 evals, best
+  **1039 = the default order, params {}** — no structured family beats default.
+* `local` (`--window all`, `EOS_JUMPS=1,2,4,8,16,32`, 4 workers, 23,556 evals /
+  1500 s): 1039 -> **1035**; 4 descents, last at t~190 s, flat for 1300 s after.
+* Full cascade on that order (`p7g_remine --order`): natives 1037, mining adds
+  nothing -> **1037**, 10/10 seeds
+  (`research/strains/p7/p7g_plan_9_30_off_neworder.json`, order artifact
+  `p7g_order_9_30_local1035.json`).
+
+| (9,30) with... | ring-free | + derived rings |
+|---|---|---|
+| inherited h057 order | **1030** | **1023** |
+| order mined AT (9,30) | 1035 | 1037 |
+
+The inherited order is BETTER for (9,30) than a freshly mined one, so the gap
+is not order staleness. **Asymmetry disclosed:** h057 is the product of a far
+larger search (G-30/G-31/F-37: 25,550 single-entry moves + 438,247 multi-move
+evals, k=2 exhausted). A 25-minute descent is a screen, not a matched search;
+what it establishes is that the 17-cycle gap is not cheaply recoverable, not
+that no order exists.
+
+### P7-G FINAL — no port
+
+`perf_takehome.py` UNTOUCHED (`git diff --stat dev.py perf_takehome.py
+problem.py tests/` empty); `python3 tests/submission_tests.py` -> Ran 9 tests,
+OK, CYCLES: 1006. Board numbers unchanged: graded 1006 at (6,31), with-idx
+1034 at (6,31). Best non-shipped candidate measured: (8,31) at 1015 / 1041.
+
+New tool: `tools/p7g_remine.py` (gmin/tail/order-parameterized P7-TAR
+derivation + `--verify`). `tools/p7tar_remine.py` unmodified. `dev.py`
+unmodified — every lever needed already existed.
+Doc: `docs/agent-wiki/p7-gmin-cascade.md`.

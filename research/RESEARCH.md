@@ -2098,3 +2098,28 @@ if the frontier is real and the floors are right, a NON-DECOMPOSABLE
 MULTI-ROUND structure is the remaining possibility, and t3's slots=26
 transformation search is the only engine exploring it. Wave B: 11 slices,
 0 finds so far.
+
+### P7-G RESULT (2026-08-03): the gmin lead INVERTS at the full stream —
+### the serve-count axis closes; shipped (6,31) confirmed optimal
+
+With ring plans derived from empty at EVERY gmin (control: the (6,31)
+derivation costs +1 vs the shipped plan, proving derivation quality):
+
+| gmin | tail-off | tail-on |
+|---|---|---|
+| (6,31) shipped | **1007 (shipped plan: 1006)** | **1034** |
+| (8,31) | 1015 | 1041 |
+| (9,30) | 1023 | 1049 |
+
+The screen's 10-cycle lead was an artifact of the ORDERLESS base: **the
+h057 emission order is worth -23 at (6,31) but only -9 at (9,30)** — the
+emission order and serve profile co-adapted, and the order re-ranks the
+candidates by itself. A fresh order mined AT (9,30) lands 1037, worse
+still. All cells 10/10-seed verified (tail-on cells verify the indices
+range too). DO NOT PORT; mainline stays (6,31)/1006, with-idx 1034.
+Also recorded: two different configs share the name "ring-free base"
+(1049 vs 1026) — future screens must use h061_common's.
+
+Residual (disclosed, not closed): a full f18/f37-scale order re-mine at
+(9,30) was not run (25-min descent only); bounded interest given the
+17-cycle deficit it would need to close.

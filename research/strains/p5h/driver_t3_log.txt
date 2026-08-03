@@ -13,3 +13,8 @@ CHECKPOINT campaign=t3 slots=26 threads=4 temp=3 opw=0.4 seed=424 secs=434.7 pro
 CHECKPOINT campaign=t3 slots=26 threads=4 temp=4 opw=0.4 seed=425 secs=422.0 proposals=109395968 best_cost=348.000 best_err=342 best_nonnop=15 zero_hits=0 finds=0
 CHECKPOINT campaign=t3 slots=26 threads=4 temp=2 opw=0.4 seed=426 secs=420.1 proposals=446808064 best_cost=313.400 best_err=307 best_nonnop=16 zero_hits=0 finds=0
 CHECKPOINT campaign=t3 slots=26 threads=4 temp=3 opw=0.4 seed=427 secs=420.1 proposals=872292352 best_cost=237.000 best_err=227 best_nonnop=25 zero_hits=0 finds=0
+CHECKPOINT campaign=t3 slots=26 threads=4 temp=4 opw=0.4 seed=428 secs=420.2 proposals=951525376 best_cost=237.000 best_err=227 best_nonnop=25 zero_hits=0 finds=0
+CHECKPOINT campaign=t3 slots=26 threads=4 temp=2 opw=0.4 seed=429 secs=420.1 proposals=778461184 best_cost=326.800 best_err=322 best_nonnop=12 zero_hits=0 finds=0
+CHECKPOINT campaign=t3 slots=26 threads=4 temp=3 opw=0.4 seed=430 secs=420.1 proposals=670949376 best_cost=9.600 best_err=0 best_nonnop=24 zero_hits=0 finds=0
+CHECKPOINT campaign=t3 slots=26 threads=4 temp=4 opw=0.4 seed=431 secs=420.1 proposals=671776768 best_cost=344.400 best_err=338 best_nonnop=16 zero_hits=0 finds=0
+CHECKPOINT campaign=t3 slots=26 threads=4 temp=2 opw=0.4 seed=432 secs=420.1 proposals=647053312 best_cost=9.600 best_err=0 best_nonnop=24 zero_hits=0 finds=0
