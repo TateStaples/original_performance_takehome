@@ -1,2 +1,5 @@
 CHECKPOINT campaign=t3 slots=12 threads=4 temp=3 opw=0.4 seed=400 secs=420.2 proposals=697180160 best_cost=341.200 best_err=338 best_nonnop=8 zero_hits=0 finds=0
 BEST cost=341.200 err=338 nonnop=8
+CHECKPOINT campaign=t3 slots=12 threads=4 temp=4 opw=0.4 seed=401 secs=420.1 proposals=770744320 best_cost=335.600 best_err=332 best_nonnop=9 zero_hits=0 finds=0
+BEST cost=335.600 err=332 nonnop=9
+WAVE B: slots=26 (wave A was slots=12, void)

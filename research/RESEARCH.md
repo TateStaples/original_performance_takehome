@@ -2027,3 +2027,13 @@ composite = ~17-34 cycles of floor).
 - Fleet tier 3: 43/48, all negative. sandwich9: 230 refuted / ~66 open.
   Template escalation: 9,285 distinct UNSAT (the 600s tail is the hard
   region, progressing slowly). Zero SAT anywhere.
+
+### t3 correction (2026-08-02 late): wave A was VOID — slots=12 cannot hold
+### the 24-op composite; wave B relaunched at slots=26
+
+Wave A's two completed slices ran at the default 12 slots: structurally
+unable to represent the real composite, so transformation mode never
+engaged (best_err ~335 = approximation noise). This also retroactively
+voids P5-H's "t3 token slice" as evidence about the composite. Wave B
+(16 seeds, slots=26, find<=23) is the FIRST real search of the composite's
+non-decomposable space. Fleet tier 3: 44/48 negative.
