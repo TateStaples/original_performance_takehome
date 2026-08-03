@@ -2134,3 +2134,11 @@ The evidential pattern mirrors t2 (reach proven at par, nothing below).
 **Wave C launched: 32 seeds x 600s, slots alternating 26/30 (30 gives
 restructuring room above par)** — sustained compute on the deduced
 location while grind tails finish.
+
+### Fleet tier 3 COMPLETE (2026-08-03): the round12 y-fanout region is CLOSED
+
+All 48 slices negative — the "nv-fanout hole" (round-body forms where the
+node-value input joins mid-computation) is closed at the join-at-4 tier.
+This was the last region on P5-D's priority list above the g=ext/maddk
+residue. Wave C: seeds 501-502 negative (slots 30 chains reaching nonnop
+24); sandwich9 at 230; leaderboard unchanged per last good fetch.

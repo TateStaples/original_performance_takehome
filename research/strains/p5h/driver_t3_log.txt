@@ -18,3 +18,11 @@ CHECKPOINT campaign=t3 slots=26 threads=4 temp=2 opw=0.4 seed=429 secs=420.1 pro
 CHECKPOINT campaign=t3 slots=26 threads=4 temp=3 opw=0.4 seed=430 secs=420.1 proposals=670949376 best_cost=9.600 best_err=0 best_nonnop=24 zero_hits=0 finds=0
 CHECKPOINT campaign=t3 slots=26 threads=4 temp=4 opw=0.4 seed=431 secs=420.1 proposals=671776768 best_cost=344.400 best_err=338 best_nonnop=16 zero_hits=0 finds=0
 CHECKPOINT campaign=t3 slots=26 threads=4 temp=2 opw=0.4 seed=432 secs=420.1 proposals=647053312 best_cost=9.600 best_err=0 best_nonnop=24 zero_hits=0 finds=0
+WAVE C: 32 seeds, slots 26/30, 600s
+CHECKPOINT campaign=t3 slots=26 threads=4 temp=3 opw=0.4 seed=433 secs=420.1 proposals=752869376 best_cost=328.400 best_err=322 best_nonnop=16 zero_hits=0 finds=0
+CHECKPOINT campaign=t3 slots=26 threads=4 temp=4 opw=0.4 seed=434 secs=420.2 proposals=661889024 best_cost=335.200 best_err=330 best_nonnop=13 zero_hits=0 finds=0
+CHECKPOINT campaign=t3 slots=26 threads=4 temp=4 opw=0.4 seed=500 secs=600.2 proposals=923598848 best_cost=224.400 best_err=214 best_nonnop=26 zero_hits=0 finds=0
+CHECKPOINT campaign=t3 slots=26 threads=4 temp=2 opw=0.4 seed=435 secs=420.2 proposals=659185664 best_cost=320.200 best_err=315 best_nonnop=13 zero_hits=0 finds=0
+T3 WAVE B DONE
+CHECKPOINT campaign=t3 slots=30 threads=4 temp=2 opw=0.4 seed=501 secs=600.2 proposals=865853440 best_cost=220.600 best_err=211 best_nonnop=24 zero_hits=0 finds=0
+CHECKPOINT campaign=t3 slots=26 threads=4 temp=3 opw=0.4 seed=502 secs=600.3 proposals=1312718848 best_cost=238.600 best_err=229 best_nonnop=24 zero_hits=0 finds=0
